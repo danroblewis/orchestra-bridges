@@ -88,12 +88,60 @@ together at each change, so they balance exactly:
 `unanswered = opened − answered(all within) − closed_unanswered`. The response-time distribution
 is counters by bucket (`within`), because Orchestra's collectors keep no histogram.
 
+## 4b. The GitHub pull-request bridge (`orchestra_bridges/github_prs/`)
+
+Goal G6 in Orchestra's `docs/roadmap/goals.md`: pull requests tracked to resolution. The owner's
+CI/CD is driven by labels (the owner adds `SAIL`; the pipeline reports with labels), and whatever
+wrote a change must be re-engaged when reviews, review comments, change requests or a failing label
+arrive. Re-engaging is the task system's job. This bridge only reads and publishes, with the actor
+as source and the pull request as subject, the events that wiring needs (README's table).
+
+It is its own bridge, not an extension of the issues bridge: it reads other endpoints (the pulls
+lists, per-pull-request timelines, checks), on another rhythm (every open followed pull request
+every round, because a review does not always move `updated_at`), with its own filter, and it
+serves its levels for an instrument where the issues bridge writes its own. It shares the GitHub
+client (`github/api.py`, with `get` added for single objects), the identity map, and the announcer
+(`announce.py`, the same code as the Slack branch's), so a person is one machine across both.
+
+| Module | What it does |
+|---|---|
+| `poll.py` | The reads: open pulls, recently closed pulls, a timeline, a pull request's line comments, a commit, a head's check runs and statuses |
+| `translate.py` | API objects to events: types `github.pr.*`, ids `github:<repo>:pr:<n>:<kind>:<GitHub id>`, metadata-only data with the branch and head |
+| `levels.py` | What waits on whom, from GitHub's state now, and its Prometheus text |
+| `bridge.py` | Resume, follow, read then publish, announce, gaps, `/metrics`, the loop |
+
+**Following.** A pull request whose branch matches a glob of `branches` or that carries a label of
+`labels` (all of them when neither is set) is followed until merged or closed. A closed one is
+taken up only if opened inside the window read, so a first start publishes no history.
+
+**Read, then publish.** A poll reads everything first (the open list, the closed list back to the
+window's start, each followed pull request's timeline, its line comments when it has a new review,
+the new head's commit, the head's checks) and publishes only when every read succeeded.
+
+**Pushes.** A head not among the heads the bridge has published for that pull request is a push.
+The heads come back from its own `opened` and `pushed` events on a restart. When a pull request is
+first seen, its head at opening is taken from the timeline (the last commit dated no later than the
+opening), so pushes made before the first poll are not lost, only merged into one. Who pushed comes
+from GitHub's record of a force push, else the head commit's GitHub account, else the pull
+request's author (`pusher_from`).
+
+**Reviews.** Each submitted review is one `review_submitted` with its state and the number of its
+line comments, then one `review_commented` per line comment, at the review's time (when they became
+visible). A reply to a line comment is a review of its own on GitHub, so it arrives the same way.
+
+**Levels**, not counts: each round they are read from GitHub, not rebuilt from events, and served
+on `/metrics`; the plugin declares the scrape (`bridges.github_prs`, every 30 s). On start the
+bridge reads its last good poll back from the store by `instrument="bridges.github_prs"`. Flows are
+its events, which Orchestra counts by type.
+
 ## 5. Running
 
 `plugin.py` is the `orchestra.plugins` entry point `bridges`. For each bridge that has a section in
-`orchestra.toml` (`[bridges.github]`), it declares the process `orchestra run` keeps running
-(`bridges.github`: `python -m orchestra_bridges github`) and the machine that process is. It has no
-pages. What a bridge shows is Orchestra's own Machines page, map and series.
+`orchestra.toml` (`[bridges.github]`, `[bridges.github_prs]`), it declares the process `orchestra
+run` keeps running (`bridges.<system>`: `python -m orchestra_bridges <system>`) and the machine that
+process is. For the pull-request bridge it also declares the instrument that scrapes its
+`/metrics` (`Plugin.collectors`), unless its `port` is 0. It has no pages. What a bridge shows is
+Orchestra's own Machines and Instruments pages, map and series.
 
 ## 6. Tests
 
@@ -106,9 +154,17 @@ pages. What a bridge shows is Orchestra's own Machines page, map and series.
 - `tests/e2e`: a real `orchestra run` in a scratch project starts the bridge from the plugin's
   declaration, the bridge publishes the fake's issues as their people, and stopping the host stops
   the bridge.
-- `tests/contract` (opt in, `ORCHESTRA_BRIDGES_CONTRACT=1`): the real API for the fake. The fake
+- `tests/contract` (opt in, `ORCHESTRA_BRIDGES_CONTRACT=1`): the real API for the fakes. A fake
   must serve no key the real one lacks, the fields the bridge reads must match in type, and the
   translation must read real objects.
+- `tests/fake_github_prs.py`, `tests/unit/test_github_prs_*.py`, `tests/e2e/test_github_prs_run.py`:
+  the pull-request bridge against a fake of the pulls, timeline, comments, commit and checks
+  endpoints, and through `orchestra run` with its instrument.
+- `tests/contract/test_github_prs_sandbox.py` (opt in, `ORCHESTRA_BRIDGES_SANDBOX=1`): a real pull
+  request on the private sandbox `danroblewis/orchestra-e2e-sandbox`, opened, reviewed with a line
+  comment, labelled and unlabelled, given a failing status, pushed to and merged with `gh`; each
+  event must be published once as the owner on the pull request, and a restart after a simulated
+  gap must record the gap and publish nothing twice.
 
 ## 7. Not built yet
 

@@ -12,6 +12,8 @@ Throughout, every part is marked by status:
 - **Built (main)**: on `main`, tested.
 - **Branch (`slack-bridge`)**: built and tested on the branch `slack-bridge` (commit `aae18aa`,
   not merged; `45fb844` is the last one pushed). It is not on `main` yet.
+- **Branch (`pr-tracking`)**: the GitHub pull-request bridge (§12), built and tested on the branch
+  `pr-tracking`, not merged.
 - **Proposed**: designed in Orchestra's `docs/proposals/event-sources.md`, not built.
 
 ## Contents
@@ -27,6 +29,7 @@ Throughout, every part is marked by status:
 9. [Add a new bridge](#9-add-a-new-bridge)
 10. [Proposed, not built](#10-proposed-not-built)
 11. [Where the docs and the code disagree](#11-where-the-docs-and-the-code-disagree)
+12. [The GitHub pull-request bridge (branch `pr-tracking`)](#12-the-github-pull-request-bridge-branch-pr-tracking)
 
 ---
 
@@ -74,6 +77,7 @@ Every bridge holds to the rules in `AGENTS.md`:
 | Identity map and actors | Built (main). Branch adds Slack's namespaced sources | `identity.py` |
 | Shared announcer | Branch only. On main this logic is inside `github/bridge.py` | `announce.py` |
 | GitHub issues bridge | Built (main) | `github/` |
+| GitHub pull-request bridge, its `/metrics` and the instrument the plugin declares | Branch (`pr-tracking`) | `github_prs/`, `serve.py`, `announce.py` |
 | RabbitMQ preset, simulated fleet, Docker rig | Built (main). Orchestra's side (`orchestra/sources/traffic.py`, `preset.py`) is built in Orchestra | `rabbitmq/` |
 | Slack pings bridge | Branch only | `slack/` |
 | Jira, Confluence, Google Drive bridges; Bluesky stand-in; Pub/Sub preset; webhooks; team-only mode; write-back (the outbox) | Proposed | none |
@@ -917,6 +921,7 @@ events carry the system's own `id` and `time`.
 | `slack.ping.received` | branch | the pinger | `<workspace>/<channel>/<thread ts>` | `slack:<ws>:ping:<ch>:<ts>` | `workspace`, `channel`, `channel_type` (`im`/`mpim`/`group`/`channel`), `ts`, `thread_ts`, `user` (member id), `kind` (`dm`/`mention`/`group`) |
 | `slack.ping.answered` | branch | the owner | same | `slack:<ws>:answered:<ch>:<ping ts>` | `workspace`, `channel`, `ts`, `wait_seconds`, `within`, `rule` (`reply`/`reaction`). Reply adds `reply_ts`. Reaction adds `reaction`, `observed: true`, `not_before` |
 | `slack.ping.expired` | branch | `bridges.slack` | same | `slack:<ws>:expired:<ch>:<ping ts>` | `workspace`, `channel`, `ts`, `reason` (`expired`), `wait_seconds` |
+| `github.pr.*` (13 types) | branch `pr-tracking` | who acted | `<owner>/<repo>#<n>` | `github:<repo>:pr:<n>:<kind>:<GitHub id>` | §12.3 |
 
 Events published before 2026-10-27 have unprefixed types (`issue.opened`, …). They are still read
 back on a restart.
@@ -927,6 +932,7 @@ back on a restart.
 |---|---|---|---|
 | `github_issues_unanswered`, `github_issues_unanswered_oldest_seconds`, `github_issues_opened_total`, `github_issues_answered_total{within}`, `github_issues_closed_unanswered_total`, `github_issue_first_response_seconds_total` | main | Written by the bridge (`orchestra.metrics`) at each change and each poll | `machine="bridges.github"`, `repo`, `project` |
 | `slack_pings_unanswered`, `slack_pings_oldest_unanswered_seconds`, `slack_pings_received_total`, `slack_pings_answered_total{within}`, `slack_pings_expired_total`, `slack_ping_wait_seconds_total`, `slack_bridge_last_poll_timestamp_seconds` | branch | Served at `/metrics` and stored by the instrument `bridges.slack` the plugin declares | `workspace`, plus `instrument="bridges.slack"` and `project` from the scrape (`machine="bridges.slack"` before 2026-10-27) |
+| `github_prs_open`, `github_prs_awaiting_review`, `github_prs_awaiting_changes`, `github_prs_approved`, `github_prs_awaiting_label_result`, `github_prs_checks_failing`, `github_prs_review_request_oldest_seconds`, `github_prs_bridge_last_poll_timestamp_seconds` | branch `pr-tracking` | Served at `/metrics` (levels read from GitHub each round) and stored by the instrument `bridges.github_prs` the plugin declares | `repo`, plus `instrument="bridges.github_prs"` and `project` from the scrape |
 | `rabbit:rabbitmq_published_total`, `rabbit:rabbitmq_acked_total`, `rabbit:rabbitmq_backlog`, `rabbit:rabbitmq_consumers` (prefix = the source's) | main | Read by Orchestra's sources from the store that scrapes RabbitMQ. Nothing is written | `vhost`, `exchange`, `queue`, `consumer` → `machine = rabbit.<consumer>`, with traffic metadata in provenance |
 
 ### 8.3 Configuration keys
@@ -954,6 +960,13 @@ only when its section exists.
 | `token_file` | `~/.config/orchestra-bridges/slack-token` | Never the token itself. A `token` key is refused |
 | `queries` | the defaults (§7.2) | Replaces the ping searches; `{me}` is the owner's member id |
 | `api` | `https://slack.com/api` | Only `https` on slack.com, or loopback |
+| `[bridges.github_prs] repos` | none: required | **Branch `pr-tracking`.** `owner/name` strings |
+| `branches`, `labels` | `[]`, `[]` | Follow pull requests whose branch matches a glob, or that carry a label; with neither, all |
+| `every`, `lookback`, `max_catchup`, `overlap` | `60s`, `1h`, `48h`, `10m` | As for issues |
+| `checks` | `true` | Read the head's check runs and statuses each round |
+| `host`, `port` | `127.0.0.1`, `9466` | Where `/metrics` listens and the plugin's instrument scrapes it. `port = 0`: any free port, no instrument |
+| `[bridges.github_prs.label_results]` | `{}` | A label (`SAIL`) and the labels that report its result; only the level `github_prs_awaiting_label_result` reads it |
+| `api` | `https://api.github.com` | As for issues. A `token` key is refused |
 | `[[scrape]] name = "bridges.slack"` | (none) | **Branch.** Optional: replaces the plugin's instrument of that name, to scrape more often or elsewhere (§4.3) |
 | `[[sources]] preset = ".../rabbitmq/preset.toml"`, `[sources.producers]` | (none) | Counted traffic (§6) |
 
@@ -961,7 +974,7 @@ only when its section exists.
 
 | Bridge | Credential | Where from |
 |---|---|---|
-| GitHub (main) | A token that can read the repositories. One is required, even for public repositories: the bridge exits 2 without one | `GH_TOKEN`/`GITHUB_TOKEN` (github.com) or `GH_ENTERPRISE_TOKEN`/`GITHUB_ENTERPRISE_TOKEN` (other hosts), else `gh auth token --hostname <host>` |
+| GitHub issues (main) and pull requests (branch `pr-tracking`) | A token that can read the repositories. One is required, even for public repositories: the bridge exits 2 without one | `GH_TOKEN`/`GITHUB_TOKEN` (github.com) or `GH_ENTERPRISE_TOKEN`/`GITHUB_ENTERPRISE_TOKEN` (other hosts), else `gh auth token --hostname <host>` |
 | Slack (branch) | User token `xoxp-…` with `search:read` and `reactions:read` | `SLACK_USER_TOKEN`, else a `0600` file outside the repository (§7.9) |
 | RabbitMQ preset (main) | Whatever the store needs | Orchestra's `[[sources]] auth`, from an environment variable or a file outside the repository. The rig needs none |
 
@@ -1061,9 +1074,10 @@ flowchart TB
 |---|---|---|---|
 | `config.py` | yes | yes, with Slack added | `section()`, `people_file()`, per-bridge dataclasses and parsers |
 | `identity.py` | yes | yes, with `listed()` and `namespaced=` added | `People.load/actor/accounts`, `Actor.announcement(system)` |
-| `announce.py` | no | yes | `Announcer.from_events/actor/reannounce`, `prefix(system)` |
-| `plugin.py` | GitHub only | `SYSTEMS` tuple | Process and machine declarations |
-| `__main__.py` | `github` only | `BRIDGES` registry | The process entry point |
+| `announce.py` | no | yes; `pr-tracking` has the same file | `Announcer.from_events/actor/reannounce`, `prefix(system)` |
+| `serve.py` | no | `slack/serve.py` on `slack-bridge`; `serve.py` (the same code) on `pr-tracking` | `MetricsServer`: `GET /metrics`, 503 until ready |
+| `plugin.py` | GitHub only | `SYSTEMS` tuple on both branches; `pr-tracking` adds `SCRAPED` and a shared `metrics_url` | Process, machine and instrument declarations |
+| `__main__.py` | `github` only | `BRIDGES` registry on both branches | The process entry point |
 
 ---
 
@@ -1123,3 +1137,195 @@ above.
    the end of the last poll; stored counters vs the larger of stored and rebuilt). This is
    intended and documented in the branch's SPEC §5. It is noted here because readers of the
    GitHub section may assume the two bridges behave the same.
+
+## 12. The GitHub pull-request bridge (branch `pr-tracking`)
+
+Goal G6 in Orchestra's `docs/roadmap/goals.md`: pull requests tracked to resolution. The owner's
+company drives CI/CD with labels on pull requests: the owner adds `SAIL` by hand, and the pipeline
+later reports pass or fail, also as labels. Something must watch each pull request and, when review
+comments, change requests or a failing label arrive, re-engage the worker that wrote the change.
+Re-engaging is the task system's job (its protocol lives in `~/orchestra-tasking` and
+`~/orchestra-agents`, not here). This bridge only reads GitHub and publishes what happens, with what
+that wiring needs: the pull request, its branch, its head commit, who acted and what kind of thing
+happened.
+
+### 12.1 Why a bridge of its own
+
+The issues bridge drops pull requests on purpose, and extending it would have tangled two rhythms:
+
+| | Issues bridge | Pull-request bridge |
+|---|---|---|
+| Reads | three repository-wide lists since `t` | the open pulls, the recently closed pulls, then per followed pull request its timeline and its head's checks |
+| Which items | every issue | those whose branch or labels match, followed to resolution |
+| Why per item | not needed | a review does not always move a pull request's `updated_at` (seen on the real API), so `since` cannot say which to re-read |
+| Measures | counts it writes itself (`machine="bridges.github"`) | levels read from GitHub, served on `/metrics` for an instrument |
+
+Both share `github/api.py` (the client and `gh_token`; `get` was added for single objects), the
+identity map, and the announcer, so a person is one machine (`person.<login>` or their map key)
+whichever bridge saw them. Announcements of both use ids `github:announce:…`.
+
+### 12.2 Modules
+
+| Module | Responsibility |
+|---|---|
+| `github_prs/poll.py` | The reads (GET only), each paged where GitHub pages |
+| `github_prs/translate.py` | `Pull` (a pull request as listed now) and `Seen` records: type, stable id, GitHub's time, metadata-only data |
+| `github_prs/levels.py` | `PullState` per open followed pull request (verdicts, review requests, checks), the levels, and their Prometheus text |
+| `github_prs/bridge.py` | Resume, follow, read then publish, pushes, announce, gaps, `/metrics`, the loop |
+| `serve.py` | `MetricsServer` (the Slack branch's, shared) |
+| `announce.py` | `Announcer` (the Slack branch's file, unchanged) |
+| `config.py` | `GitHubPRsConfig`, `github_prs()`, `follows(branch, labels)` |
+
+### 12.3 Events
+
+Every event: source the actor, subject `<owner>/<repo>#<n>`, GitHub's time, id
+`github:<repo>:pr:<n>:…`. Every `data` holds `repository`, `pull`, `login`, `branch`, `base` and
+`head` (the commit the event is about: the commit reviewed, the new head, the commit checked; else
+the head when read). Never a title, body, review text, comment, diff hunk or commit message.
+
+| Type | Source | Id suffix | Extra data |
+|---|---|---|---|
+| `github.pr.opened` | the author | `opened` | `association`, `draft`. `head` is the head at opening, from the timeline |
+| `github.pr.pushed` | force pusher, else the head commit's GitHub committer or author, else the pull request's author | `push:<sha>` | `previous`, `forced`, `pusher_from` |
+| `github.pr.review_requested`, `github.pr.review_request_removed` | who asked or withdrew | `event:<issue event id>` | `reviewer` or `team` |
+| `github.pr.review_submitted` | the reviewer | `review:<review id>` | `review`, `state` (`approved`, `changes_requested`, `commented`, `dismissed`), `comments` (count), `association` |
+| `github.pr.review_commented` | the reviewer | `review_comment:<comment id>` | `review`, `comment`, `path`, `line`, `start_line`, `side`, `subject_type`, `in_reply_to` |
+| `github.pr.commented` | the commenter | `comment:<comment id>` | `comment`, `association` |
+| `github.pr.labelled`, `github.pr.unlabelled` | who changed it | `event:<issue event id>` | `label` |
+| `github.pr.check_completed` | `bot.<app slug>` for a check run, the creator for a status | `check:<run id>`, `status:<status id>` | `check`, `conclusion`, `via`, `app` |
+| `github.pr.merged` | who merged | `event:<issue event id>` | `merge_commit` |
+| `github.pr.closed` | who closed it, unmerged (a merge's own close, within 5 s of it, is left out) | `event:<issue event id>` | `merged: false` |
+| `github.pr.reopened` | who reopened | `event:<issue event id>` | none |
+| `bridge.gap` | `bridges.github_prs` | fresh | `repository`, `from`, `to`, `recovered` |
+
+Not published: drafts made ready or turned back, assignments, reviews still pending, a review's
+dismissal as an event of its own (the review's state becomes `dismissed`; a review first seen after
+it was dismissed is published with that state), and check runs still running or statuses pending.
+
+### 12.4 One poll
+
+```mermaid
+flowchart TB
+    w["_window(now): start = max(since, now - max_catchup), gap if last good poll over 3 rounds ago"]
+    w --> lists["GET pulls?state=open (all pages)<br/>GET pulls?state=closed, newest updated first, until before start"]
+    lists --> follow["follow: already followed, or branch glob or label matches<br/>(closed ones only if opened after start)"]
+    follow --> each["per pull request: GET its timeline,<br/>GET check-runs and statuses of its head (checks = true)"]
+    each --> new["new review: GET its line comments (once per pull request)<br/>new head: GET the commit, for who pushed"]
+    new -- "any read fails" --> fail["log it, publish nothing, try again next round"]
+    new -- "all read" --> gap["bridge.gap once, if any"]
+    gap --> pub["each record not seen, in time order:<br/>announce the actor if new or changed, publish"]
+    pub --> lv["levels of the open followed pull requests, served on /metrics"]
+    lv --> adv["last_ok = now, since = now - overlap"]
+```
+
+A round costs about 2 requests per repository and 3 per followed pull request, plus one per new
+review and one per new head: ten open pull requests polled every minute use about 1,900 of the
+5,000 an hour.
+
+### 12.5 Resume and gaps
+
+As for issues (§5.4, §5.5), with what is resumed adapted:
+
+- `seen`: every id on the bus starting `github:<repo>:pr:`;
+- followed pull requests: those with a `github.pr.opened` on the bus;
+- heads: each pull request's `head` in its `opened` and `pushed` events, in time order. A head not
+  among them is a push;
+- `last_ok`: the value of `github_prs_bridge_last_poll_timestamp_seconds{instrument="bridges.github_prs", repo}`
+  in the store. It is the poll's start, served by the bridge and stored by the scrape, so a scrape
+  that kept running while polls failed does not hide a gap;
+- `since`: the later of the last event and `last_ok`, less `overlap`; else `now - lookback`.
+
+The levels need no resume: each round reads them from GitHub.
+
+### 12.6 The owner's loop, as the bridge sees it
+
+The task system's part is drawn dashed: it is what the events are for, not built here.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant W as Worker (agent)
+    participant O as Owner
+    participant G as GitHub
+    participant CI as Pipeline (label-driven)
+    participant B as bridges.github_prs
+    participant Bus as Orchestra bus
+    participant T as Task system
+
+    W->>G: push branch agent/fix-login, open pull request 12
+    B->>G: GET pulls, timeline, checks (every 60 s)
+    B->>Bus: github.pr.opened (source the author, subject acme/service PR 12, branch, head)
+    O->>G: add label SAIL
+    B->>Bus: github.pr.labelled SAIL (source person.owner)
+    CI->>G: add label SAIL-failed
+    B->>Bus: github.pr.labelled SAIL-failed (source the pipeline's account)
+    Note over B: level github_prs_awaiting_label_result drops by one
+    G->>G: reviewer requests changes with two line comments
+    B->>Bus: github.pr.review_submitted state changes_requested, comments 2
+    B->>Bus: github.pr.review_commented, twice (path, line, side)
+    Bus-->>T: events for the pull request and branch of a ticket
+    T-->>W: re-engage the worker that wrote it (its session, same branch)
+    W->>G: push a new commit to agent/fix-login
+    B->>Bus: github.pr.pushed (previous head, new head)
+    G->>G: reviewer approves, owner merges
+    B->>Bus: github.pr.review_submitted approved, then github.pr.merged
+    Bus-->>T: merged, so the ticket can close
+```
+
+### 12.7 What the task system needs to wire these to re-engage a worker
+
+The bridge publishes; it decides nothing. The task system (being redesigned elsewhere) will need:
+
+1. **The link from a ticket to a pull request.** Match on `data.repository` and `data.pull` (or
+   the subject), or on `data.branch` when the ticket knows its branch before the pull request
+   exists. Every event carries both.
+2. **Which events re-engage.** Suggested: `review_submitted` with `state` `changes_requested` (or
+   `commented` with `comments` above 0), `review_commented`, `commented`, `check_completed` with a
+   failing `conclusion` (`failure`, `timed_out`, `error`), and `labelled` with a label the task
+   system's own configuration calls failing (`SAIL-failed`). Which labels mean failure is the
+   owner's configuration, not the bridge's: the bridge only names labels.
+3. **Batching.** One review arrives as one `review_submitted` followed by its `review_commented`s
+   at the same time; wait for the review, not each comment, and use `comments` to know how many to
+   expect. Several events often land in one poll.
+4. **The commit the feedback is about.** `data.head` on a review is the commit reviewed; compare it
+   with the branch's head before re-engaging, so stale feedback is recognised.
+5. **Its own echo.** A worker that pushes or comments through the owner's GitHub account appears as
+   the owner (`person.<owner>`), and `pusher_from` may be `pull_author`. To ignore its own acts,
+   the task system should match on what it did (the head it pushed, the time) rather than on the
+   source alone.
+6. **Resolution.** `merged` resolves the pull request; `closed` (never a merge's own close) means
+   it was abandoned; `reopened` brings it back.
+7. **Exactly once.** Ids are stable, and a restart or a gap never republishes, but a consumer that
+   itself restarts should still key on the event id.
+8. **Waiting, as levels.** `github_prs_awaiting_changes` and `github_prs_awaiting_label_result` are
+   the stocks of work waiting on workers and on the pipeline; `github_prs_awaiting_review` and its
+   oldest age, on reviewers.
+
+### 12.8 The sandbox and what the end-to-end run showed
+
+`danroblewis/orchestra-e2e-sandbox` is a private repository made for this test, holding a README,
+a small file and one file per run under `runs/`. `tests/contract/test_github_prs_sandbox.py`
+(opt in, `ORCHESTRA_BRIDGES_SANDBOX=1`) acts there with `gh` and `git` as the owner: it opens a pull
+request from a new branch `e2e/<time>-<random>`, submits a review with one line comment, adds and
+removes the label `e2e-sail` (standing in for SAIL), sets a failing commit status `e2e/sail`
+(standing in for the pipeline's result), pushes a second commit and merges, polling the bridge
+against the real API between steps.
+
+The first run, on 2026-10-27, published exactly `opened`, `review_submitted` (`commented`, 1
+comment), `review_commented`, `labelled`, `unlabelled`, `check_completed` (`failure`), `pushed`
+(previous and new head right) and `merged`, each once, all as `person.danroblewis` on the pull
+request, and no `closed` for the merge. A restart with the instrument's last good poll set before
+the run recorded one `bridge.gap` (`recovered: true`) and published nothing again. **GitHub refused
+"request changes"** on one's own pull request (HTTP 422, "Can not request changes on your own pull
+request"), so the test falls back to a commenting review, and `changes_requested` is covered by the
+fake only, as is a review request (the sandbox has no second account to ask).
+
+### 12.9 Limits
+
+- Several pushes between two polls are one `pushed`; for an ordinary push GitHub names no pusher.
+- A push's time is its commit's date when that falls in the window read, else when it was seen.
+- Only the first 100 check runs of a head are read.
+- `review_request_removed` and `review_requested` shapes are from GitHub's documentation and the
+  fake; the sandbox cannot produce them with one account.
+- Followed pull requests are read every round whether or not anything changed, which is what costs
+  requests (§12.4).
