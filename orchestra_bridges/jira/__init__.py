@@ -1,0 +1,1 @@
+"""The Jira bridge."""

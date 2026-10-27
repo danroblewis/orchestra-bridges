@@ -1,15 +1,16 @@
 """The bridges as an Orchestra plugin (``orchestra/plugins.py``): for each bridge configured in the
-project's ``orchestra.toml`` (``[bridges.github]``, ``[bridges.github_prs]``), the process
+project's ``orchestra.toml`` (``[bridges.github]``, ``[bridges.github_prs]``, ``[bridges.jira]`` and
+any second Jira site, ``[bridges.jira_<name>]``), the process
 ``orchestra run`` keeps running (named ``bridges.<system>`` there and in its log's name) and a
 placeholder for the machine it is, so the Machines page lists it before its first event (it is a
 machine by the events it publishes, not by this declaration). The people it publishes for are known
 only once seen.
 
-For the pull-request bridge it also declares the instrument that stores what it measures: a scrape
-of its ``/metrics`` (``[bridges.github_prs] host`` and ``port``), which Orchestra runs as
-``bridges.github_prs`` and whose points it labels ``instrument="bridges.github_prs"``. The bridge
-reads its last good poll back by that label when it restarts. A project's own ``[[scrape]]`` named
-``bridges.github_prs`` takes its place. With ``port = 0`` (any free port) there is nothing to point a
+For the pull-request and Jira bridges it also declares the instrument that stores what each
+measures: a scrape of its ``/metrics`` (the section's ``host`` and ``port``), which Orchestra runs as
+``bridges.<section>`` and whose points it labels ``instrument="bridges.<section>"``. The bridge
+reads its last good poll back by that label when it restarts. A project's own ``[[scrape]]`` of the
+same name takes its place. With ``port = 0`` (any free port) there is nothing to point a
 scrape at, so none is declared. No pages: what the bridges show is Orchestra's own Machines and
 Instruments pages and series."""
 
@@ -22,14 +23,14 @@ from orchestra.collect.spec import Collector
 from orchestra.launcher import Process
 from orchestra.plugins import Declared, Plugin
 
-from .config import section
+from .config import JIRA_PORT, jira_sections, section
 
 SYSTEMS = ("github", "github_prs")
-SCRAPED = {"github_prs": 9466}                  # the bridges that serve /metrics, and their default port
+SCRAPED = {"github_prs": 9466, "jira": JIRA_PORT}   # the bridges that serve /metrics, and their default port
 SCRAPE_EVERY_S = 30.0
 
 
-def metrics_url(conf: dict, default_port: int) -> str | None:
+def metrics_url(conf: dict, default_port: int | None) -> str | None:
     """Where a bridge serves ``/metrics``, as its section says; None when its port is not a fixed
     one. A wildcard host (``0.0.0.0``, ``::``) is scraped on the loopback address."""
     host, port = str(conf.get("host") or "127.0.0.1"), conf.get("port", default_port)
@@ -46,8 +47,9 @@ def metrics_url(conf: dict, default_port: int) -> str | None:
 
 def plugin(project) -> Plugin:
     raw = project.config.raw
-    configured = [s for s in SYSTEMS if section(raw, s) is not None]
-    scrapes = [(s, url) for s in configured if s in SCRAPED and (url := metrics_url(section(raw, s), SCRAPED[s]))]
+    configured = [s for s in SYSTEMS if section(raw, s) is not None] + jira_sections(raw)
+    scrapes = [(s, url) for s in configured if (s in SCRAPED or s.startswith("jira_"))
+               and (url := metrics_url(section(raw, s), SCRAPED.get(s)))]
     return Plugin(
         "bridges",
         machines=[Declared(f"bridges.{s}", "program", "continuous") for s in configured],
