@@ -8,6 +8,7 @@ gives a person a name and a team and joins their accounts on the systems the bri
     name = "Daniel Lewis"
     team = "sre"
     github = "danroblewis"
+    slack = "U012AB3CD"               # a Slack member id, or the handle
 
     [people.triage]
     name = "VS Code triage bot"
@@ -16,10 +17,14 @@ gives a person a name and a team and joins their accounts on the systems the bri
     github = "vscode-triage-bot"
 
 A listed account's source is ``person.<key>`` (``bot.<key>`` for a bot), so one person is one machine
-whichever system they acted in. An account not listed is known by its login there: ``person.<login>``,
-or ``bot.<login>`` for an account the system says is a bot (GitHub's user type ``Bot``, or a login
-ending in ``[bot]``, which is dropped). Sources are lowercased and keep only letters, digits and
-``. _ -``; anything else becomes ``-``."""
+whichever system they acted in: only the map joins accounts across systems. An account not listed is
+known by its login there: ``person.<login>``, or ``bot.<login>`` for an account the system says is a
+bot (GitHub's user type ``Bot``, or a login ending in ``[bot]``, which is dropped). A bridge that is
+not the first to name people by bare login asks for its system's **namespace**
+(``person.<system>.<login>``; the Slack bridge does), so two strangers who share a login on two
+systems stay two machines. The GitHub bridge's sources keep the bare login, as they were first
+published. Sources are lowercased and keep only letters, digits and ``. _ -``; anything else
+becomes ``-``."""
 
 from __future__ import annotations
 
@@ -97,13 +102,20 @@ class People:
         """Every account the map lists on ``system``."""
         return sorted(a for s, a in self._by_account if s == system)
 
-    def actor(self, system: str, login: str | None, system_says_bot: bool = False) -> Actor:
+    def listed(self, system: str, login: str | None) -> bool:
+        """Whether the map lists ``login`` on ``system``."""
+        return bool(login) and (system, str(login).lower()) in self._by_account
+
+    def actor(self, system: str, login: str | None, system_says_bot: bool = False, *,
+              namespaced: bool = False) -> Actor:
         """The actor behind ``login`` on ``system``. A deleted account (no login) is ``ghost``, as
-        GitHub shows it."""
+        GitHub shows it. With ``namespaced``, an account the map does not list is
+        ``person.<system>.<login>``."""
         login = (login or "ghost").lower()
         entry = self._by_account.get((system, login))
         if entry:
             return Actor(f"{'bot' if entry.bot else 'person'}.{entry.key}", login, entry.bot, entry.name, entry.team)
         bot = system_says_bot or login.endswith("[bot]")
         key = login.removesuffix("[bot]") if bot else login
-        return Actor(f"{'bot' if bot else 'person'}.{_safe(key)}", login, bot)
+        space = f"{_safe(system)}." if namespaced else ""
+        return Actor(f"{'bot' if bot else 'person'}.{space}{_safe(key)}", login, bot)
