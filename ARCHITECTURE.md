@@ -14,6 +14,8 @@ Throughout, every part is marked by status:
   not merged; `45fb844` is the last one pushed). It is not on `main` yet.
 - **Branch (`pr-tracking`)**: the GitHub pull-request bridge (§12), built and tested on the branch
   `pr-tracking`, not merged.
+- **Branch (`jira-bridge`)**: the Jira bridge (§13), built and tested on the branch `jira-bridge`,
+  not merged.
 - **Proposed**: designed in Orchestra's `docs/proposals/event-sources.md`, not built.
 
 ## Contents
@@ -30,6 +32,7 @@ Throughout, every part is marked by status:
 10. [Proposed, not built](#10-proposed-not-built)
 11. [Where the docs and the code disagree](#11-where-the-docs-and-the-code-disagree)
 12. [The GitHub pull-request bridge (branch `pr-tracking`)](#12-the-github-pull-request-bridge-branch-pr-tracking)
+13. [The Jira bridge (branch `jira-bridge`)](#13-the-jira-bridge-branch-jira-bridge)
 
 ---
 
@@ -77,10 +80,12 @@ Every bridge holds to the rules in `AGENTS.md`:
 | Identity map and actors | Built (main). Branch adds Slack's namespaced sources | `identity.py` |
 | Shared announcer | Branch only. On main this logic is inside `github/bridge.py` | `announce.py` |
 | GitHub issues bridge | Built (main) | `github/` |
-| GitHub pull-request bridge, its `/metrics` and the instrument the plugin declares | Branch (`pr-tracking`) | `github_prs/`, `serve.py`, `announce.py` |
+| GitHub pull-request bridge, its `/metrics` and the instrument the plugin declares | Built (main, merged from `pr-tracking`) | `github_prs/`, `serve.py`, `announce.py` |
+| Jira bridge (Data Center first, and Cloud), its `/metrics`, its instrument, a second site | Branch (`jira-bridge`) | `jira/`, `secret.py` |
+| Shared token reading (environment, or a `chmod 600` file outside the repository) | Branch (`jira-bridge`); the Slack branch has the same rules in `slack/token.py` | `secret.py` |
 | RabbitMQ preset, simulated fleet, Docker rig | Built (main). Orchestra's side (`orchestra/sources/traffic.py`, `preset.py`) is built in Orchestra | `rabbitmq/` |
 | Slack pings bridge | Branch only | `slack/` |
-| Jira, Confluence, Google Drive bridges; Bluesky stand-in; Pub/Sub preset; webhooks; team-only mode; write-back (the outbox) | Proposed | none |
+| Confluence, Google Drive bridges; Bluesky stand-in; Pub/Sub preset; webhooks; team-only mode; write-back (the outbox) | Proposed | none |
 
 ## 3. The parts
 
@@ -922,6 +927,8 @@ events carry the system's own `id` and `time`.
 | `slack.ping.answered` | branch | the owner | same | `slack:<ws>:answered:<ch>:<ping ts>` | `workspace`, `channel`, `ts`, `wait_seconds`, `within`, `rule` (`reply`/`reaction`). Reply adds `reply_ts`. Reaction adds `reaction`, `observed: true`, `not_before` |
 | `slack.ping.expired` | branch | `bridges.slack` | same | `slack:<ws>:expired:<ch>:<ping ts>` | `workspace`, `channel`, `ts`, `reason` (`expired`), `wait_seconds` |
 | `github.pr.*` (13 types) | branch `pr-tracking` | who acted | `<owner>/<repo>#<n>` | `github:<repo>:pr:<n>:<kind>:<GitHub id>` | §12.3 |
+| `jira.issue.created`, `.assigned`, `.transitioned`, `.updated`, `jira.comment.added` | branch `jira-bridge` | who acted (`person.<key>`, `person.jira.<account>`), or `bridges.jira` for Jira's own change | the issue key, `ABC-12` | `jira:<site>:issue:<issue id>:<created, history:<id>:<kind>, comment:<id>>` | §13.2 |
+| `bridge.gap` (Jira) | branch `jira-bridge` | `bridges.jira` (or `bridges.jira_<name>`) | none | fresh | `site`, `from`, `to`, `recovered` |
 
 Events published before 2026-10-27 have unprefixed types (`issue.opened`, …). They are still read
 back on a restart.
@@ -933,6 +940,7 @@ back on a restart.
 | `github_issues_unanswered`, `github_issues_unanswered_oldest_seconds`, `github_issues_opened_total`, `github_issues_answered_total{within}`, `github_issues_closed_unanswered_total`, `github_issue_first_response_seconds_total` | main | Written by the bridge (`orchestra.metrics`) at each change and each poll | `machine="bridges.github"`, `repo`, `project` |
 | `slack_pings_unanswered`, `slack_pings_oldest_unanswered_seconds`, `slack_pings_received_total`, `slack_pings_answered_total{within}`, `slack_pings_expired_total`, `slack_ping_wait_seconds_total`, `slack_bridge_last_poll_timestamp_seconds` | branch | Served at `/metrics` and stored by the instrument `bridges.slack` the plugin declares | `workspace`, plus `instrument="bridges.slack"` and `project` from the scrape (`machine="bridges.slack"` before 2026-10-27) |
 | `github_prs_open`, `github_prs_awaiting_review`, `github_prs_awaiting_changes`, `github_prs_approved`, `github_prs_awaiting_label_result`, `github_prs_checks_failing`, `github_prs_review_request_oldest_seconds`, `github_prs_bridge_last_poll_timestamp_seconds` | branch `pr-tracking` | Served at `/metrics` (levels read from GitHub each round) and stored by the instrument `bridges.github_prs` the plugin declares | `repo`, plus `instrument="bridges.github_prs"` and `project` from the scrape |
+| `jira_issues{jira_project, category}`, `jira_issues_mine_not_started`, `jira_comments_unanswered`, `jira_comment_unanswered_oldest_seconds` (each `{jira_project}`), `jira_bridge_last_poll_timestamp_seconds` | branch `jira-bridge` | Served at `/metrics` (read from Jira each round; `done` every `done_every`) and stored by the instrument `bridges.jira` the plugin declares | `jira_project`, `category`, plus `instrument` and `project` from the scrape |
 | `rabbit:rabbitmq_published_total`, `rabbit:rabbitmq_acked_total`, `rabbit:rabbitmq_backlog`, `rabbit:rabbitmq_consumers` (prefix = the source's) | main | Read by Orchestra's sources from the store that scrapes RabbitMQ. Nothing is written | `vhost`, `exchange`, `queue`, `consumer` → `machine = rabbit.<consumer>`, with traffic metadata in provenance |
 
 ### 8.3 Configuration keys
@@ -967,6 +975,16 @@ only when its section exists.
 | `host`, `port` | `127.0.0.1`, `9466` | Where `/metrics` listens and the plugin's instrument scrapes it. `port = 0`: any free port, no instrument |
 | `[bridges.github_prs.label_results]` | `{}` | A label (`SAIL`) and the labels that report its result; only the level `github_prs_awaiting_label_result` reads it |
 | `api` | `https://api.github.com` | As for issues. A `token` key is refused |
+| `[bridges.jira] api` | none: required | **Branch `jira-bridge`.** The Data Center base URL or a Cloud site; https, or loopback for a fake |
+| `deployment` | `datacenter` (`cloud` on `*.atlassian.net`) | `datacenter` or `cloud` |
+| `projects`, `jql` | one of the two, required | Project keys, or a JQL clause without `ORDER BY` |
+| `every`, `lookback`, `max_catchup`, `overlap` | `60s`, `1h`, `48h`, `10m` | As for GitHub |
+| `done_every` | `1h` | How often done issues are counted; 0: never |
+| `bots_ask` | `false` | Whether a bot's comment waits for the owner |
+| `sprint_field` | found from `/field` | `customfield_<n>` |
+| `token_file`, `email` | `~/.config/orchestra-bridges/jira-token`, none | Never the token itself (a `token` key is refused). `email` is Cloud's only |
+| `host`, `port` | `127.0.0.1`, `9467` | `/metrics`, and the plugin's instrument. `port = 0`: no instrument |
+| `[bridges.jira_<name>]` | (none) | A second site: the same keys, `port` required |
 | `[[scrape]] name = "bridges.slack"` | (none) | **Branch.** Optional: replaces the plugin's instrument of that name, to scrape more often or elsewhere (§4.3) |
 | `[[sources]] preset = ".../rabbitmq/preset.toml"`, `[sources.producers]` | (none) | Counted traffic (§6) |
 
@@ -976,6 +994,7 @@ only when its section exists.
 |---|---|---|
 | GitHub issues (main) and pull requests (branch `pr-tracking`) | A token that can read the repositories. One is required, even for public repositories: the bridge exits 2 without one | `GH_TOKEN`/`GITHUB_TOKEN` (github.com) or `GH_ENTERPRISE_TOKEN`/`GITHUB_ENTERPRISE_TOKEN` (other hosts), else `gh auth token --hostname <host>` |
 | Slack (branch) | User token `xoxp-…` with `search:read` and `reactions:read` | `SLACK_USER_TOKEN`, else a `0600` file outside the repository (§7.9) |
+| Jira (branch `jira-bridge`) | Data Center: a personal access token, as `Bearer`. Cloud: an API token with the account's email, as Basic | `JIRA_API_TOKEN` (`JIRA_<NAME>_API_TOKEN` for a second site), else a `0600` file outside the repository (`JIRA_API_TOKEN_FILE`, `token_file`, `~/.config/orchestra-bridges/jira-token`). Cloud's email from `JIRA_EMAIL` or `email` |
 | RabbitMQ preset (main) | Whatever the store needs | Orchestra's `[[sources]] auth`, from an environment variable or a file outside the repository. The rig needs none |
 
 Every bridge reads its token once at start, keeps it in memory, and sends it only to the
@@ -1077,6 +1096,7 @@ flowchart TB
 | `announce.py` | no | yes; `pr-tracking` has the same file | `Announcer.from_events/actor/reannounce`, `prefix(system)` |
 | `serve.py` | no | `slack/serve.py` on `slack-bridge`; `serve.py` (the same code) on `pr-tracking` | `MetricsServer`: `GET /metrics`, 503 until ready |
 | `plugin.py` | GitHub only | `SYSTEMS` tuple on both branches; `pr-tracking` adds `SCRAPED` and a shared `metrics_url` | Process, machine and instrument declarations |
+| `secret.py` | no | `jira-bridge` (the Slack branch has the same rules in `slack/token.py`) | `read_token(name, default_file, repo_root, token_file)`: the environment, else a private file outside the repository |
 | `__main__.py` | `github` only | `BRIDGES` registry on both branches | The process entry point |
 
 ---
@@ -1086,7 +1106,6 @@ flowchart TB
 From Orchestra's `docs/proposals/event-sources.md`, after the owner's answers of 2026-10-26.
 
 - **Bridges:**
-  - Jira (`jira.issue.created`, `.transitioned`, `.assigned`, `jira.comment.added`);
   - Confluence;
   - Google Drive (`gdoc.*`);
   - Bluesky's Jetstream, chosen with the owner as the second test bridge and a high-volume
@@ -1329,3 +1348,126 @@ fake only, as is a review request (the sandbox has no second account to ask).
   fake; the sandbox cannot produce them with one account.
 - Followed pull requests are read every round whether or not anything changed, which is what costs
   requests (§12.4).
+
+## 13. The Jira bridge (branch `jira-bridge`)
+
+Building block 4 of Orchestra's `docs/roadmap/story-placement.md`. It unlocks the Jira half of ten
+of the owner's 21 user stories (1, 2, 3, 6, 8, 10, 12, 14, 15, 20): a request filed or assigned to
+the owner, a CCB ticket approved, a customer ticket's SLA, tickets in progress with no activity, the
+weekly update's done work. The owner's Jira is **Data Center** (REST API v2, a personal access
+token). Cloud (API v3, an API token with the account's email) is kept because it differs only in
+the search's paging and the sign-in.
+
+### 13.1 Modules
+
+| Module | What it does |
+|---|---|
+| `jira/api.py` | Read-only client. Bearer (Data Center) or Basic (Cloud); `/search` paged by `startAt` and `total`, or `/search/jql` by `nextPageToken` and `isLast`; an issue's whole changelog (`/issue/<key>?expand=changelog`, or Cloud's `/issue/<key>/changelog` pages) and comments (`/issue/<key>/comment`); `Retry-After` on 429 and 503, capped at 900 s, 3 retries; same-origin redirects only; errors name the path and code |
+| `jira/records.py` | JSON to `Issue`, `History`, `Change`, `Comment`, `User` records holding no text. Only the changes the bridge publishes are kept: status, assignee, sprint, priority, labels, link, due date. Data Center user keys in a change of assignee are turned back into usernames |
+| `jira/poll.py` | `site` (`/myself`, `/field` for the sprint field, `/status` for every status's category), `updated`, `open_issues`, `done_count`, `mine` |
+| `jira/translate.py` | Records to `Seen` events with stable ids |
+| `jira/levels.py` | The levels and their Prometheus text |
+| `jira/bridge.py` | Resume, the window and the gap, read then publish, announce, `/metrics`, the loop |
+| `secret.py` | The token from `JIRA_API_TOKEN`, the file `JIRA_API_TOKEN_FILE` names, `token_file`, or `~/.config/orchestra-bridges/jira-token`; a file must be outside the repository and `chmod 600` |
+
+### 13.2 Events
+
+The source is who acted, through the identity map's `jira` key (§13.5); the subject the issue key;
+the time and id Jira's.
+
+| Type | From | Id (after `jira:<site>:issue:<issue id>:`) | Data besides the common fields |
+|---|---|---|---|
+| `jira.issue.created` | the issue's `created` and `creator` (else `reporter`) | `created` | `status`, `status_id`, `category`: where it started (the first status change's `from`, else its status now) |
+| `jira.issue.assigned` | an assignee at creation (the first assignee change's `from`, else the assignee now) | `created:assignee` | `assignee`, `previous` (`null`), `assignee_machine` |
+| `jira.issue.assigned` | a changelog item `assignee` | `history:<id>:assignee` | `assignee`, `previous`, `assignee_machine` |
+| `jira.issue.transitioned` | a changelog item `status` | `history:<id>:status` | `from`, `to` (names), `from_id`, `to_id`, `from_category`, `to_category` (from `/status`) |
+| `jira.issue.updated` | changelog items `Sprint` (or the sprint field's id), `priority`, `labels`, `Link`, `duedate` in one history | `history:<id>:updated` | `fields`, `changes`: `{field, from, to}` (priority ids, dates, issue keys, sprint id lists) or `{field: labels, added, removed}` |
+| `jira.comment.added` | a comment | `comment:<id>` | `comment`, `comments` (its ordinal), `author`, `restricted` |
+
+Common data: `site`, `project`, `issue`, `key`, `issuetype`, `login`, and the issue as read:
+`status_category`, `priority`, `priority_id`, `labels`, `sprints`, `links`. Never a summary, a
+description, a comment body, a sprint's name or goal, or a text field's before and after.
+
+### 13.3 One poll
+
+Every request is a GET. A poll reads everything first and publishes only when every read succeeded.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant B as bridges.jira
+    participant J as Jira (Data Center, /rest/api/2)
+    participant Bus as Orchestra bus
+    participant I as instrument bridges.jira
+    participant S as Metrics store
+
+    Note over B: first poll only (and when a status id is new)
+    B->>J: GET /myself, /field, /status
+    J-->>B: the owner, the sprint field, each status's category
+    B->>J: GET /search (scope) AND updated >= "-Nm", expand=changelog, paged by startAt
+    J-->>B: issues with fields, changelog, comments
+    opt a changelog or comment list cut short
+        B->>J: GET /issue/KEY?expand=changelog, /issue/KEY/comment
+    end
+    B->>J: GET /search (scope) AND statusCategory != Done
+    B->>J: GET /search (scope) AND statusCategory != Done AND assignee = currentUser(), with comments
+    opt done_every has passed
+        B->>J: GET /search (scope) AND statusCategory = Done, keys only
+    end
+    alt any read fails (asleep, 5xx, 429 past its retries)
+        J--xB: error
+        Note over B: log the path and code, publish nothing, try again next round
+    else every read succeeds
+        opt more than 3 rounds since the last good poll
+            B->>Bus: bridge.gap {site, from, to, recovered}
+        end
+        loop each event not yet published, in Jira's time order
+            B->>Bus: orchestra.machine.started for the actor (if new or changed)
+            B->>Bus: jira.* with Jira's id and time, subject the key
+        end
+        Note over B: levels measured, last_ok = now, since = now - overlap
+    end
+    I->>B: GET /metrics (every 30 s)
+    B-->>I: jira_issues, ..._mine_not_started, ..._comments_unanswered, ..._oldest_seconds, last poll
+    I->>S: points labelled instrument=bridges.jira, project
+```
+
+### 13.4 Resume and gaps
+
+As the pull-request bridge (§12.5): own events read back by the id prefix `jira:<site>:issue:` give
+`seen`; the store's `jira_bridge_last_poll_timestamp_seconds{instrument="bridges.jira"}` gives the
+last good poll; the next poll reads from the later of the two less `overlap`, no further back than
+`max_catchup`, and with neither from `lookback` ago. A gap is recorded once, when a poll succeeds,
+with `recovered` false when `max_catchup` cut it short. JQL's relative minutes (`"-Nm"`) cover the
+window on Jira's own clock, so the laptop's time zone and JQL's minute resolution do not matter.
+
+### 13.5 People
+
+| Account | Data Center | Cloud |
+|---|---|---|
+| What the bridge uses | `name` (the username); the map may list it or the user `key` | `accountId` |
+| A bot | only if the map says `bot = true` | `accountType: app` (Automation for Jira), or the map |
+| A stranger's source | `person.jira.<username>` | `person.jira.<account id>`, `bot.jira.<account id>` |
+| Announced name | the map's, else Jira's `displayName` | the same |
+
+A change with no author is Jira's own, published as `bridges.jira`. The owner is the token's account
+(`/myself`): the levels compare assignees and comment authors with it.
+
+### 13.6 Two sites
+
+`[bridges.jira_<name>]` is a second bridge: process, machine and instrument `bridges.jira_<name>`,
+its own `port` (required), its token from `JIRA_<NAME>_API_TOKEN` or
+`~/.config/orchestra-bridges/jira_<name>-token`. Ids carry the site's host, so the two never
+collide. Both announce people under the map's `jira` key, so one person on both sites is one
+machine when the map lists both accounts.
+
+### 13.7 Limits
+
+- Only the owner's comment answers a comment.
+- `jira.issue.updated` covers sprint, priority, labels, links and due date only.
+- The snapshot fields are the issue as read, not as it was at the change.
+- A Data Center user key the issue's JSON does not resolve is published as the key.
+- A clock skew between the laptop and Jira larger than `overlap` could miss a change.
+- `done` counts read every done issue's key, so they are refreshed only every `done_every`.
+- Not yet run against a real Jira; the contract test (`tests/contract/test_jira_contract.py`) is
+  ready for the first account.

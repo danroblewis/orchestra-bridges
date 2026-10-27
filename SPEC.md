@@ -15,7 +15,9 @@ This repository holds the bridges. Orchestra holds no bridge (its rule 1).
   still read back on a restart (`translate.current`).
 - **Source**: who acted, as a machine (`identity.py`). Someone listed in the owner's identity map
   is `person.<key>`, or `bot.<key>` for a bot, whichever system they acted in. Anyone else is
-  `person.<login>` or `bot.<login>`, by their account on that system. The source is not
+  `person.<login>` or `bot.<login>`, by their account on that system; a bridge after GitHub's puts
+  its system in the name (`person.jira.<login>`), so two strangers who share a login on two systems
+  stay two machines. The source is not
   pseudonymous: the owner chose people by name, each with a team.
 - **Subject**: the item, e.g. `microsoft/vscode#1234`. Orchestra infers hand-offs from subjects.
 - **Time and id**: the system's own. The id is built from the system's id for the occurrence
@@ -134,13 +136,58 @@ on `/metrics`; the plugin declares the scrape (`bridges.github_prs`, every 30 s)
 bridge reads its last good poll back from the store by `instrument="bridges.github_prs"`. Flows are
 its events, which Orchestra counts by type.
 
+## 4c. The Jira bridge (`orchestra_bridges/jira/`)
+
+Building block 4 of Orchestra's `docs/roadmap/story-placement.md`: ten of the owner's user stories
+need to know what happens on Jira issues (a request filed, work assigned to the owner, a CCB ticket
+approved, a customer ticket's SLA, tickets in progress with no activity). The owner's Jira is **Data
+Center**, so the bridge speaks REST API v2 with a personal access token first; Cloud (API v3, an API
+token with the account's email) costs only another search paging and sign-in, so it stays.
+
+| Module | What it does |
+|---|---|
+| `api.py` | Read-only client: Bearer (Data Center) or Basic (Cloud), `startAt` or `nextPageToken` searches, an issue's whole changelog and comments, `Retry-After` on 429 and 503, the token sent only to the site's origin |
+| `records.py` | Jira's JSON as metadata-only records, made where it is read: ids, keys, accounts, names an administrator defines, label names, sprint ids, times. Text is dropped here |
+| `poll.py` | The reads: who the owner is, the sprint field and the statuses (`site`); changed issues (`updated`); open issues, the done count and the owner's open issues with their comments (for the levels) |
+| `translate.py` | Records to events: types `jira.*`, ids `jira:<site>:issue:<issue id>:…`, subject the key |
+| `levels.py` | Issues by status category, the owner's not started, the owner's issues with an unanswered comment and the oldest wait, and their Prometheus text |
+| `bridge.py` | Resume, read then publish, announce, gaps, `/metrics`, the loop |
+
+The shared `secret.py` reads its token (the environment, else a `chmod 600` file outside the
+repository), the rules the Slack branch's `slack/token.py` follows, made general for any bridge.
+
+**Following.** The issues of `projects`, or of a `jql` clause, on one site. A change is found by
+JQL `updated >= "-Nm"` (relative minutes, by Jira's clock), with the changelog expanded; a
+changelog or comment list the search cut short is read whole from the issue. Of each issue the
+bridge publishes its creation (and an assignee set at creation), every change of status or assignee,
+every change of sprint, priority, labels, links or due date (one `jira.issue.updated` per change
+set), and every comment, each once, by its Jira id. A change with no author is Jira's own and has the
+bridge as source. A second site is a second section, `[bridges.jira_<name>]`: its own process,
+machine, instrument, port and token; the identity map's `jira` key serves both.
+
+**People.** On Data Center an account is its username (the map may list the username or the user
+key); on Cloud, its account id, and an app account is a bot. Someone the map does not list is
+`person.jira.<account>`, announced with Jira's display name (the owner chose people by name). The
+owner is whoever the token belongs to (`/myself`).
+
+**Levels**, read from Jira each round and served on `/metrics` with the label `jira_project`
+(`project` is Orchestra's): issues by status category (`done` every `done_every`), the owner's
+issues not started, the owner's open issues with a comment the owner has not answered and how long
+the oldest has waited, and the last good poll, which the bridge reads back by
+`instrument="bridges.<section>"` on start. The plugin declares the scrape.
+
+**Read only.** Every request is a GET. Commenting, transitioning and creating issues as the owner is
+the Outbox's, which the Supervisor configures; this bridge's keys and the identity map are named so
+the Supervisor can configure them (README).
+
 ## 5. Running
 
 `plugin.py` is the `orchestra.plugins` entry point `bridges`. For each bridge that has a section in
-`orchestra.toml` (`[bridges.github]`, `[bridges.github_prs]`), it declares the process `orchestra
-run` keeps running (`bridges.<system>`: `python -m orchestra_bridges <system>`) and the machine that
-process is. For the pull-request bridge it also declares the instrument that scrapes its
-`/metrics` (`Plugin.collectors`), unless its `port` is 0. It has no pages. What a bridge shows is
+`orchestra.toml` (`[bridges.github]`, `[bridges.github_prs]`, `[bridges.jira]`, `[bridges.jira_<name>]`),
+it declares the process `orchestra run` keeps running (`bridges.<section>`: `python -m
+orchestra_bridges <section>`) and the machine that process is. For the pull-request and Jira bridges
+it also declares the instrument that scrapes its `/metrics` (`Plugin.collectors`), unless its `port`
+is 0. It has no pages. What a bridge shows is
 Orchestra's own Machines and Instruments pages, map and series.
 
 ## 6. Tests
@@ -166,9 +213,19 @@ Orchestra's own Machines and Instruments pages, map and series.
   event must be published once as the owner on the pull request, and a restart after a simulated
   gap must record the gap and publish nothing twice.
 
+- `tests/fake_jira.py`, `tests/unit/test_jira_*.py`, `tests/e2e/test_jira_run.py`: the Jira bridge
+  against a fake of Data Center's REST API v2 (and Cloud's v3) in the real shapes: searches paged
+  both ways with the changelog, an issue's changelog and comments, `/myself`, `/field`, `/status`,
+  the JQL the bridge writes, 429 with `Retry-After`, and an "asleep" mode that drops every
+  connection. Every summary, description, comment body, sprint goal and text change carries the
+  canary, which no event, log line, metric or file may hold.
+- `tests/contract/test_jira_contract.py` (opt in, `ORCHESTRA_BRIDGES_JIRA_CONTRACT=1` with
+  `JIRA_URL` and `JIRA_API_TOKEN`): the fake's shapes against a real Jira. Not yet run: there is no
+  account.
+
 ## 7. Not built yet
 
-Jira, Slack (pings and checkmarks), Confluence and Drive bridges; webhooks; a team-only mode; the
+Slack (pings and checkmarks, on its branch), Confluence and Drive bridges; webhooks; a team-only mode; the
 Pub/Sub preset. Counted traffic is built in Orchestra (its SPEC §4.4); the RabbitMQ preset and its
 test rig are here (`orchestra_bridges/rabbitmq/`, README), and are configuration and a test
 system, not bridges: they publish nothing on the bus.

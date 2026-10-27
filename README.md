@@ -10,8 +10,8 @@ text.
 How it works, with diagrams, the contracts and how to add a bridge: [ARCHITECTURE.md](ARCHITECTURE.md).
 
 The first bridge reads **GitHub issues**; the second follows **GitHub pull requests** to
-resolution. Jira, Slack, Confluence and Google Drive come later (Orchestra's
-`docs/proposals/event-sources.md` §4).
+resolution; the third follows **Jira** issues (Data Center, or Cloud). Slack is on a branch;
+Confluence and Google Drive come later (Orchestra's `docs/proposals/event-sources.md` §4).
 
 ## The GitHub issues bridge
 
@@ -215,6 +215,150 @@ with GitHub's times, back to `max_catchup` at most.
   comment.
 - A worker that acts through the owner's GitHub account appears as the owner.
 
+## The Jira bridge
+
+It follows the issues of some Jira projects (or those a JQL query matches) on one site, polls once a
+minute, and publishes what people did to them: created, assigned, moved through the workflow,
+re-prioritised, re-labelled, put in a sprint, linked, commented on. It only reads. Commenting,
+transitioning or creating issues as the owner is the Outbox's work, which the Supervisor configures
+separately; nothing here writes to Jira.
+
+**Data Center first.** The owner's Jira is Data Center: the bridge uses its REST API v2
+(`/rest/api/2/search` with `expand=changelog`, paged by `startAt`) and a personal access token.
+Jira Cloud works too (`/rest/api/3/search/jql`, paged by `nextPageToken`, an API token with the
+account's email), because the difference is only the search's paging and the way to sign in.
+
+| Event | Source | Data besides the common fields (no text) |
+|---|---|---|
+| `jira.issue.created` | the creator | `status`, `status_id`, `category`: the status it started in |
+| `jira.issue.assigned` | who assigned it (the creator, for an assignee set at creation) | `assignee`, `previous` (accounts), `assignee_machine` (the new assignee as a machine) |
+| `jira.issue.transitioned` | who moved it | `from`, `to` (status names), `from_id`, `to_id`, `from_category`, `to_category` (`new`, `indeterminate`, `done`) |
+| `jira.issue.updated` | who changed it | `fields` (names) and `changes`: `priority` and `duedate` from and to (ids, dates), `labels` added and removed (names), `sprint` from and to (ids), `link` from and to (issue keys) |
+| `jira.comment.added` | the commenter | `comment` (id), `comments` (its place among the issue's comments: 1 for the first), `author`, `restricted` (visible to a role or group only) |
+
+Every event's data also holds `site` (the host), `project` (key), `issue` (Jira's id), `key`,
+`issuetype` (name), `login` (who acted) and the issue as the bridge read it: `status_category`,
+`priority` (name) and `priority_id`, `labels`, `sprints` (ids of sprints not closed) and `links`
+(keys of linked issues). The subject is the issue's key (`ABC-12`). The time and id are Jira's
+(`jira:<site>:issue:<issue id>:history:<changelog id>:status`, …), so re-reading never publishes
+twice; the id uses the issue's id, not its key, so an issue moved to another project keeps its ids.
+Summaries and descriptions are never even asked for; comment bodies, and the before and after of a
+text field's change, pass through memory and are dropped as they are read. A change Jira made itself
+(no author: a workflow post function, an import) is published as `bridges.jira`.
+
+**What waits** is served on `/metrics` and stored by the instrument `bridges.jira` the plugin
+declares (every 30 s), read from Jira each round:
+
+- `jira_issues{jira_project, category}`: issues by status category. `done` is counted every
+  `done_every` (it reads every done issue's key), the rest every round;
+- `jira_issues_mine_not_started{jira_project}`: assigned to the owner (whoever the token belongs to)
+  and in a `new` status;
+- `jira_comments_unanswered{jira_project}`: the owner's open issues where someone else commented
+  since the owner last did. A bot's comment does not wait unless `bots_ask`;
+- `jira_comment_unanswered_oldest_seconds{jira_project}`: how long the oldest of those has waited;
+- `jira_bridge_last_poll_timestamp_seconds`: when the last good poll began (for resume).
+
+The label is `jira_project`, because `project` is Orchestra's own. Flows (created, transitioned,
+commented) are the events, which Orchestra counts by type itself.
+
+### Configure
+
+Every key, for the owner or the Supervisor to set, in the project's `orchestra.toml`:
+
+```toml
+[bridges]
+people = "people.toml"            # the identity map (below), relative to the repository; shared by every bridge
+
+[bridges.jira]
+api = "https://jira.acme.com"     # required: the Data Center base URL (or https://<site>.atlassian.net)
+deployment = "datacenter"         # or "cloud"; default: cloud on *.atlassian.net, else datacenter
+projects = ["ABC", "OPS"]         # follow these projects' issues,
+# jql = "project = ABC AND component = api"   # or the issues this matches (exactly one of the two; no ORDER BY)
+every = "60s"                     # pause between polls (at least 5 s)
+lookback = "1h"                   # on the very first start, how far back to read
+max_catchup = "48h"               # after a gap, how far back it reads at most
+overlap = "10m"                   # each poll reads again this far before the last one
+done_every = "1h"                 # how often done issues are counted; 0: never
+bots_ask = false                  # true: a bot's comment waits for the owner's answer too
+sprint_field = "customfield_10100"   # optional: found from /rest/api/2/field when not set
+token_file = "~/.config/orchestra-bridges/jira-token"   # optional: where the token is (never the token)
+email = "me@acme.com"             # Cloud only: the account the API token belongs to (or JIRA_EMAIL)
+host = "127.0.0.1"                # where /metrics listens: local only unless you change it
+port = 9467                       # 0: any free port, and no instrument is declared
+```
+
+**A second site** (the FedRAMP instance, say) is a second section named `jira_<name>`, with its own
+`api`, projects, token and a `port` of its own (required):
+
+```toml
+[bridges.jira_fedramp]
+api = "https://jira.fedramp.acme.com"
+projects = ["CUST"]
+port = 9468
+```
+
+It runs as its own machine, process and instrument, `bridges.jira_fedramp`, and its token is
+`JIRA_FEDRAMP_API_TOKEN` or `~/.config/orchestra-bridges/jira_fedramp-token`, so neither site ever
+receives the other's token.
+
+**The token** is never in `orchestra.toml` (a `token` key is refused). The bridge reads it once at
+start, in this order: the variable `JIRA_API_TOKEN` (`JIRA_<NAME>_API_TOKEN` for `jira_<name>`);
+the file `JIRA_API_TOKEN_FILE` names; the file `token_file` names; `~/.config/orchestra-bridges/jira-token`.
+A file must be outside the repository and `chmod 600`. On Data Center it is a personal access token
+(your profile, Personal Access Tokens; read access is all it needs) sent as `Authorization: Bearer`.
+On Cloud it is an API token, sent with `JIRA_EMAIL` (or `email`) as HTTP Basic. The token stays in
+memory and goes only to `api`'s scheme and host: a redirect elsewhere is refused. `api` must be
+https, except a loopback address for a fake.
+
+**People.** The identity map names a Jira account under the key `jira`, the same map the other
+bridges use, so one person is one machine on every system:
+
+```toml
+[people.daniel]
+name = "Daniel Lewis"
+team = "sre"
+github = "danroblewis"
+jira = "dlewis"                   # Data Center: the username, or the user key (JIRAUSER10100); Cloud: the account id
+
+[people.automation]
+name = "Jira automation"
+bot = true                        # announced as a program, and its comments never wait for an answer
+jira = ["automation", "jira-bot"] # several accounts (two sites, say) may be listed
+```
+
+A listed account is `person.<key>` (`bot.<key>`). Anyone else is `person.jira.<username>` (Cloud:
+`person.jira.<account id>`, or `bot.jira.…` for an app account), announced with the display name
+Jira shows for them. The owner is whoever the token belongs to (`/myself`), so list your own account
+too, or your events and your issues' levels are `person.jira.<you>` rather than `person.<you>`.
+
+To poll once by hand: `ORCHESTRA_REPO=/path/to/project uv run python -m orchestra_bridges jira --once`.
+
+**Cost.** A round makes about four searches (changed issues, open issues, the owner's open issues,
+and hourly the done count), one page per 50 issues (1,000 for the done count), plus one request per
+changed issue whose changelog or comments the search cut short.
+
+### When the laptop sleeps
+
+It keeps nothing of its own. On start it reads its own events back from the bus, and the store gives
+its last good poll. A poll more than three rounds after the last good one publishes `bridge.gap`
+{site, from, to, recovered} and catches up: what was missed is published once, with Jira's times,
+back to `max_catchup` at most. While Jira cannot be reached, polls fail and publish nothing. A 429
+or 503 is waited out for its `Retry-After` (at most 15 minutes) and tried again.
+
+### Limits, plainly
+
+- Only a comment by the owner answers a comment; a transition or an edit does not.
+- `jira.issue.updated` reports sprint, priority, labels, links and due date. Other fields
+  (components, fix versions, custom fields) are not published.
+- The snapshot fields in each event's data (`status_category`, `labels`, …) are the issue as read,
+  not as it was when the change happened.
+- Data Center names a new assignee by user key in the changelog; the bridge turns it back into the
+  username when the issue's JSON shows that user anywhere, and otherwise publishes the key.
+- Searches use JQL's relative minutes (`updated >= "-90m"`), measured by Jira's clock, so a skew
+  between the two clocks larger than `overlap` could miss a change.
+- Not yet run against a real Jira: the fake (`tests/fake_jira.py`) follows Atlassian's documented
+  shapes, and the contract test (below) is ready for the first account.
+
 ## RabbitMQ: a preset and a test rig (counted traffic, not a bridge)
 
 Some buses carry too much, or data that is not ours, to read message by message. Orchestra reads
@@ -254,6 +398,9 @@ ORCHESTRA_BRIDGES_CONTRACT=1 uv run python -m pytest -q -s tests/contract   # th
 ORCHESTRA_BRIDGES_SANDBOX=1 uv run python -m pytest -q -s tests/contract/test_github_prs_sandbox.py
     # a real pull request opened, reviewed, labelled, pushed and merged on the private sandbox
     # danroblewis/orchestra-e2e-sandbox (ORCHESTRA_BRIDGES_SANDBOX_REPO to change it)
+ORCHESTRA_BRIDGES_JIRA_CONTRACT=1 JIRA_URL=https://jira.acme.com JIRA_API_TOKEN=... \
+    JIRA_CONTRACT_JQL='project = ABC' uv run python -m pytest -q -s tests/contract/test_jira_contract.py
+    # the fake Jira vs a real one, shapes only, read-only (JIRA_DEPLOYMENT=cloud and JIRA_EMAIL for Cloud)
 uv run ruff check .
 ```
 
