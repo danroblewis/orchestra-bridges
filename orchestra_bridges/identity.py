@@ -8,6 +8,7 @@ gives a person a name and a team and joins their accounts on the systems the bri
     name = "Daniel Lewis"
     team = "sre"
     github = "danroblewis"
+    slack = "U012AB3CD"               # a Slack member id, or the handle
 
     [people.triage]
     name = "VS Code triage bot"
@@ -96,6 +97,10 @@ class People:
     def accounts(self, system: str) -> list[str]:
         """Every account the map lists on ``system``."""
         return sorted(a for s, a in self._by_account if s == system)
+
+    def listed(self, system: str, login: str | None) -> bool:
+        """Whether the map lists ``login`` on ``system``."""
+        return bool(login) and (system, str(login).lower()) in self._by_account
 
     def actor(self, system: str, login: str | None, system_says_bot: bool = False) -> Actor:
         """The actor behind ``login`` on ``system``. A deleted account (no login) is ``ghost``, as

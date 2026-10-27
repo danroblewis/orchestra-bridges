@@ -88,14 +88,41 @@ together at each change, so they balance exactly:
 `unanswered = opened − answered(all within) − closed_unanswered`. The response-time distribution
 is counters by bucket (`within`), because Orchestra's collectors keep no histogram.
 
-## 5. Running
+## 5. The Slack pings bridge (`orchestra_bridges/slack/`)
+
+| Module | What it does |
+|---|---|
+| `token.py` | The user token: `SLACK_USER_TOKEN`, or a file outside the repository readable by its owner only |
+| `api.py` | Read-only Web API client (`auth.test`, `search.messages`, `reactions.get`). Honours `Retry-After`, sends the token only to the configured host |
+| `search.py` | The searches, newest first until older than the window. A match's text is checked for mentions in memory and dropped |
+| `pings.py` | What a ping is (a DM, or a mention of the owner or a configured group, from someone else), ids, subjects |
+| `waits.py` | The waiting pings and the counters, as Prometheus text |
+| `serve.py` | `/metrics` for a `[[scrape]]` |
+| `bridge.py` | Identify, resume, read, publish, record gaps, the loop |
+
+**Answered** is a checkmark reaction by the owner by default (the owner's answer, 2026-10-26). The
+owner's first message after the ping in its thread (the reply rule) is the alternative. Slack keeps
+no time for a reaction, so a checkmark answer is stamped when first seen, with `not_before` in its
+data.
+
+**It serves its counts; it does not write them.** Unlike the GitHub bridge, which writes to the
+store through `orchestra.metrics`, the Slack bridge serves `/metrics` for a `[[scrape]]` named
+`bridges.slack` (the proposal's §5). On start it reads that scrape's last values back through
+`orchestra.metrics` and continues each counter from the larger of the rebuilt and the stored value,
+so neither a trimmed bus nor a scrape that missed the last change takes a counter down or loses a
+count. The cost: counts are stamped at the scrape, not at Slack's times, so a gap's catch-up shows
+in the series at the moment the bridge woke. The events keep the true times. A plugin cannot
+declare a scrape today, so the owner adds it to `orchestra.toml` (README).
+
+## 6. Running
 
 `plugin.py` is the `orchestra.plugins` entry point `bridges`. For each bridge that has a section in
-`orchestra.toml` (`[bridges.github]`), it declares the process `orchestra run` keeps running
-(`bridges.github`: `python -m orchestra_bridges github`) and the machine that process is. It has no
+`orchestra.toml` (`[bridges.github]`, `[bridges.slack]`), it declares the process `orchestra run`
+keeps running (`bridges.github`: `python -m orchestra_bridges github`, and so on) and the machine
+that process is. It has no
 pages. What a bridge shows is Orchestra's own Machines page, map and series.
 
-## 6. Tests
+## 7. Tests
 
 - `tests/fake_github.py`: a fake of the three REST lists in the real shapes, including the Link
   pagination to `/repositories/<id>/`, the bearer token, rate-limit headers and injected 403/429
@@ -106,13 +133,18 @@ pages. What a bridge shows is Orchestra's own Machines page, map and series.
 - `tests/e2e`: a real `orchestra run` in a scratch project starts the bridge from the plugin's
   declaration, the bridge publishes the fake's issues as their people, and stopping the host stops
   the bridge.
-- `tests/contract` (opt in, `ORCHESTRA_BRIDGES_CONTRACT=1`): the real API for the fake. The fake
+- `tests/fake_slack.py`: a fake of `auth.test`, `search.messages` and `reactions.get` with a
+  scripted world on a clock (pings, replies and reactions appear when the clock reaches them),
+  injected 429s with `Retry-After`, and an asleep mode that drops every connection. Every message
+  carries the canary.
+- `tests/contract` (opt in, `ORCHESTRA_BRIDGES_CONTRACT=1`, and `ORCHESTRA_BRIDGES_SLACK_CONTRACT=1`
+  for Slack, whose canary test also needs `SLACK_CANARY`): the real API for the fake. The fake
   must serve no key the real one lacks, the fields the bridge reads must match in type, and the
   translation must read real objects.
 
-## 7. Not built yet
+## 8. Not built yet
 
-Jira, Slack (pings and checkmarks), Confluence and Drive bridges; webhooks; a team-only mode; the
+Jira, Confluence and Drive bridges; webhooks; a team-only mode; the
 Pub/Sub preset. Counted traffic is built in Orchestra (its SPEC §4.4); the RabbitMQ preset and its
 test rig are here (`orchestra_bridges/rabbitmq/`, README), and are configuration and a test
 system, not bridges: they publish nothing on the bus.
