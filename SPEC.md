@@ -42,14 +42,21 @@ A bridge keeps nothing outside the bus and the metrics store (the proposal's rul
 reads its own events back from the bus (ids starting `github:`), and from them it learns:
 
 - which events are already published, so they are skipped from then on;
-- its counts, rebuilt by replaying those events in time order;
+- its counts, rebuilt by replaying those events in time order, each counter then continuing from
+  the value last written to the store (a trimmed bus, or a different order, never makes a counter
+  go down, which discovery would read as a reset);
 - where to read from next: the later of its last event and its last measurement (the store's
   latest point is the last poll), less `overlap`. With nothing on the bus, it reads from `lookback`
   ago.
 
-**Gaps** (Orchestra runs on a laptop that sleeps). A poll more than three rounds after the last one
-publishes `bridge.gap` {repository, from, to, recovered} from the bridge's own source, and reads
-back to where it left off, but no further than `max_catchup`. `recovered` says whether the whole
+An event is published as soon as it is read but counted only once it is older than `overlap`, so
+an event GitHub shows late (a comment stamped before a close already read) is counted in time
+order, as a restart's replay counts it.
+
+**Gaps** (Orchestra runs on a laptop that sleeps). A poll that succeeds more than three rounds
+after the last good one publishes `bridge.gap` {repository, from, to, recovered} from the bridge's
+own source, once, from the last good poll to this one (failed polls in between publish nothing),
+and reads back to where it left off, but no further than `max_catchup`. `recovered` says whether the whole
 gap was read. Caught-up events carry their own times, and so do the points written for them,
 because nothing was written during the gap. Otherwise a point is never written before the latest
 one for its series. A late change is stamped at that latest point instead, since a store reads a

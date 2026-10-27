@@ -15,7 +15,7 @@ import sys
 
 from orchestra.metrics import MetricsStore
 
-from .responses import Responses
+from .responses import COUNTERS, Responses
 
 LEVEL = "github_issues_unanswered"
 
@@ -24,13 +24,19 @@ class Measures:
     def __init__(self, store: MetricsStore, machine: str):
         self.store, self.machine = store, machine
         self.watermark: dict[str, float] = {}
+        self.written: dict[str, dict[str, float]] = {}      # repo -> each counter's last written value (COUNTERS keys)
 
     def labels(self, repo: str) -> dict[str, str]:
         return {"machine": self.machine, "repo": repo}
 
     def resume(self, repo: str) -> None:
+        """The watermark, and each counter's last written value, so a restart continues from them."""
+        self.written[repo] = {}
         try:
             last = self.store.latest(LEVEL, self.labels(repo))
+            for key, (name, extra) in COUNTERS.items():
+                if got := self.store.latest(name, {**self.labels(repo), **extra}):
+                    self.written[repo][key] = got[1]
         except Exception as e:  # noqa: BLE001 - measuring never stops the bridge
             print(f"bridges.github: metrics store not read ({type(e).__name__}: {e})", file=sys.stderr)
             last = None

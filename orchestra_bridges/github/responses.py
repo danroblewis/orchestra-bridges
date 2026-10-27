@@ -21,7 +21,10 @@ The counts, as series (``measures.py``), all labelled with the repository:
 So ``unanswered`` changes by opened − answered − closed unanswered, exactly.
 
 The state is rebuilt from the bridge's own events on the bus when it starts (folded in time order),
-so it is kept nowhere else."""
+so it is kept nowhere else. The counters must never go down, or discovery reads a reset: a bus
+that was trimmed, or events folded live in another order than on a restart, could rebuild them
+lower than what was written. So a restarted bridge continues every counter from its last written
+value (``continue_from``) and only adds to it."""
 
 from __future__ import annotations
 
@@ -37,6 +40,13 @@ def within(seconds: float) -> str:
     return next((name for limit, name in WITHIN if seconds <= limit), "over")
 
 
+# each counter: its series and the labels beside the repository's
+COUNTERS = {"opened": ("github_issues_opened_total", {}),
+            "closed_unanswered": ("github_issues_closed_unanswered_total", {}),
+            "response_seconds": ("github_issue_first_response_seconds_total", {}),
+            **{f"answered:{n}": ("github_issues_answered_total", {"within": n}) for n in [*(n for _, n in WITHIN), "over"]}}
+
+
 @dataclass
 class Responses:
     bots_answer: bool = False
@@ -45,6 +55,7 @@ class Responses:
     answered: Counter = field(default_factory=Counter)                       # within -> count
     closed_unanswered: int = 0
     response_seconds: float = 0.0
+    offset: dict[str, float] = field(default_factory=dict)                   # counter -> what to add, to continue from what was written
 
     def fold(self, type_: str, subject: str, source: str, t: float) -> bool:
         """Take one event (time order); whether any count changed."""
@@ -73,13 +84,20 @@ class Responses:
     def oldest(self, now: float) -> float:
         return max((now - t for _, t in self.waiting.values()), default=0.0)
 
+    def counts(self) -> dict[str, float]:
+        """Each counter (``COUNTERS``) as folded, before any offset."""
+        return {"opened": self.opened, "closed_unanswered": self.closed_unanswered, "response_seconds": self.response_seconds,
+                **{f"answered:{n}": self.answered[n] for n in [*(n for _, n in WITHIN), "over"]}}
+
+    def continue_from(self, written: dict[str, float]) -> None:
+        """Continue each counter from its last written value (``written``, by ``COUNTERS`` key):
+        from now on it reads that value plus what is folded after this call."""
+        self.offset = {k: written[k] - v for k, v in self.counts().items() if k in written}
+
     def points(self, ts: float, labels: dict[str, str]) -> list[Point]:
         """Every series at ``ts``: the levels and every counter, so they balance at each instant."""
+        counts = self.counts()
         pts = [Point("github_issues_unanswered", len(self.waiting), ts, labels),
-               Point("github_issues_unanswered_oldest_seconds", round(self.oldest(ts), 1), ts, labels),
-               Point("github_issues_opened_total", self.opened, ts, labels),
-               Point("github_issues_closed_unanswered_total", self.closed_unanswered, ts, labels),
-               Point("github_issue_first_response_seconds_total", round(self.response_seconds, 1), ts, labels)]
-        pts += [Point("github_issues_answered_total", self.answered[name], ts, {**labels, "within": name})
-                for name in [n for _, n in WITHIN] + ["over"]]
+               Point("github_issues_unanswered_oldest_seconds", round(self.oldest(ts), 1), ts, labels)]
+        pts += [Point(name, round(counts[k] + self.offset.get(k, 0.0), 1), ts, {**labels, **extra}) for k, (name, extra) in COUNTERS.items()]
         return pts

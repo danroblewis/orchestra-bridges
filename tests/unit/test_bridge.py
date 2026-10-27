@@ -1,4 +1,5 @@
 import json
+from itertools import pairwise
 
 from conftest import T0, bus, published, run_once
 from fake_github import CANARY, TOKEN
@@ -66,7 +67,7 @@ def test_overlapping_polls_and_restarts_publish_nothing_twice(project, github, c
     clock.t += 60
     b.round()
     b2 = make_bridge()                                 # a restart: it resumes from the bus
-    clock.t += 60
+    clock.t += 600                                     # past overlap: everything read is counted
     run_once(b2)
     again = bus(project)
     assert [e for e in again if e["source"] != "bridges.github"] == [e for e in first if e["source"] != "bridges.github"]
@@ -78,14 +79,22 @@ def test_first_response_counts(project, github, clock, make_bridge):
     busy(github)
     b = make_bridge()
     run_once(b)
+    assert level(project, "github_issues_unanswered") == 0     # carol's issue, opened 5 minutes ago, is not counted yet
+    for _ in range(5):                                         # five minutes on, it is older than overlap (10 minutes)
+        clock.t += 60
+        b.round()
     assert level(project, "github_issues_unanswered") == 1
     assert level(project, "github_issues_opened_total") == 2
     assert level(project, "github_issues_answered_total", within="15m") == 1
     assert level(project, "github_issue_first_response_seconds_total") == 300.0
-    assert level(project, "github_issues_unanswered_oldest_seconds") == 300.0
-    github.comment(2, "erin", T0 + 30)
+    assert level(project, "github_issues_unanswered_oldest_seconds") == 600.0
+    github.comment(2, "erin", T0 + 330)
     clock.t += 60
     b.round()
+    assert level(project, "github_issues_unanswered") == 1     # read and published, counted only past overlap
+    for _ in range(10):
+        clock.t += 60
+        b.round()
     assert level(project, "github_issues_unanswered") == 0
     assert level(project, "github_issues_answered_total", within="15m") == 2
 
@@ -176,3 +185,54 @@ def test_an_outage_publishes_one_gap_once_it_is_over(project, github, clock, mak
     [gap] = published(project, "bridge.gap")
     assert (gap["data"]["from"], gap["data"]["to"]) == ("2026-10-26T07:33:20Z", "2026-10-26T07:57:20Z")
     assert gap["data"]["recovered"] is True
+
+
+def counters_never_fall(project):
+    from orchestra_bridges.github.responses import COUNTERS
+    store = for_project(project)
+    for name, extra in COUNTERS.values():
+        pts = store.raw(name, {"machine": "bridges.github", "repo": R, **extra})
+        assert all(b >= a for (_, a), (_, b) in pairwise(pts)), (name, extra, pts)
+
+
+def test_a_comment_github_shows_late_is_counted_in_time_order_and_a_restart_agrees(project, github, clock, make_bridge):
+    github.open(1, "alice", T0 - 2000)
+    github.event(1, "closed", "alice", T0 - 300)       # alice closes it; read at T0
+    b = make_bridge()
+    run_once(b)
+    github.comment(1, "bob", T0 - 400)                 # bob's comment, made before the close, shows up a minute later
+    for _ in range(12):
+        clock.t += 60
+        b.round()
+    assert level(project, "github_issues_answered_total", within="1h") == 1
+    assert level(project, "github_issues_closed_unanswered_total") == 0
+    clock.t += 60
+    run_once(make_bridge())                            # a restart rebuilds the same counts
+    clock.t += 60
+    run_once(make_bridge())
+    assert level(project, "github_issues_answered_total", within="1h") == 1
+    assert level(project, "github_issues_closed_unanswered_total") == 0
+    counters_never_fall(project)
+
+
+def test_a_restart_continues_every_counter_from_what_was_written(project, github, clock, make_bridge):
+    busy(github)
+    b = make_bridge()
+    run_once(b)
+    clock.t += 600
+    b.round()
+    from orchestra.metrics import Point
+    labels = {"machine": "bridges.github", "repo": R, "project": project.key}
+    store = for_project(project)                       # what an earlier bridge wrote, from events the bus no longer holds
+    store.write([Point("github_issues_opened_total", 40.0, clock.t + 1, labels),
+                 Point("github_issues_closed_unanswered_total", 7.0, clock.t + 1, labels)])
+    clock.t += 60
+    b2 = make_bridge()
+    run_once(b2)
+    assert level(project, "github_issues_opened_total") == 40.0
+    github.open(9, "zoe", clock.t + 10)
+    clock.t += 700
+    b2.round()
+    assert level(project, "github_issues_opened_total") == 41.0
+    assert level(project, "github_issues_closed_unanswered_total") == 7.0
+    counters_never_fall(project)

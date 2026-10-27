@@ -10,13 +10,18 @@ or team is announced again.
 
 **It keeps no state of its own.** On start it reads its own events back from the bus (ids starting
 ``github:``): what it already published is never published again, the first-response counts are
-rebuilt from them, and it reads GitHub again from the later of its last event and its last
+rebuilt from them and continue from the values last written (a counter never goes down), and it
+reads GitHub again from the later of its last event and its last
 measurement (the last poll), less ``overlap``; never further back than ``max_catchup``. A poll that
 succeeds more than three rounds after the last good one (the laptop slept, the bridge was stopped,
 GitHub or the network was down for a while) closes a **gap**, recorded on the bus once, when the
 poll has succeeded, as ``bridge.gap`` {repository, from, to, recovered}: from the last good poll to
 this one; ``recovered`` is false when the gap was longer than ``max_catchup``, so some of it was
 not read. Failed polls in between publish nothing.
+
+An event is published as soon as it is read, but counted only once it is older than ``overlap``:
+each poll re-reads that much, so an event GitHub shows late (a comment stamped before a close
+that was already read) is still counted in time order, as a restart's rebuild counts it.
 
 The bridge itself is the machine ``bridges.github``; it announces itself when it starts and its
 measurements carry ``machine="bridges.github"``."""
@@ -63,6 +68,7 @@ class Bridge:
         self.seen: set[str] = set()
         self.last_ok: dict[str, float] = {}            # repo -> when its last poll began
         self.since: dict[str, float] = {}              # repo -> where its next poll reads from
+        self.pending: dict[str, list[tuple]] = {r: [] for r in config.repos}   # repo -> (t, rank, type, subject, source) not counted yet
 
     def resume(self) -> None:
         """Read back what this bridge published before, and where to read GitHub from."""
@@ -73,12 +79,12 @@ class Bridge:
         latest: dict[str, float] = defaultdict(float)
         for repo in self.config.repos:
             mine = [e for e in own if e["id"].startswith(prefix(repo)) and e.get("type") in TYPES]
-            mine.sort(key=lambda e: (event_time(e) or 0.0, RANK[e["type"]]))
-            for e in mine:
-                t = event_time(e) or 0.0
-                latest[repo] = max(latest[repo], t)
-                self.responses[repo].fold(e["type"], e.get("subject") or "", e.get("source") or "", t)
+            self.pending[repo] = [(event_time(e) or 0.0, RANK[e["type"]], e["type"], e.get("subject") or "", e.get("source") or "")
+                                  for e in mine]
+            latest[repo] = max((p[0] for p in self.pending[repo]), default=0.0)
+            self._count(repo, self.clock(), write=False)
             self.measures.resume(repo)
+            self.responses[repo].continue_from(self.measures.written[repo])
             last = max(latest[repo], self.measures.watermark[repo])
             if self.measures.watermark[repo]:
                 self.last_ok[repo] = self.measures.watermark[repo]
@@ -132,12 +138,21 @@ class Bridge:
             self._announce_actor(actor, s.time)
             self.events.publish(s.type, s.data, source=actor.source, subject=s.subject, time=s.time, id=s.id)
             self.seen.add(s.id)
-            if responses.fold(s.type, s.subject, actor.source, s.ts):
-                self.measures.write(repo, responses, s.ts)
+            self.pending[repo].append((s.ts, RANK[s.type], s.type, s.subject, actor.source))
+        self._count(repo, now)
         self.measures.write(repo, responses, now)
         self.last_ok[repo] = now
         self.since[repo] = now - self.config.overlap
         return len(new)
+
+    def _count(self, repo: str, now: float, *, write: bool = True) -> None:
+        """Count the pending events older than ``overlap``, in time order (later ones wait: a poll
+        may still read an earlier one)."""
+        ready = sorted(p for p in self.pending[repo] if p[0] <= now - self.config.overlap)
+        self.pending[repo] = [p for p in self.pending[repo] if p[0] > now - self.config.overlap]
+        for t, _, type_, subject, source in ready:
+            if self.responses[repo].fold(type_, subject, source, t) and write:
+                self.measures.write(repo, self.responses[repo], t)
 
     def round(self) -> None:
         for repo in self.config.repos:
