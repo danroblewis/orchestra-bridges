@@ -3,13 +3,15 @@
 This document explains how orchestra-bridges works and why it is built this way. It is written
 for two readers: the owner, who runs it on a laptop that sleeps, and engineers new to the code.
 `SPEC.md` is the design and `AGENTS.md` lists the rules. This document links them to the code,
-which was checked statement by statement on 2026-10-27, and draws the moving parts.
+which was checked statement by statement on 2026-10-27, and draws the moving parts. It was
+brought up to date the same day with Orchestra's instruments (Orchestra `8344264c`: collectors and
+scrapes are instruments, not machines) and the branch commit that follows them.
 
 Throughout, every part is marked by status:
 
 - **Built (main)**: on `main`, tested.
-- **Branch (`slack-bridge`)**: built and tested on the branch `slack-bridge` (commit `45fb844`,
-  pushed, not merged). It is not on `main` yet.
+- **Branch (`slack-bridge`)**: built and tested on the branch `slack-bridge` (commit `aae18aa`,
+  not merged; `45fb844` is the last one pushed). It is not on `main` yet.
 - **Proposed**: designed in Orchestra's `docs/proposals/event-sources.md`, not built.
 
 ## Contents
@@ -30,9 +32,11 @@ Throughout, every part is marked by status:
 
 ## 1. What it is for
 
-Orchestra is an event bus, a metrics store and a system dynamics model of the machines that use
-them. It knows a machine only by what that machine publishes and measures (Orchestra's rules 1 and
-2). Much of the work that matters happens elsewhere: in issue trackers, in chat, and on other
+Orchestra is an event bus, a metrics store and a system dynamics model of the system that uses
+them. It knows a machine only by its events on the bus, or by counted traffic on another system's
+bus (Orchestra's rules 1 and 2). Metrics are measurements of the system, taken by instruments; a
+series never makes a machine, and a machine is associated with a flow only as a hypothesis
+Orchestra infers from its events (rules 6 and 7). Much of the work that matters happens elsewhere: in issue trackers, in chat, and on other
 companies' message brokers. This package brings that work in, in three ways:
 
 | What we care about | How it arrives | Where |
@@ -55,7 +59,8 @@ Every bridge holds to the rules in `AGENTS.md`:
 4. **No state of its own.** What it knows comes from its own events on the bus and its own series
    in the store, rebuilt at start.
 5. **Through Orchestra's library only.** It uses `orchestra.events`, `orchestra.metrics`,
-   `orchestra.plugins` and `orchestra.launcher.Process`.
+   `orchestra.plugins`, `orchestra.launcher.Process` and, on the branch,
+   `orchestra.collect.spec.Collector`.
 6. **Sources are actors.** The system's own doing has the bridge's machine as source.
 7. **Catch up, never assume continuity.** After a gap it reads back to where it left off and
    records the gap.
@@ -64,7 +69,7 @@ Every bridge holds to the rules in `AGENTS.md`:
 
 | Piece | Status | Code |
 |---|---|---|
-| Plugin declaration (processes, machines) | Built (main): GitHub only. Branch: GitHub and Slack | `plugin.py` |
+| Plugin declaration (processes, machines, instruments) | Built (main): GitHub only, no instruments. Branch: GitHub and Slack, and the scrape of the Slack bridge's `/metrics` | `plugin.py` |
 | Config parsing (`[bridges]`, `[bridges.github]`) | Built (main). Branch adds `[bridges.slack]` | `config.py` |
 | Identity map and actors | Built (main). Branch adds Slack's namespaced sources | `identity.py` |
 | Shared announcer | Branch only. On main this logic is inside `github/bridge.py` | `announce.py` |
@@ -78,7 +83,7 @@ Every bridge holds to the rules in `AGENTS.md`:
 ```mermaid
 flowchart LR
     subgraph owner["Owner's files"]
-        toml["orchestra.toml<br/>[bridges], [bridges.github],<br/>[bridges.slack]*, [[scrape]]*, [[sources]]"]
+        toml["orchestra.toml<br/>[bridges], [bridges.github],<br/>[bridges.slack]*, [[sources]]"]
         people["people.toml<br/>(identity map)"]
         tok["~/.config/orchestra-bridges/slack-token*<br/>or gh login / GH_TOKEN"]
     end
@@ -106,13 +111,14 @@ flowchart LR
         launcher["launcher<br/>(orchestra run)"]
         bus[("event bus<br/>orchestra.#lt;key#gt;.events")]
         store[("metrics store")]
-        scrape["[[scrape]] collector"]
+        scrape["instrument bridges.slack*<br/>(scrape the plugin declares)"]
         sources["sources: catalogue,<br/>preset, traffic"]
-        ui["Machines page, map"]
+        ui["Machines and<br/>Instruments pages, map"]
         sd["SD discovery<br/>(the model)"]
     end
 
     plugin -- "Plugin(processes, machines)" --> launcher
+    plugin -- "Plugin(collectors)*" --> scrape
     launcher -- "starts, restarts" --> main
     main --> cfg
     cfg -. reads .-> toml
@@ -130,7 +136,7 @@ flowchart LR
     slb -- "events" --> bus
     ghb -- "points" --> store
     scrape -- "GET /metrics" --> slb
-    scrape --> store
+    scrape -- "instrument=bridges.slack" --> store
     fleet -- "AMQP" --> rmq
     vm -- "scrape /metrics/detailed" --> rmq
     preset -. "named by [[sources]] preset" .-> sources
@@ -172,10 +178,13 @@ Orchestra calls `plugin(project)` and gets an `orchestra.plugins.Plugin`:
 | `name` | `"bridges"` | `"bridges"` |
 | `machines` | `[Declared("bridges.github", "program", "continuous")]` if `[bridges.github]` exists | one `Declared("bridges.<s>", "program", "continuous")` per configured system in `SYSTEMS = ("github", "slack")` |
 | `processes` | `[Process("github", [sys.executable, "-m", "orchestra_bridges", "github"], stop_grace_s=10)]` if configured | one such `Process(s, ...)` per configured system |
+| `collectors` | none | `[Collector.scrape("slack", "http://<host>:<port>/metrics", every_s=30)]` if `[bridges.slack]` exists and its `port` is fixed (not 0); a wildcard host is scraped on loopback (§4.3) |
 | pages, router, scripts | none | none |
 
-The plugin has no pages. What a bridge shows is Orchestra's own Machines page, map and series.
-A `Declared` machine only fills in a machine nobody has seen yet. What is observed always wins.
+The plugin has no pages. What a bridge shows is Orchestra's own Machines and Instruments pages,
+map and series. A `Declared` machine is a placeholder: it only fills in a machine nobody has seen
+yet, what is observed always wins, and it says nothing about flows. A bridge is a machine because
+it publishes events (it announces itself on start), not because of this declaration or its series.
 
 ### 4.2 Processes
 
@@ -199,12 +208,29 @@ poll once by hand:
 ORCHESTRA_REPO=/path/to/project uv run python -m orchestra_bridges github --once
 ```
 
-### 4.3 The `[[scrape]]` a plugin cannot declare (branch)
+### 4.3 The instrument that stores the Slack bridge's counts (branch)
 
-`Plugin` has fields for pages, routers, scripts, machines and processes, but none for collectors.
-**A plugin cannot declare a scrape.** The GitHub bridge does not need one: it writes its points
-itself through `orchestra.metrics`. The Slack bridge serves its counts at `/metrics` instead (§7.6),
-so the owner adds the scrape to `orchestra.toml` by hand:
+The GitHub bridge writes its points itself through `orchestra.metrics`. The Slack bridge serves its
+counts at `/metrics` instead (§7.6), and an **instrument** stores them. Since Orchestra `8344264c`
+a plugin can declare instruments (`Plugin.collectors`, Orchestra's PLUGINS.md §4.7), so the
+branch's `plugin.py` declares the scrape itself whenever `[bridges.slack]` exists:
+
+```python
+Collector.scrape("slack", "http://127.0.0.1:9465/metrics", every_s=30)   # host and port from [bridges.slack]
+```
+
+Orchestra runs it as **`bridges.slack`** (`<plugin>.<name>`), lists it on the Instruments page,
+not the Machines page, and logs it to `<state>/logs/instruments/bridges.slack.log`. A wildcard
+`host` (`0.0.0.0`, `::`) is scraped on the loopback address. With `port = 0` (any free port) there
+is no fixed address to scrape, so the plugin declares none.
+
+Every point the instrument stores is labelled `instrument="bridges.slack"` and `project`, and keeps
+the bridge's own `workspace`. On start, the Slack bridge reads its counters and its last good poll
+back by `instrument="bridges.slack"` and its workspace. The instrument, the process and the machine
+share the name `bridges.slack` but are three different things: the machine is known by its events,
+the instrument measures the system, and the label is provenance, not a machine's.
+
+**Before 2026-10-27** a plugin could not declare a scrape, so the owner added one by hand:
 
 ```toml
 [[scrape]]
@@ -213,10 +239,13 @@ url = "http://127.0.0.1:9465/metrics"
 every = "30s"
 ```
 
-The name matters. Orchestra's collector labels every scraped point `machine = <scrape name>` and
-`project` (Orchestra SPEC §5.2). On start, the Slack bridge reads its counters back from the store
-by `machine="bridges.slack"` and its workspace. Under any other scrape name, the series would not
-belong to the bridge's machine, and a restart would not find its counts.
+That entry still works: a project entry with the same name replaces the plugin's (Orchestra logs
+`plugin bridges: its collector bridges.slack is replaced by the project's entry of that name`). Keep
+it only to scrape more often or elsewhere. It must keep the name `bridges.slack`, or a restart
+would not find the bridge's counts. Back then the scrape labelled points `machine="bridges.slack"`;
+now it labels them `instrument="bridges.slack"`, so each series starts again under the new label at
+the upgrade. The bridge reads both labels on start and continues each counter from the higher
+value, so no count is lost or taken down, and the gap test still finds the last good poll.
 
 ### 4.4 What Orchestra reads, and what it does not
 
@@ -388,7 +417,9 @@ poll may still read an earlier event (a comment GitHub stamps before a close the
 read). A restart's replay counts the same way.
 
 The series, all labelled `machine="bridges.github"`, `repo="<owner>/<repo>"`, and `project`
-(added by `ProjectStore`):
+(added by `ProjectStore`). The bridge writes them itself, so `machine` here is provenance (who
+wrote them) and how the bridge finds its own series on restart; it does not make the bridge a
+machine, which its events do, and Orchestra does not associate a flow with a machine from it:
 
 | Series | Kind | Meaning |
 |---|---|---|
@@ -638,7 +669,7 @@ newest 30 seconds from range queries.
 
 ## 7. The Slack pings bridge (branch `slack-bridge`)
 
-> **On branch `slack-bridge` (45fb844), pushed, not merged.** Nothing in this section is on `main`.
+> **On branch `slack-bridge` (aae18aa; 45fb844 pushed), not merged.** Nothing in this section is on `main`.
 > It was read with `git show slack-bridge:<path>`. The branch also changes shared modules
 > (`identity.py`, `config.py`, `plugin.py`, `__main__.py`) and adds `announce.py`, which the
 > GitHub bridge uses there too.
@@ -752,8 +783,8 @@ unanswered = received − Σ answered(within) − expired
 Unlike the GitHub bridge, the Slack bridge **serves** its counts rather than writing them.
 `serve.py` listens on `host:port` (default `127.0.0.1:9465`). `GET /metrics` returns Prometheus
 text, or 503 until `resume()` has finished. Other paths get 404. Requests are not logged. Orchestra
-reads it through the owner's `[[scrape]]` named `bridges.slack` (§4.3), which adds `machine` and
-`project`. Every series carries `workspace="<team id>"`.
+reads it through the instrument `bridges.slack` the plugin declares (§4.3), which adds
+`instrument="bridges.slack"` and `project`. Every series carries `workspace="<team id>"`.
 
 | Series | Kind | Meaning |
 |---|---|---|
@@ -895,7 +926,7 @@ back on a restart.
 | Series | Status | Written how | Labels |
 |---|---|---|---|
 | `github_issues_unanswered`, `github_issues_unanswered_oldest_seconds`, `github_issues_opened_total`, `github_issues_answered_total{within}`, `github_issues_closed_unanswered_total`, `github_issue_first_response_seconds_total` | main | Written by the bridge (`orchestra.metrics`) at each change and each poll | `machine="bridges.github"`, `repo`, `project` |
-| `slack_pings_unanswered`, `slack_pings_oldest_unanswered_seconds`, `slack_pings_received_total`, `slack_pings_answered_total{within}`, `slack_pings_expired_total`, `slack_ping_wait_seconds_total`, `slack_bridge_last_poll_timestamp_seconds` | branch | Served at `/metrics` and scraped by `[[scrape]] bridges.slack` | `workspace`, plus `machine="bridges.slack"` and `project` from the scrape |
+| `slack_pings_unanswered`, `slack_pings_oldest_unanswered_seconds`, `slack_pings_received_total`, `slack_pings_answered_total{within}`, `slack_pings_expired_total`, `slack_ping_wait_seconds_total`, `slack_bridge_last_poll_timestamp_seconds` | branch | Served at `/metrics` and stored by the instrument `bridges.slack` the plugin declares | `workspace`, plus `instrument="bridges.slack"` and `project` from the scrape (`machine="bridges.slack"` before 2026-10-27) |
 | `rabbit:rabbitmq_published_total`, `rabbit:rabbitmq_acked_total`, `rabbit:rabbitmq_backlog`, `rabbit:rabbitmq_consumers` (prefix = the source's) | main | Read by Orchestra's sources from the store that scrapes RabbitMQ. Nothing is written | `vhost`, `exchange`, `queue`, `consumer` → `machine = rabbit.<consumer>`, with traffic metadata in provenance |
 
 ### 8.3 Configuration keys
@@ -919,11 +950,11 @@ only when its section exists.
 | `groups` | `[]` | User group ids, `S…` |
 | `dms` | `true` | Whether a DM is a ping |
 | `expire` | `168h` | How long a ping may wait before it stops counting |
-| `host`, `port` | `127.0.0.1`, `9465` | Where `/metrics` listens |
+| `host`, `port` | `127.0.0.1`, `9465` | Where `/metrics` listens, and where the plugin's instrument scrapes it. `port = 0`: any free port, and no instrument |
 | `token_file` | `~/.config/orchestra-bridges/slack-token` | Never the token itself. A `token` key is refused |
 | `queries` | the defaults (§7.2) | Replaces the ping searches; `{me}` is the owner's member id |
 | `api` | `https://slack.com/api` | Only `https` on slack.com, or loopback |
-| `[[scrape]] name = "bridges.slack"` | (none) | **Branch.** Required for Slack's series and its resume (§4.3) |
+| `[[scrape]] name = "bridges.slack"` | (none) | **Branch.** Optional: replaces the plugin's instrument of that name, to scrape more often or elsewhere (§4.3) |
 | `[[sources]] preset = ".../rabbitmq/preset.toml"`, `[sources.producers]` | (none) | Counted traffic (§6) |
 
 ### 8.4 Credentials
@@ -1004,14 +1035,16 @@ flowchart TB
    continue from the store (`continue_from`) and never go down. Choose one of two ways to report:
    - **write** points through `orchestra.metrics` (GitHub): true times, never before the
      watermark, re-asserted each poll;
-   - **serve** `/metrics` (Slack): a `[[scrape]]` the owner must add (§4.3), and a
+   - **serve** `/metrics` (Slack): declare its scrape in `plugin.py` (`Plugin.collectors`, §4.3),
+     read the counts back by `instrument="bridges.<system>"`, and serve a
      `*_last_poll_timestamp_seconds` value for resume.
 8. **`bridge.py`**: `resume`, `announce`, `reannounce`, `_window` with `GAP_ROUNDS = 3`, `poll`,
    `round` (catch the API error), and `run(stop, once=)`. Use `MACHINE = "bridges.<system>"`.
 9. **`__main__.py`**: on the branch, add a builder to `BRIDGES`. On `main`, the argument parser
    accepts only `github`.
 10. **`plugin.py`**: on the branch, add the system to `SYSTEMS`. That declares the process
-    `bridges.<system>` and the machine.
+    `bridges.<system>` and a placeholder for the machine; a bridge that serves `/metrics` also
+    declares its scrape there (`collectors`).
 11. **Tests**, per the AGENTS.md conventions:
     - `tests/fake_<system>.py` in the real shapes, with a canary in every text field;
     - unit tests for publishing, re-polls, restarts, gaps, the canary, and the token never
