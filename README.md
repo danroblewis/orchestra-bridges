@@ -7,6 +7,8 @@ they acted on, so people and bots appear on Orchestra's Machines page beside the
 Orchestra infers who hands work to whom from the subjects. The events hold metadata only, never
 text.
 
+How it works, with diagrams, the contracts and how to add a bridge: [ARCHITECTURE.md](ARCHITECTURE.md).
+
 The first bridge reads **GitHub issues**. Jira, Slack, Confluence and Google Drive come later
 (Orchestra's `docs/proposals/event-sources.md` §4).
 
