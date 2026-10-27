@@ -104,7 +104,7 @@ flowchart LR
 
     subgraph orch["Orchestra (~/orchestra_2)"]
         launcher["launcher<br/>(orchestra run)"]
-        bus[("event bus<br/>orchestra.&lt;key&gt;.events")]
+        bus[("event bus<br/>orchestra.#lt;key#gt;.events")]
         store[("metrics store")]
         scrape["[[scrape]] collector"]
         sources["sources: catalogue,<br/>preset, traffic"]
@@ -962,7 +962,7 @@ Google Drive, and the Bluesky stand-in.
 
 ```mermaid
 flowchart TB
-    start["run(stop)"] --> res["resume()<br/>read own events back (ids &lt;system&gt;:…)<br/>seen, announcements, replayed counts<br/>store: watermark / last poll, counters"]
+    start["run(stop)"] --> res["resume()<br/>read own events back (ids #lt;system#gt;:…)<br/>seen, announcements, replayed counts<br/>store: watermark / last poll, counters"]
     res --> ann["announce() itself<br/>reannounce() map changes"]
     ann --> round["round(): poll each scope"]
     round --> win["_window(now)<br/>start = max(since, now − max_catchup)<br/>gap if last good poll > 3 rounds ago"]
