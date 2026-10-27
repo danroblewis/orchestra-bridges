@@ -1,0 +1,70 @@
+# RabbitMQ's own per-queue counts, as counted traffic for Orchestra (docs/proposals/event-sources.md
+# in Orchestra, §1 and §3). Never a message: only what RabbitMQ counts.
+#
+# Use it from a project's orchestra.toml:
+#
+#   [[sources]]
+#   name = "rabbit"
+#   url = "http://127.0.0.1:8441"          # the Prometheus-compatible store that scrapes RabbitMQ
+#   preset = "~/orchestra-bridges/orchestra_bridges/rabbitmq/preset.toml"
+#   [sources.producers]                    # who publishes into which exchange: RabbitMQ cannot say
+#   orders = "orders-api"
+#
+# What RabbitMQ must expose: the rabbitmq_prometheus plugin's /metrics/detailed endpoint, scraped
+# with these families (rig/scrape.yml does it):
+#   queue_coarse_metrics, queue_consumer_count, queue_delivery_metrics, queue_exchange_metrics,
+#   channel_exchange_metrics
+# A lower collect_statistics_interval (rig/rabbitmq.conf: 1 s) makes the counts and the backlogs
+# agree more closely from one scrape to the next.
+#
+# How it reads RabbitMQ:
+# - a channel is an exchange: producers publish into it, and each queue bound to it gets a copy;
+# - produced: each publishing channel's count per exchange, read from raw samples (a channel that
+#   closes and reopens does not reset the count). RabbitMQ names channels by process id, never by
+#   who opened them, so producers are unattributed unless [sources.producers] names them;
+# - consumed: each queue's acknowledged messages; backlog: each queue's ready and unacknowledged
+#   messages; the consumers attached to each queue;
+# - the consumer is read from the queue's name, <consumer>.<anything> (billing.orders is billing's):
+#   change the regex in label_replace below for another naming;
+# - the exchange a queue is bound to is joined from the routed counts per exchange and queue, so a
+#   queue must be bound to one exchange (a queue bound to two makes the join fail).
+
+[source]
+infer = false                # read only these, never the rest of the store's schema
+machine = "consumer"         # a series with a consumer label is that consumer's
+
+[[series]]
+name = "rabbitmq_published_total"
+select = '{__name__="rabbitmq_detailed_channel_messages_published_total", exchange!="", exchange!~"amq[.].*"}'
+by = ["vhost", "exchange"]
+kind = "counter"
+unit = "messages"
+traffic = { direction = "out", channel = "{exchange}" }
+
+# The acknowledgements are an evaluated sum (a query), not raw samples, so they are not reset-safe:
+# when a queue is deleted and declared again, its count starts again from 0 and the sum drops; the
+# drop reads as a counter reset, and what was acknowledged in that step before the re-creation is
+# lost. Raw samples (a select) cannot carry the exchange, which comes from the join.
+[[series]]
+name = "rabbitmq_acked_total"
+query = '''label_replace(sum by (vhost, queue, exchange) (rabbitmq_detailed_queue_messages_acked_total
+  * on (vhost, queue) group_left (exchange) count by (vhost, queue, exchange) (rabbitmq_detailed_queue_exchange_messages_published_total)),
+  "consumer", "$1", "queue", "([^.]+)[.].*")'''
+kind = "counter"
+unit = "messages"
+traffic = { direction = "in", channel = "{exchange}", machine = "{consumer}" }
+
+[[series]]
+name = "rabbitmq_backlog"
+query = '''label_replace(sum by (vhost, queue, exchange) (rabbitmq_detailed_queue_messages
+  * on (vhost, queue) group_left (exchange) count by (vhost, queue, exchange) (rabbitmq_detailed_queue_exchange_messages_published_total)),
+  "consumer", "$1", "queue", "([^.]+)[.].*")'''
+kind = "level"
+unit = "messages"
+traffic = { direction = "backlog", channel = "{exchange}", machine = "{consumer}" }
+
+[[series]]
+name = "rabbitmq_consumers"
+query = '''label_replace(sum by (vhost, queue) (rabbitmq_detailed_queue_consumers), "consumer", "$1", "queue", "([^.]+)[.].*")'''
+kind = "level"
+unit = "consumers"

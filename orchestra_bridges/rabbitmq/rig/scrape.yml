@@ -1,0 +1,9 @@
+# VictoriaMetrics (or Prometheus) scraping the rig's RabbitMQ: the families the preset reads.
+scrape_configs:
+  - job_name: rabbitmq
+    scrape_interval: 5s
+    metrics_path: /metrics/detailed
+    params:
+      family: [queue_coarse_metrics, queue_consumer_count, queue_delivery_metrics, queue_exchange_metrics, channel_exchange_metrics]
+    static_configs:
+      - targets: ["orchestra-test-rabbit:15692"]

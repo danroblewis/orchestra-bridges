@@ -1,0 +1,20 @@
+# An Orchestra project that reads the rig's RabbitMQ through the preset: copy it into an empty git
+# repository and run `orchestra web` there (and `orchestra run`, or `orchestra sd discover`).
+#
+# The 15 s step is three of VictoriaMetrics' 5 s scrapes, so each step's counts and backlogs come
+# from the same few scrapes; the 40 minute window holds two of the fleet's 20 minute days.
+
+[discovery]
+window = "40m"
+step = "15s"
+every = "2m"
+strategy = "conservation"
+
+[[sources]]
+name = "rabbit"
+url = "http://127.0.0.1:8441"
+preset = "~/orchestra-bridges/orchestra_bridges/rabbitmq/preset.toml"
+settle = "30s"                # VictoriaMetrics hides the newest 30 s from range queries (-search.latencyOffset), not from raw reads
+
+[sources.producers]           # RabbitMQ cannot say who publishes: orders-api is declared, the others are left unattributed
+orders = "orders-api"

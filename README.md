@@ -105,6 +105,36 @@ than `max_catchup` is read only back to that limit, and `recovered` is false.
   thousand a day for a busy repository.
 - Busy repositories have hundreds of people, and each one becomes a machine.
 
+## RabbitMQ: a preset and a test rig (counted traffic, not a bridge)
+
+Some buses carry too much, or data that is not ours, to read message by message. Orchestra reads
+them by **counts**: what each producer put into a channel and each consumer took from it, and what
+waits (Orchestra's `docs/proposals/event-sources.md` §1–§3, its SPEC §4.4). Nothing here
+publishes events; Orchestra reads the counts from a Prometheus-compatible store.
+
+- `orchestra_bridges/rabbitmq/preset.toml`: the series definitions for RabbitMQ's own per-queue
+  counts (the `rabbitmq_prometheus` plugin's `/metrics/detailed`): publishes per exchange,
+  acknowledgements, backlog and consumers per queue. Exchanges are channels; a queue named
+  `<consumer>.<anything>` is that consumer's. RabbitMQ never names publishers, so a project names
+  them in `[sources.producers]`, or they are drawn unattributed. Name the preset from a project's
+  `[[sources]]` table (`preset = "..."`); `rig/orchestra.toml` is an example.
+- `orchestra_bridges/rabbitmq/fleet.py`: a simulated fleet for testing it. `orders-api`,
+  `payments-api` and `web` publish into three fanout exchanges; `billing` acknowledges in batches
+  every 20 s, `shipping` and `notifier` keep up, and `analytics` is too slow at peak, so its
+  backlog grows and drains with a 20-minute simulated day.
+- `orchestra_bridges/rabbitmq/rig/rig.sh up|down|status`: a RabbitMQ (`orchestra-test-rabbit`:
+  AMQP on 127.0.0.1:5682, management on 15682, metrics on 15702), a VictoriaMetrics that scrapes it
+  every 5 s (`orchestra-test-rabbit-vm`, 127.0.0.1:8441) and the fleet, whose pid and log are in
+  `~/.local/state/orchestra-rabbit-rig/`. The fleet needs only `pika`
+  (`uv run --no-project --with pika`).
+
+What the rig shows, in a project made from `rig/orchestra.toml`: the Machines page draws the seven
+services as machines known by counts, the three exchanges as channels, double lines with each
+rate, and the two unnamed publishers as unattributed. Discovery finds each slow or batched
+consumer's backlog as a stock filled by its exchange's publishes and drained by its own acks, the
+orders exchange's publishes as one flow with a copy into each other backlog it fills. A consumer
+that keeps up (shipping, notifier) leaves a backlog too small to be a stock.
+
 ## Develop
 
 ```sh

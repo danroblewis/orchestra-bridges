@@ -99,4 +99,6 @@ pages. What a bridge shows is Orchestra's own Machines page, map and series.
 ## 7. Not built yet
 
 Jira, Slack (pings and checkmarks), Confluence and Drive bridges; webhooks; a team-only mode; the
-Pub/Sub preset and counted traffic, which are Orchestra's part of the same proposal.
+Pub/Sub preset. Counted traffic is built in Orchestra (its SPEC §4.4); the RabbitMQ preset and its
+test rig are here (`orchestra_bridges/rabbitmq/`, README), and are configuration and a test
+system, not bridges: they publish nothing on the bus.
