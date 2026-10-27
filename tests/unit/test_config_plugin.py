@@ -41,3 +41,33 @@ def test_orchestra_finds_the_installed_plugin():
 
     loaded = load(proj("[bridges.github]\n"))
     assert "bridges" in [p.name for p in loaded.plugins] and not loaded.errors
+
+
+def test_the_pull_request_bridge_settings():
+    c = cfg.github_prs(proj('[bridges.github_prs]\nrepos = ["a/b"]\nbranches = ["agent/*"]\nlabels = "SAIL"\n'
+                            '[bridges.github_prs.label_results]\nSAIL = ["SAIL-passed", "SAIL-failed"]\n').config.raw,
+                       Path("/repo"))
+    assert (c.repos, c.branches, c.labels, c.label_results, c.port, c.checks) == (
+        ["a/b"], ["agent/*"], ["SAIL"], {"SAIL": ["SAIL-passed", "SAIL-failed"]}, 9466, True)
+    assert c.follows("agent/x", []) and c.follows("main", ["SAIL"]) and not c.follows("feature/x", ["bug"])
+    every = cfg.github_prs(proj('[bridges.github_prs]\nrepos = ["a/b"]\n').config.raw, Path("/repo"))
+    assert every.follows("anything", [])                # with neither branches nor labels, every pull request
+
+
+@pytest.mark.parametrize("toml", ['[bridges.github_prs]\n', '[bridges.github_prs]\nrepos = ["vscode"]\n',
+                                  '[bridges.github_prs]\nrepos = ["a/b"]\ntoken = "ghp_x"\n',
+                                  '[bridges.github_prs]\nrepos = ["a/b"]\nport = "x"\n',
+                                  '[bridges.github_prs]\nrepos = ["a/b"]\n[bridges.github_prs.label_results]\nSAIL = "ok"\n'])
+def test_bad_pull_request_bridge_settings_are_refused(toml):
+    with pytest.raises(ConfigError):
+        cfg.github_prs(proj(toml).config.raw, Path("/repo"))
+
+
+def test_the_plugin_runs_the_pull_request_bridge_and_declares_its_instrument():
+    on = plugin(proj('[bridges.github_prs]\nrepos = ["a/b"]\nhost = "0.0.0.0"\n'))
+    assert [(p.name, p.argv()[-1]) for p in on.processes] == [("github_prs", "github_prs")]
+    assert [m.id for m in on.machines] == ["bridges.github_prs"]
+    [c] = on.collectors
+    assert (c.name, c.kind, c.target) == ("github_prs", "scrape", "http://127.0.0.1:9466/metrics")
+    assert plugin(proj('[bridges.github_prs]\nrepos = ["a/b"]\nport = 0\n')).collectors == []
+    assert plugin(proj("[bridges.github]\n")).collectors == []

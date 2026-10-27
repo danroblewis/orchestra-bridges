@@ -155,3 +155,11 @@ class GitHub:
                 raise GitHubError(f"GET {path}: expected a list, got {type(body).__name__}")
             yield body
             url = _next_link(headers.get("link"))
+
+    def get(self, path: str, params: dict[str, str | int] | None = None) -> dict:
+        """One object (``path`` under the API, e.g. ``/repos/o/r/commits/<sha>``)."""
+        query = f"?{urllib.parse.urlencode(params)}" if params else ""
+        body, _ = self._get(f"{self.base}{path}{query}")
+        if not isinstance(body, dict):
+            raise GitHubError(f"GET {path}: expected an object, got {type(body).__name__}")
+        return body
