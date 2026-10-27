@@ -5,8 +5,11 @@ Each event's **source** is the actor (``identity.py``: ``person.<login>``, or th
 ``person.<key>`` with a name and a team), its **subject** the issue (``microsoft/vscode#1234``), its
 **time** and **id** GitHub's (``translate.py``). Each actor is announced once, before their first
 event, with ``orchestra.machine.started`` (kind person, or program for a bot; package ``bridges``;
-their name and team when the map gives them), stamped with the time of that event; a changed name
-or team is announced again.
+their name and team when the map gives them), stamped with the time of that event. Whenever what
+it would announce for someone differs from their last announcement on the bus (their name or team
+changed in the map), they are announced again: before their next event, and on start for everyone
+the map lists who was announced before, even if they do nothing, so the Machines page shows the
+team they are in now.
 
 **It keeps no state of its own.** On start it reads its own events back from the bus (ids starting
 ``github:``): what it already published is never published again, the first-response counts are
@@ -69,12 +72,15 @@ class Bridge:
         self.last_ok: dict[str, float] = {}            # repo -> when its last poll began
         self.since: dict[str, float] = {}              # repo -> where its next poll reads from
         self.pending: dict[str, list[tuple]] = {r: [] for r in config.repos}   # repo -> (t, rank, type, subject, source) not counted yet
+        self.announced: dict[str, dict] = {}           # source -> its last announcement on the bus
 
     def resume(self) -> None:
         """Read back what this bridge published before, and where to read GitHub from."""
         evs, _ = self.events.after(0)
         own = [e for e in evs if str(e.get("id", "")).startswith("github:")]
         self.seen = {e["id"] for e in own}
+        self.announced = {e.get("source"): e.get("data") or {} for e in own
+                          if e["id"].startswith(ANNOUNCED) and e.get("type") == "orchestra.machine.started"}
         self.responses = {r: Responses(self.config.bots_answer) for r in self.config.repos}
         latest: dict[str, float] = defaultdict(float)
         for repo in self.config.repos:
@@ -102,11 +108,25 @@ class Bridge:
             "every_s": self.config.every}, source=MACHINE)
 
     def _announce_actor(self, actor: Actor, when: str) -> None:
+        """Announce ``actor`` unless their last announcement on the bus says the same."""
         about = actor.announcement(SYSTEM)
-        aid = f"{ANNOUNCED}{actor.source}:{hashlib.sha1(json.dumps(about, sort_keys=True).encode()).hexdigest()[:12]}"
-        if aid not in self.seen:
-            self.events.publish("orchestra.machine.started", about, source=actor.source, time=when, id=aid)
-            self.seen.add(aid)
+        if self.announced.get(actor.source) == about:
+            return
+        aid = f"{ANNOUNCED}{actor.source}:{hashlib.sha1(json.dumps(about, sort_keys=True).encode()).hexdigest()[:12]}:{when}"
+        self.events.publish("orchestra.machine.started", about, source=actor.source, time=when, id=aid)
+        self.seen.add(aid)
+        self.announced[actor.source] = about
+
+    def reannounce(self) -> None:
+        """Everyone the identity map lists who was announced before, announced again when their
+        name or team is not what their last announcement says (the map changed while the bridge
+        was stopped)."""
+        now = poll.iso(self.clock())
+        for login in self.people.accounts(SYSTEM):
+            actor = self.people.actor(SYSTEM, login)
+            last = self.announced.get(actor.source)
+            if last is not None and (last.get("name"), last.get("team")) != (actor.name, actor.team):
+                self._announce_actor(actor, now)
 
     def _window(self, repo: str, now: float) -> tuple[float, dict | None]:
         """Where this poll reads from, and the gap it closes when the last good poll was too long
@@ -167,6 +187,7 @@ class Bridge:
     def run(self, stop: threading.Event, *, once: bool = False) -> None:
         self.resume()
         self.announce()
+        self.reannounce()
         while not stop.is_set():
             self.round()
             if once:

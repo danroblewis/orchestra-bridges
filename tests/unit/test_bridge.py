@@ -236,3 +236,21 @@ def test_a_restart_continues_every_counter_from_what_was_written(project, github
     assert level(project, "github_issues_opened_total") == 41.0
     assert level(project, "github_issues_closed_unanswered_total") == 7.0
     counters_never_fall(project)
+
+
+def test_a_changed_team_is_announced_again_on_start_without_a_new_event(project, github, clock, make_bridge):
+    people = project.repo_root / "people.toml"
+    people.write_text('[people.al]\nname = "Alice Liddell"\nteam = "editor"\ngithub = "alice"\n'
+                      '[people.ed]\nname = "Ed"\nteam = "nobody-saw-him"\ngithub = "ed"\n')
+    busy(github)
+    clock.t += 600
+    run_once(make_bridge())
+    people.write_text('[people.al]\nname = "Alice Liddell"\nteam = "terminal"\ngithub = "alice"\n'
+                      '[people.ed]\nname = "Ed"\nteam = "other"\ngithub = "ed"\n')
+    clock.t += 60
+    run_once(make_bridge())                              # nothing new happened on GitHub
+    clock.t += 60
+    run_once(make_bridge())                              # and announced only once
+    al = [e["data"]["team"] for e in bus(project) if e["source"] == "person.al" and e["type"] == "orchestra.machine.started"]
+    assert al == ["editor", "terminal"]
+    assert not [e for e in bus(project) if e["source"] == "person.ed"]      # never seen: not invented as a machine

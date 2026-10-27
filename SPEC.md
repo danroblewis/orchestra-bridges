@@ -27,10 +27,13 @@ listen.
 
 The bridge announces each actor once, just before their first event: an
 `orchestra.machine.started` whose source is the actor and whose time is that first event's time.
-It carries `kind` (`person`, or `program` for a bot), `mode` (`ad hoc`) and `package` (`bridges`),
-which Orchestra reads, plus `name`, `team`, the account and `bot`, which Orchestra passes to the
-package's card without reading. The announcement's id is built from its content, so it is made
-once, and made again only when the map changes a name or a team.
+It carries `kind` (`person`, or `program` for a bot), `mode` (`ad hoc`), `package` (`bridges`),
+`name` and `team`, which Orchestra reads (the team is the machine's group: a label that groups
+people on the Machines page, never separates them), plus the account and `bot`, which Orchestra
+passes to the package's card without reading. A person is announced again whenever what the
+bridge would announce differs from their last announcement on the bus: before their next event,
+and on start for everyone the map lists who was announced before, so a team changed in the map
+shows even if they do nothing. Someone the map lists but the bridge never saw is not announced.
 
 The bridge itself is the machine `bridges.<system>`. It announces itself (continuous, with its log)
 when it starts, and it labels its series `machine="bridges.<system>"`. The plugin also declares it
