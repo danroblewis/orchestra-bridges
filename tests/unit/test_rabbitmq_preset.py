@@ -26,7 +26,9 @@ def world(seed: int = 5):
     """RabbitMQ's detailed series every 15 s (7 s past each grid line), and the truth: each queue's
     messages at each scrape."""
     rng = random.Random(seed)
-    lab = lambda **k: {"vhost": "/", **k}
+    def lab(**k):
+        return {"vhost": "/", **k}
+
     pub = dict.fromkeys(CHANNELS, 0)
     routed = {q: 0 for qs in ROUTES.values() for q in qs}
     acked = dict.fromkeys(routed, 0)
@@ -105,8 +107,10 @@ def test_each_series_counts_its_direction_channel_and_machine(rabbit):
     assert published["orders"] == {"direction": "out", "channel": "rabbit:orders", "machine": "rabbit.orders-api",
                                    "attributed": "declared in [sources.producers]"}
     assert published["clicks"]["machine"] is None and published["clicks"]["direction"] == "out"
-    sent = lambda ex: sum(_last(pts, end) - _first(pts, start) for n, lab, pts in dump
-                          if n == "rabbitmq_detailed_channel_messages_published_total" and lab["exchange"] == ex)
+    def sent(ex):
+        return sum(_last(pts, end) - _first(pts, start) for n, lab, pts in dump
+                   if n == "rabbitmq_detailed_channel_messages_published_total" and lab["exchange"] == ex)
+
     for ex in ("orders", "clicks"):
         assert got[("rabbit:rabbitmq_published_total", (("exchange", ex),))][-1][1] == sent(ex)
 

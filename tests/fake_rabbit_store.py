@@ -94,7 +94,9 @@ class FakeRabbitStore:
         return list(series.values())
 
     def answer(self, endpoint: str, form: dict) -> dict:
-        one = lambda k, d=None: (form.get(k) or [d])[0]
+        def one(k, d=None):
+            return (form.get(k) or [d])[0]
+
         q = one("query")
         self.queries.append(q)
         if endpoint == "query_range":
