@@ -1,8 +1,12 @@
 """GitHub's REST API, read-only: paged lists, the rate limits honoured, the token kept in memory.
 
-The token is the owner's ``gh`` login: ``GH_TOKEN`` (or ``GITHUB_TOKEN``) when set, else what
-``gh auth token`` prints at start. It is never written, logged or published, and it is sent only to
-the configured API's own host: a pagination link that points anywhere else is not followed.
+The token is the owner's ``gh`` login for the configured API's host, as ``gh`` itself finds it:
+for github.com, ``GH_TOKEN`` (or ``GITHUB_TOKEN``) when set; for a GitHub Enterprise host,
+``GH_ENTERPRISE_TOKEN`` (or ``GITHUB_ENTERPRISE_TOKEN``); else what ``gh auth token --hostname
+<host>`` prints at start, so an Enterprise API never gets the github.com token. It is never
+written, logged or published, and it is sent only to the configured API's own scheme and host: a
+pagination link or a redirect that points anywhere else (another host, https to http) is not
+followed.
 
 Limits honoured: a ``Retry-After`` (secondary limits, 429) is waited out; a primary limit run out
 (``X-RateLimit-Remaining: 0``) waits until ``X-RateLimit-Reset`` when that is within
@@ -28,18 +32,46 @@ class GitHubError(Exception):
     pass
 
 
-def gh_token() -> str:
-    """The owner's token: the environment's, else ``gh auth token``'s. Raises when there is none."""
-    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+def gh_host(api: str) -> str:
+    """The host ``gh`` knows the API by: github.com for api.github.com, else the API's own host."""
+    host = (urllib.parse.urlsplit(api).hostname or "").lower()
+    return "github.com" if host in ("api.github.com", "github.com") else host
+
+
+def gh_token(api: str = "https://api.github.com") -> str:
+    """The owner's token for ``api``'s host: the environment's, else ``gh auth token --hostname``'s.
+    Raises when there is none."""
+    host = gh_host(api)
+    names = ("GH_TOKEN", "GITHUB_TOKEN") if host == "github.com" else ("GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN")
+    token = next((os.environ[n] for n in names if os.environ.get(n)), None)
     if token:
         return token
     try:
-        p = subprocess.run(["gh", "auth", "token"], capture_output=True, text=True, timeout=30, check=False)
+        p = subprocess.run(["gh", "auth", "token", "--hostname", host], capture_output=True, text=True, timeout=30, check=False)
     except (OSError, subprocess.TimeoutExpired) as e:
-        raise GitHubError(f"no GH_TOKEN and `gh auth token` could not run: {type(e).__name__}") from e
+        raise GitHubError(f"no {names[0]} and `gh auth token --hostname {host}` could not run: {type(e).__name__}") from e
     if p.returncode != 0 or not p.stdout.strip():
-        raise GitHubError("no GH_TOKEN and `gh auth token` gave none: run `gh auth login`")
+        raise GitHubError(f"no {names[0]} and `gh auth token --hostname {host}` gave none: run `gh auth login --hostname {host}`")
     return p.stdout.strip()
+
+
+def _origin(url: str) -> tuple[str, str]:
+    u = urllib.parse.urlsplit(url)
+    return u.scheme.lower(), u.netloc.lower()
+
+
+class _SameOrigin(urllib.request.HTTPRedirectHandler):
+    """Follows a redirect only to the configured API's scheme and host: urllib's default copies the
+    Authorization header to wherever a redirect points."""
+
+    def __init__(self, base: str):
+        self.base = base
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        target = urllib.parse.urljoin(req.full_url, newurl)
+        if _origin(target) != _origin(self.base):
+            raise GitHubError(f"refusing to follow a redirect to {_origin(target)[1]}: the token goes only to the configured API")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
 def _next_link(header: str | None) -> str | None:
@@ -60,13 +92,13 @@ class GitHub:
         self.sleep, self.clock = sleep, clock
         self.requests = 0
         self.rate_remaining: int | None = None
+        self._opener = urllib.request.build_opener(_SameOrigin(self.base))
 
     def __repr__(self) -> str:                    # never the token
         return f"GitHub({self.base!r})"
 
     def _ours(self, url: str) -> bool:
-        a, b = urllib.parse.urlsplit(url), urllib.parse.urlsplit(self.base)
-        return (a.scheme, a.netloc) == (b.scheme, b.netloc)
+        return _origin(url) == _origin(self.base)
 
     def _get(self, url: str) -> tuple[object, dict[str, str]]:
         if not self._ours(url):
@@ -77,7 +109,7 @@ class GitHub:
         for attempt in range(RETRIES + 1):
             self.requests += 1
             try:
-                with urllib.request.urlopen(req, timeout=self.timeout) as r:
+                with self._opener.open(req, timeout=self.timeout) as r:
                     headers = {k.lower(): v for k, v in r.headers.items()}
                     self._note(headers)
                     return json.loads(r.read() or b"null"), headers

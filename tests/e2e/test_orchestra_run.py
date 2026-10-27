@@ -21,7 +21,7 @@ def test_orchestra_run_keeps_the_bridge_running(project, github, tmp_path):
     github.open(1, "alice", now - 600)
     github.comment(1, "bob", now - 300)
     orchestra = Path(sys.executable).with_name("orchestra")
-    env = {**os.environ, "GH_TOKEN": TOKEN}
+    env = {**os.environ, "GH_ENTERPRISE_TOKEN": TOKEN}        # the fake is not github.com: gh's variable for other hosts
     host = subprocess.Popen([str(orchestra), "run"], cwd=project.repo_root, env=env, stdout=subprocess.DEVNULL,
                             stderr=subprocess.STDOUT, start_new_session=True)
     try:

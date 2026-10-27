@@ -67,9 +67,12 @@ nothing runs.
 
 To try one poll by hand: `ORCHESTRA_REPO=/path/to/project uv run python -m orchestra_bridges github --once`.
 
-**Credentials.** It uses `GH_TOKEN` (or `GITHUB_TOKEN`) when one is set, and otherwise runs
-`gh auth token` once at start, so your `gh` login is enough. The token stays in memory. It is
-never written, logged or published, and it is sent only to the configured API host.
+**Credentials.** For github.com it uses `GH_TOKEN` (or `GITHUB_TOKEN`) when one is set; for a
+GitHub Enterprise `api`, `GH_ENTERPRISE_TOKEN` (or `GITHUB_ENTERPRISE_TOKEN`). Otherwise it runs
+`gh auth token --hostname <the api's host>` once at start, so your `gh` login for that host is
+enough, and an Enterprise API never gets your github.com token. The token stays in memory. It is
+never written, logged or published, and it is sent only to the configured API's scheme and host: a
+redirect or a pagination link to anywhere else is not followed.
 
 **People.** Someone not in the identity map is `person.<login>`, and a bot is `bot.<login>`. The
 map gives a person a name and a team, and joins their accounts across systems:

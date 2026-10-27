@@ -26,7 +26,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         project = load_project()
         conf = cfg.github(project.config.raw, project.repo_root)
-        api = GitHub(gh_token(), conf.api)
+        api = GitHub(gh_token(conf.api), conf.api)
         bridge = Bridge(conf, api, Events.for_project(project, source=MACHINE),
                         ProjectStore(for_project(project), project.key))
     except (ConfigError, GitHubError, IdentityError) as e:
