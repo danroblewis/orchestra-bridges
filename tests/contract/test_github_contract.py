@@ -75,4 +75,4 @@ def test_issue_events(world):
     compare("event", world.events, items)
     for e in items:
         s = from_event(REPO, e)
-        assert s is None or s.type.startswith("issue.")
+        assert s is None or s.type.startswith("github.issue.")

@@ -59,13 +59,13 @@ class Responses:
 
     def fold(self, type_: str, subject: str, source: str, t: float) -> bool:
         """Take one event (time order); whether any count changed."""
-        if type_ == "issue.opened":
+        if type_ == "github.issue.opened":
             if subject in self.waiting:
                 return False
             self.waiting[subject] = (source, t)
             self.opened += 1
             return True
-        if subject not in self.waiting or type_ not in ("issue.commented", "issue.closed"):
+        if subject not in self.waiting or type_ not in ("github.issue.commented", "github.issue.closed"):
             return False
         author, since = self.waiting[subject]
         answers = source != author and (self.bots_answer or not source.startswith("bot."))
@@ -75,7 +75,7 @@ class Responses:
             self.answered[within(wait)] += 1
             self.response_seconds += wait
             return True
-        if type_ == "issue.closed":
+        if type_ == "github.issue.closed":
             del self.waiting[subject]
             self.closed_unanswered += 1
             return True

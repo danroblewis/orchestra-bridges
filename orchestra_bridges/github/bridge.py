@@ -49,7 +49,7 @@ from . import poll
 from .api import GitHub, GitHubError
 from .measures import Measures
 from .responses import Responses
-from .translate import RANK, TYPES, prefix
+from .translate import RANK, current, prefix
 
 MACHINE = "bridges.github"
 SYSTEM = "github"
@@ -84,9 +84,8 @@ class Bridge:
         self.responses = {r: Responses(self.config.bots_answer) for r in self.config.repos}
         latest: dict[str, float] = defaultdict(float)
         for repo in self.config.repos:
-            mine = [e for e in own if e["id"].startswith(prefix(repo)) and e.get("type") in TYPES]
-            self.pending[repo] = [(event_time(e) or 0.0, RANK[e["type"]], e["type"], e.get("subject") or "", e.get("source") or "")
-                                  for e in mine]
+            mine = [(e, t) for e in own if e["id"].startswith(prefix(repo)) and (t := current(e.get("type")))]
+            self.pending[repo] = [(event_time(e) or 0.0, RANK[t], t, e.get("subject") or "", e.get("source") or "") for e, t in mine]
             latest[repo] = max((p[0] for p in self.pending[repo]), default=0.0)
             self._count(repo, self.clock(), write=False)
             self.measures.resume(repo)

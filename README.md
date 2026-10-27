@@ -17,11 +17,11 @@ REST API, and publishes:
 
 | Event | Source | Data (no text) |
 |---|---|---|
-| `issue.opened` | the author | repository, issue number, login, association |
-| `issue.commented` | the commenter | the same, and the comment's id |
-| `issue.labelled` | who added the label | the same, and the label's name |
-| `issue.closed` | who closed it | the same, and the close reason |
-| `issue.reopened` | who reopened it | the same |
+| `github.issue.opened` | the author | repository, issue number, login, association |
+| `github.issue.commented` | the commenter | the same, and the comment's id |
+| `github.issue.labelled` | who added the label | the same, and the label's name |
+| `github.issue.closed` | who closed it | the same, and the close reason |
+| `github.issue.reopened` | who reopened it | the same |
 
 The subject is the issue (`microsoft/vscode#1234`). The time and the id come from GitHub, so a
 poll that overlaps the last one never publishes anything twice. Pull requests are left out. The

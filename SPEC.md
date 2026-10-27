@@ -9,6 +9,10 @@ This repository holds the bridges. Orchestra holds no bridge (its rule 1).
 
 ## 1. The event
 
+- **Type**: the system first, then what happened: `github.issue.opened`, `github.issue.commented`,
+  and so on (the README's table), so a later bridge's types (`jira.issue.created`) never mix with
+  these in Orchestra's counts by type. Events published before the prefix (`issue.opened`) are
+  still read back on a restart (`translate.current`).
 - **Source**: who acted, as a machine (`identity.py`). Someone listed in the owner's identity map
   is `person.<key>`, or `bot.<key>` for a bot, whichever system they acted in. Anyone else is
   `person.<login>` or `bot.<login>`, by their account on that system. The source is not

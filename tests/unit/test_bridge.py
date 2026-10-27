@@ -30,9 +30,9 @@ def test_a_poll_publishes_what_people_did_as_them(project, github, make_bridge):
     run_once(make_bridge())
     evs = published(project)
     assert [(e["type"], e["source"], e["subject"]) for e in evs] == [
-        ("issue.opened", "person.alice", f"{R}#1"), ("issue.labelled", "bot.vscode-triage-bot", f"{R}#1"),
-        ("issue.commented", "person.bob", f"{R}#1"), ("issue.closed", "person.alice", f"{R}#1"),
-        ("issue.opened", "person.carol", f"{R}#2")]
+        ("github.issue.opened", "person.alice", f"{R}#1"), ("github.issue.labelled", "bot.vscode-triage-bot", f"{R}#1"),
+        ("github.issue.commented", "person.bob", f"{R}#1"), ("github.issue.closed", "person.alice", f"{R}#1"),
+        ("github.issue.opened", "person.carol", f"{R}#2")]
     assert evs[0]["id"] == f"github:{R}:opened:1"
     assert evs[0]["time"] == "2026-10-26T07:03:20+00:00"           # GitHub's time, not the poll's
     assert evs[0]["data"] == {"repository": R, "issue": 1, "login": "alice", "association": "NONE"}
@@ -47,14 +47,14 @@ def test_each_actor_is_announced_once_before_their_first_event(project, github, 
     assert announced[0]["data"]["package"] == "bridges" and announced[0]["data"]["mode"] == "continuous"
     assert announced[2]["data"]["kind"] == "program" and announced[1]["data"]["kind"] == "person"
     order = [e["source"] for e in bus(project)]
-    assert order.index("person.bob") < next(i for i, e in enumerate(bus(project)) if e["type"] == "issue.commented")
+    assert order.index("person.bob") < next(i for i, e in enumerate(bus(project)) if e["type"] == "github.issue.commented")
 
 
 def test_the_identity_map_names_people_and_their_teams(project, github, make_bridge):
     (project.repo_root / "people.toml").write_text('[people.al]\nname = "Alice Liddell"\nteam = "editor"\ngithub = "alice"\n')
     busy(github)
     run_once(make_bridge())
-    assert published(project, "issue.opened")[0]["source"] == "person.al"
+    assert published(project, "github.issue.opened")[0]["source"] == "person.al"
     [a] = [e for e in bus(project) if e["source"] == "person.al" and e["type"] == "orchestra.machine.started"]
     assert (a["data"]["name"], a["data"]["team"], a["data"]["github"]) == ("Alice Liddell", "editor", "alice")
 
@@ -120,7 +120,7 @@ def test_after_a_gap_it_catches_up_with_the_events_own_times(project, github, cl
     b.round()
     [gap] = published(project, "bridge.gap")
     assert gap["data"]["recovered"] is True and gap["data"]["from"] == "2026-10-26T07:33:20Z"
-    assert [e["time"] for e in published(project) if e["type"].startswith("issue.")] == [
+    assert [e["time"] for e in published(project) if e["type"].startswith("github.issue.")] == [
         "2026-10-26T08:03:20+00:00", "2026-10-26T08:33:20+00:00"]
     pts = for_project(project).raw("github_issues_unanswered", {"machine": "bridges.github", "repo": R})
     assert (T0 + 1800, 1.0) in pts and (T0 + 3600, 0.0) in pts
@@ -134,7 +134,7 @@ def test_a_gap_longer_than_max_catchup_is_recorded_as_not_recovered(project, git
     clock.t += 10 * 3600
     b.round()
     assert published(project, "bridge.gap")[0]["data"]["recovered"] is False
-    assert [e["subject"] for e in published(project, "issue.opened")] == [f"{R}#7"]
+    assert [e["subject"] for e in published(project, "github.issue.opened")] == [f"{R}#7"]
 
 
 def test_a_restart_after_a_gap_records_it_and_catches_up(project, github, clock, make_bridge):
@@ -143,7 +143,7 @@ def test_a_restart_after_a_gap_records_it_and_catches_up(project, github, clock,
     clock.t += 3600
     run_once(make_bridge())
     assert published(project, "bridge.gap")[0]["data"]["recovered"] is True
-    assert [e["subject"] for e in published(project, "issue.opened")] == [f"{R}#8"]
+    assert [e["subject"] for e in published(project, "github.issue.opened")] == [f"{R}#8"]
 
 
 def test_no_text_and_no_token_reach_the_bus_the_store_or_the_log(project, github, clock, make_bridge, capsys):
@@ -167,7 +167,7 @@ def test_a_failed_poll_is_logged_and_the_next_round_tries_again(project, github,
     busy(github)
     clock.t += 60
     b.round()
-    assert len(published(project, "issue.opened")) == 2
+    assert len(published(project, "github.issue.opened")) == 2
 
 
 def test_an_outage_publishes_one_gap_once_it_is_over(project, github, clock, make_bridge):
@@ -254,3 +254,19 @@ def test_a_changed_team_is_announced_again_on_start_without_a_new_event(project,
     al = [e["data"]["team"] for e in bus(project) if e["source"] == "person.al" and e["type"] == "orchestra.machine.started"]
     assert al == ["editor", "terminal"]
     assert not [e for e in bus(project) if e["source"] == "person.ed"]      # never seen: not invented as a machine
+
+
+def test_a_restart_reads_events_published_under_the_old_types(project, github, clock, make_bridge):
+    from orchestra.events import Events
+
+    from orchestra_bridges.github.poll import iso
+    github.open(1, "alice", T0 - 3000)
+    c = github.comment(1, "bob", T0 - 2900)
+    events = Events.for_project(project)              # what an older bridge published, before the types had a prefix
+    for type_, src, t, n in (("issue.opened", "person.alice", T0 - 3000, "opened:1"),
+                             ("issue.commented", "person.bob", T0 - 2900, f"comment:{c['id']}")):
+        events.publish(type_, {}, source=src, subject=f"{R}#1", time=iso(t), id=f"github:{R}:{n}")
+    run_once(make_bridge())
+    assert [e["type"] for e in published(project)] == ["issue.opened", "issue.commented"]     # nothing published twice
+    assert level(project, "github_issues_answered_total", within="15m") == 1
+    assert level(project, "github_issues_opened_total") == 1

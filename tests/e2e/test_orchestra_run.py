@@ -13,7 +13,7 @@ from fake_github import TOKEN
 
 
 def issues(project):
-    return [e for e in published(project) if e["type"].startswith("issue.")]
+    return [e for e in published(project) if e["type"].startswith("github.issue.")]
 
 
 def test_orchestra_run_keeps_the_bridge_running(project, github, tmp_path):
@@ -29,7 +29,7 @@ def test_orchestra_run_keeps_the_bridge_running(project, github, tmp_path):
         while time.time() < end and len(issues(project)) < 2:
             time.sleep(0.5)
         assert [(e["type"], e["source"]) for e in issues(project)] == [
-            ("issue.opened", "person.alice"), ("issue.commented", "person.bob")]
+            ("github.issue.opened", "person.alice"), ("github.issue.commented", "person.bob")]
     finally:
         host.send_signal(signal.SIGTERM)
         host.wait(timeout=30)
