@@ -39,8 +39,14 @@ from ``lookback`` ago. A poll that succeeds more than three rounds after the end
 one (the laptop slept, the bridge was stopped, Slack or the network was down) records the gap once,
 as ``bridge.gap`` {workspace, from, to, recovered}, and reads back to where it left off.
 
-The bridge itself is the machine ``bridges.slack``. Its series reach the store through a
-``[[scrape]]`` of the same name, which labels them ``machine="bridges.slack"``."""
+The bridge is the machine ``bridges.slack`` by its events: it announces itself and publishes
+``slack.ping.expired`` and ``bridge.gap`` under that source. Its counts are not the machine's: they
+are measurements of the system, served on ``/metrics`` and stored by an instrument, the scrape the
+plugin declares (``plugin.py``), which runs as ``bridges.slack`` and labels every point
+``instrument="bridges.slack"``. On start the bridge reads its counters back by that label (and, for
+points stored before Orchestra's instruments of 2026-10-27, by the old ``machine="bridges.slack"``),
+so the scrape must keep that name: a project's own ``[[scrape]]`` replacing the plugin's has to be
+named ``bridges.slack`` too."""
 
 from __future__ import annotations
 
@@ -62,7 +68,9 @@ from .pings import ANSWERED, EXPIRED, RANK, RECEIVED, event_id, iso, iso_ts, kin
 from .serve import MetricsServer
 from .waits import COUNTERS, LAST_POLL, UNKNOWN, Waits, within
 
-MACHINE = "bridges.slack"
+MACHINE = "bridges.slack"                         # the source of its own events
+INSTRUMENT = "bridges.slack"                      # the scrape that stores its counts (plugin.py)
+LEGACY = {"machine": MACHINE}                     # how scrapes labelled points before 2026-10-27
 SYSTEM = "slack"
 GAP_ROUNDS = 3
 KNOWN_ROUNDS = 2                                  # a checkmark seen within this many polls has a known wait
@@ -117,20 +125,27 @@ class Bridge:
         qs = [search.mention_query(self.me), *(search.group_query(g) for g in self.config.groups)]
         return qs + ([search.dm_query(self.me)] if self.config.dms else [])
 
+    def _latest(self, name: str, labels: dict[str, str]) -> float | None:
+        """The last value the scrape stored for one series of this workspace: the higher of what
+        the instrument holds and what the store held from before instruments (``LEGACY``), so an
+        upgrade, which starts each series over under its new label, takes no counter down."""
+        got = [p[1] for by in ({"instrument": INSTRUMENT}, LEGACY)
+               if (p := self.store.latest(name, {**by, **self.labels(), **labels}))]
+        return max(got) if got else None
+
     def _stored(self) -> tuple[dict[str, float], float]:
         """Each counter's last value in the store, and when the last good poll it holds began (the
         value of ``LAST_POLL``, not when it was scraped: the scrape goes on while polls fail)."""
-        base = {"machine": MACHINE, **self.labels()}
         written: dict[str, float] = {}
         try:
-            last = self.store.latest(LAST_POLL, base)
+            last = self._latest(LAST_POLL, {})
             for key, (name, extra) in COUNTERS.items():
-                if got := self.store.latest(name, {**base, **extra}):
-                    written[key] = got[1]
+                if (got := self._latest(name, extra)) is not None:
+                    written[key] = got
         except Exception as e:  # noqa: BLE001 - measuring never stops the bridge
             log(f"metrics store not read ({type(e).__name__})")
             last = None
-        return written, (last[1] if last else 0.0)
+        return written, (last or 0.0)
 
     def resume(self) -> None:
         """Read back what this bridge published before, and where to read Slack from."""

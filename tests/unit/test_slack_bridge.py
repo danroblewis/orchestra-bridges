@@ -15,6 +15,7 @@ from orchestra.collect.spec import Collector
 from orchestra.events import Events
 from orchestra.metrics import for_project
 
+from orchestra_bridges.slack.bridge import INSTRUMENT
 from orchestra_bridges.slack.waits import COUNTERS
 
 BOB, CAROL = "U0BOB", "U0CAROL"
@@ -31,15 +32,15 @@ def published(project, type_=None) -> list[dict]:
 
 
 def scrape(bridge, project, at: float) -> None:
-    """What Orchestra's [[scrape]] named bridges.slack does with the bridge's /metrics at ``at``."""
+    """What the plugin's instrument bridges.slack does with the bridge's /metrics at ``at``."""
     text = bridge.render()
     assert text is not None
-    r = points_of(Collector("bridges.slack", "scrape", "http://127.0.0.1/metrics"), text, project.key, at)
+    r = points_of(Collector(INSTRUMENT, "scrape", "http://127.0.0.1/metrics"), text, project.key, at)
     for_project(project).write(r.points)
 
 
 def stored(project, series, **labels):
-    last = for_project(project).latest(series, {"machine": "bridges.slack", "workspace": TEAM, **labels})
+    last = for_project(project).latest(series, {"instrument": INSTRUMENT, "workspace": TEAM, **labels})
     return last[1] if last else None
 
 
@@ -233,13 +234,15 @@ def test_a_restart_publishes_nothing_twice_and_loses_no_count(slack_project, sla
     assert stored(slack_project, "slack_pings_received_total") == 2
 
 
-def test_a_restart_continues_counters_the_bus_no_longer_explains(slack_project, slack, clock, make_slack):
+@pytest.mark.parametrize("by", [{"instrument": INSTRUMENT},
+                                {"machine": "bridges.slack"}])      # stored before Orchestra's instruments
+def test_a_restart_continues_counters_the_bus_no_longer_explains(slack_project, slack, clock, make_slack, by):
     from orchestra.metrics import Point
     slack.user(BOB, "bob")
     slack.say(BOB, CHANNEL, T0 - 100, mentions=(OWNER,))
     b = make_slack()
     run_once(b)
-    labels = {"machine": "bridges.slack", "workspace": TEAM, "project": slack_project.key}
+    labels = {**by, "workspace": TEAM, "project": slack_project.key}
     for_project(slack_project).write([Point("slack_pings_received_total", 40.0, clock.t + 1, labels),   # an older bridge's,
                                       Point("slack_pings_answered_total", 9.0, clock.t + 1, {**labels, "within": "15m"})])
     clock.t += 60
@@ -250,7 +253,8 @@ def test_a_restart_continues_counters_the_bus_no_longer_explains(slack_project, 
     tick(b2, clock, slack_project)
     assert level(b2, "slack_pings_received_total") == 41
     for name, extra in COUNTERS.values():
-        pts = for_project(slack_project).raw(name, {"machine": "bridges.slack", "workspace": TEAM, **extra})
+        pts = sorted({p for b_ in ({"instrument": INSTRUMENT}, by)          # the old series, then the new
+                      for p in for_project(slack_project).raw(name, {**b_, "workspace": TEAM, **extra})})
         assert all(y >= x for (_, x), (_, y) in pairwise(pts)), (name, pts)
 
 

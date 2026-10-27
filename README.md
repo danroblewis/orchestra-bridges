@@ -29,7 +29,8 @@ poll that overlaps the last one never publishes anything twice. Pull requests ar
 first time it sees someone, it announces them (`orchestra.machine.started`: kind `person`, or
 `program` for a bot; package `bridges`).
 
-It also writes these series, labelled `machine="bridges.github"` and `repo`:
+It also writes these series itself, labelled `machine="bridges.github"` (who wrote them, which is
+how it finds them again on restart) and `repo`:
 
 - `github_issues_unanswered`: issues opened while the bridge watched that nobody but the author
   has yet commented on or closed;
@@ -142,8 +143,10 @@ limit, the network, a token without `reactions:read`), the poll goes on: new pin
 expiries are still published, the pings stay waiting and are checked again next poll, and the log
 says why, once a poll.
 
-It serves these series at `http://127.0.0.1:<port>/metrics`, each labelled with the workspace, for
-Orchestra to scrape:
+It serves these series at `http://127.0.0.1:<port>/metrics`, each labelled with the workspace.
+The plugin declares the instrument that stores them, a scrape named `bridges.slack` every 30 s, so
+Orchestra labels each stored point `instrument="bridges.slack"` and lists the scrape on its
+Instruments page:
 
 - `slack_pings_unanswered`: the pings waiting for you now (the stock);
 - `slack_pings_oldest_unanswered_seconds`: how long the oldest has waited;
@@ -194,9 +197,8 @@ the metrics, the log or any file.
 
    The token stays in memory and is sent only to slack.com (or, in tests, a fake on this machine):
    `api` is refused if it names any other host, or plain http to a host that is not local.
-3. **Configure** it in the project's `orchestra.toml`. The `[[scrape]]` must be named
-   `bridges.slack`, so that its series belong to the bridge's machine and a restarted bridge can
-   find its counts:
+3. **Configure** it in the project's `orchestra.toml`. The section is all it needs: the plugin
+   starts the bridge and declares the scrape of its `/metrics` (at `host` and `port`) for you:
 
 ```toml
 [bridges.slack]
@@ -214,12 +216,26 @@ port = 9465                       # where /metrics is served
 # token_file = "~/.config/orchestra-bridges/slack-token"
 # queries = ["<@{me}>", "to:<@{me}>"]   # replaces the searches, when your workspace needs others
 # api = "https://slack.com/api"   # slack.com, or a local fake in tests
-
-[[scrape]]
-name = "bridges.slack"
-url = "http://127.0.0.1:9465/metrics"
-every = "30s"
 ```
+
+A `[[scrape]]` you added by hand before the plugin could declare one still works: a project entry
+named `bridges.slack` replaces the plugin's (Orchestra logs that it did), so keep it only to scrape
+more often or elsewhere, and delete it otherwise. It must keep the name `bridges.slack`: a
+restarted bridge finds its counts by `instrument="bridges.slack"`.
+
+```toml
+[[scrape]]
+name = "bridges.slack"            # must be this name
+url = "http://127.0.0.1:9465/metrics"
+every = "10s"
+```
+
+With `port = 0` (any free port) the plugin declares no scrape, since it cannot know the port.
+
+Upgrading from before Orchestra's instruments (2026-10-27): the scrape used to label the points
+`machine="bridges.slack"`. New points are labelled `instrument="bridges.slack"`, so each series
+starts again under the new label; the bridge reads both on restart and continues each counter from
+the higher value, so no count is lost or taken down.
 
 In the identity map (`[bridges] people`), a Slack account is a member id or a handle
 (`slack = "U012AB3CD"`). List yourself so your answers carry your name and team. Anyone not listed
@@ -238,8 +254,9 @@ the last good one publishes `bridge.gap` {workspace, from, to, recovered} and ca
 missed in the gap are published with their Slack times. A restart reads where it left off from the
 store: the value of `slack_bridge_last_poll_timestamp_seconds`, not the time of the last scrape,
 because Orchestra keeps scraping the bridge while Slack or the network is down. So a restart after
-an outage reads the outage's pings back and records the gap. It needs the `[[scrape]]`: without it,
-a restart reads from its last event on the bus and records no gap.
+an outage reads the outage's pings back and records the gap. It needs the scrape: without it (with
+`port = 0`, or Orchestra not running it), a restart reads from its last event on the bus and records
+no gap.
 
 ### Limits, plainly
 

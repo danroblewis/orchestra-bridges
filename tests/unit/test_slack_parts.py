@@ -169,3 +169,27 @@ def test_the_plugin_runs_the_slack_bridge_where_it_is_configured():
     assert [m.id for m in on.machines] == ["bridges.github", "bridges.slack"]
     only = plugin(proj("[bridges.slack]\n"))
     assert [p.name for p in only.processes] == ["slack"]
+
+
+def test_the_plugin_declares_the_scrape_that_stores_the_slack_bridges_counts():
+    from dataclasses import replace
+
+    from orchestra.collect.spec import from_toml
+
+    from orchestra_bridges.slack.bridge import INSTRUMENT
+
+    def instruments(toml: str):
+        p = plugin(proj(toml))
+        found, errors = from_toml(proj(toml).config.raw, [replace(c, owner=p.name) for c in p.collectors])
+        return {c.name: (c.target, c.owner) for c in found}, errors
+
+    assert plugin(proj("[bridges.github]\n")).collectors == []
+    got, errors = instruments("[bridges.slack]\n")
+    assert got == {INSTRUMENT: ("http://127.0.0.1:9465/metrics", "bridges")} and not errors   # the name it reads back by
+    assert instruments('[bridges.slack]\nhost = "0.0.0.0"\nport = 9500\n')[0] == {
+        INSTRUMENT: ("http://127.0.0.1:9500/metrics", "bridges")}
+    assert instruments('[bridges.slack]\nhost = "::"\n')[0][INSTRUMENT][0] == "http://[::1]:9465/metrics"
+    assert plugin(proj("[bridges.slack]\nport = 0\n")).collectors == []                      # no fixed port to scrape
+    got, errors = instruments('[bridges.slack]\n[[scrape]]\nname = "bridges.slack"\nurl = "http://127.0.0.1:9999/metrics"\n')
+    assert got == {INSTRUMENT: ("http://127.0.0.1:9999/metrics", "project")}                  # a hand-made entry wins
+    assert errors == ["plugin bridges: its collector bridges.slack is replaced by the project's entry of that name"]

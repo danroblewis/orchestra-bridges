@@ -43,9 +43,15 @@ and on start for everyone the map lists who was announced before, so a team chan
 shows even if they do nothing. Someone the map lists but the bridge never saw is not announced.
 Every bridge does this through one module (`announce.py`).
 
-The bridge itself is the machine `bridges.<system>`. It announces itself (continuous, with its log)
-when it starts, and it labels its series `machine="bridges.<system>"`. The plugin also declares it
-(`plugin.py`), so the Machines page lists it before it is first seen.
+The bridge itself is the machine `bridges.<system>`, by its events: it announces itself
+(continuous, with its log) when it starts, and a system's own doing (an expiry, a gap) has it as
+the source. The plugin also declares it (`plugin.py`), a placeholder so the Machines page lists it
+before it is first seen. Its series do not make it a machine, and say nothing about which flows it
+influences: they are measurements of the system (Orchestra's rule 7), and Orchestra infers any
+association between a machine and a flow from the machine's events, never from a label. The GitHub
+bridge writes its series itself and labels them `machine="bridges.github"`, which is provenance
+(who wrote them) and how it finds its own series again; the Slack bridge's are stored by an
+instrument and labelled `instrument="bridges.slack"` (§5).
 
 ## 3. No state of its own
 
@@ -102,7 +108,7 @@ is counters by bucket (`within`), because Orchestra's collectors keep no histogr
 | `search.py` | The searches, newest first until older than the window. A match's text is checked for mentions in memory and dropped |
 | `pings.py` | What a ping is (a DM, or a mention of the owner or a configured group, from someone else), ids, subjects |
 | `waits.py` | The waiting pings and the counters, as Prometheus text |
-| `serve.py` | `/metrics` for a `[[scrape]]` |
+| `serve.py` | `/metrics`, for the instrument the plugin declares |
 | `bridge.py` | Identify, resume, read, publish, record gaps, the loop |
 
 **Answered** is a checkmark reaction by the owner by default (the owner's answer, 2026-10-26). The
@@ -118,13 +124,21 @@ promise is (5m + 15m) / (5m + 15m + 60m + over). Waits run on the clock: working
 modelled (an open question for the owner).
 
 **It serves its counts; it does not write them.** Unlike the GitHub bridge, which writes to the
-store through `orchestra.metrics`, the Slack bridge serves `/metrics` for a `[[scrape]]` named
-`bridges.slack` (the proposal's §5). On start it reads that scrape's last values back through
-`orchestra.metrics` and continues each counter from the larger of the rebuilt and the stored value,
-so neither a trimmed bus nor a scrape that missed the last change takes a counter down or loses a
-count. The cost: counts are stamped at the scrape, not at Slack's times, so a gap's catch-up shows
-in the series at the moment the bridge woke. The events keep the true times. A plugin cannot
-declare a scrape today, so the owner adds it to `orchestra.toml` (README).
+store through `orchestra.metrics`, the Slack bridge serves `/metrics` (the proposal's §5), and an
+instrument stores them: the scrape the plugin declares (`Plugin.collectors`, `plugin.py`), which
+`orchestra run` runs as `bridges.slack` every 30 s at `[bridges.slack] host` and `port` (a wildcard
+host is scraped on loopback; with `port = 0` there is no fixed port, so none is declared). Every
+point it stores is labelled `instrument="bridges.slack"` and the workspace. A project's own
+`[[scrape]]` named `bridges.slack` replaces the plugin's (to scrape more often, say); under any
+other name the bridge would not find its counts again. On start the bridge reads the instrument's
+last values back through `orchestra.metrics`, by `instrument="bridges.slack"` and the workspace,
+and continues each counter from the larger of the rebuilt and the stored value, so neither a
+trimmed bus nor a scrape that missed the last change takes a counter down or loses a count. Points
+stored before Orchestra's instruments (2026-10-27) are labelled `machine="bridges.slack"` instead;
+the bridge reads those too and takes the higher value, so the upgrade, which starts each series over
+under its new label, loses no count. The cost of serving: counts are stamped at the scrape, not at
+Slack's times, so a gap's catch-up shows in the series at the moment the bridge woke. The events
+keep the true times.
 
 **Where it left off.** A scrape stores the served counts whether or not polls succeed, so the time
 of the store's latest point is not the last poll (as it is for the GitHub bridge, §3). The bridge
@@ -150,9 +164,10 @@ every zone from UTC-12 to UTC+14. The exact cut is each match's own time.
 
 `plugin.py` is the `orchestra.plugins` entry point `bridges`. For each bridge that has a section in
 `orchestra.toml` (`[bridges.github]`, `[bridges.slack]`), it declares the process `orchestra run`
-keeps running (`bridges.github`: `python -m orchestra_bridges github`, and so on) and the machine
-that process is. It has no
-pages. What a bridge shows is Orchestra's own Machines page, map and series.
+keeps running (`bridges.github`: `python -m orchestra_bridges github`, and so on) and a
+placeholder for the machine that process is; for the Slack bridge, also the instrument that scrapes
+its `/metrics` (§5). It has no pages. What a bridge shows is Orchestra's own Machines and
+Instruments pages, map and series.
 
 ## 7. Tests
 

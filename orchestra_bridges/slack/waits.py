@@ -1,7 +1,7 @@
 """The pings waiting for the owner, and how long the answered ones waited, as Prometheus text.
 
-Served at ``/metrics`` (``serve.py``) for a ``[[scrape]]``, every series labelled with the
-workspace:
+Served at ``/metrics`` (``serve.py``) for the scrape the plugin declares, every series labelled
+with the workspace (the scrape adds ``instrument="bridges.slack"``):
 
 - ``slack_pings_unanswered``: the pings waiting now (the stock);
 - ``slack_pings_oldest_unanswered_seconds``: how long the oldest has waited;

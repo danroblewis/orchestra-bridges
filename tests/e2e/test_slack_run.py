@@ -1,6 +1,7 @@
 """``orchestra run`` starts the Slack bridge the plugin declares; the bridge publishes the fake's pings
-and their answers, and the project's ``[[scrape]]`` of its ``/metrics`` puts the stock and the
-counters in the store, labelled as the bridge's own machine. Stopping ``orchestra run`` stops it.
+and their answers, and the instrument ``bridges.slack`` (here the project's own ``[[scrape]]`` of
+that name, every second, in place of the plugin's every 30 s) puts the stock and the counters in the
+store, labelled ``instrument="bridges.slack"``. Stopping ``orchestra run`` stops it.
 
 The bridge it starts imports ``orchestra_bridges`` from this checkout (``conftest.checkout_env``), not
 from wherever the environment's editable install points, so the test runs the code under test."""
@@ -38,7 +39,7 @@ port = {port}
 api = "{slack.base}"
 
 [[scrape]]
-name = "bridges.slack"
+name = "bridges.slack"            # replaces the plugin's scrape of the same port
 url = "http://127.0.0.1:{port}/metrics"
 every = "1s"
 """)
@@ -47,7 +48,7 @@ every = "1s"
         host = subprocess.Popen([str(orchestra), "run"], cwd=project.repo_root, env=env, stdout=subprocess.DEVNULL,
                                 stderr=subprocess.STDOUT, start_new_session=True)
         store = for_project(project)
-        labels = {"machine": "bridges.slack", "workspace": TEAM}
+        labels = {"instrument": "bridges.slack", "workspace": TEAM}
         try:
             end = time.time() + 40
             while time.time() < end:
@@ -64,6 +65,7 @@ every = "1s"
         finally:
             host.send_signal(signal.SIGTERM)
             host.wait(timeout=30)
+    assert (project.logs_dir / "instruments" / "bridges.slack.log").exists()
     log = (project.logs_dir / "machines" / "bridges.slack.log").read_text()
     assert "bridges.slack: stopped" in log and TOKEN not in log and CANARY not in log
     everything = json.dumps(Events.for_project(project).after(0)[0])

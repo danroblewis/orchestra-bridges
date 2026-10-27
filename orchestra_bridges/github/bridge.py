@@ -26,8 +26,11 @@ An event is published as soon as it is read, but counted only once it is older t
 each poll re-reads that much, so an event GitHub shows late (a comment stamped before a close
 that was already read) is still counted in time order, as a restart's rebuild counts it.
 
-The bridge itself is the machine ``bridges.github``; it announces itself when it starts and its
-measurements carry ``machine="bridges.github"``."""
+The bridge itself is the machine ``bridges.github``, by its events: it announces itself when it
+starts and publishes ``bridge.gap`` under that source. It writes its measurements itself
+(``measures.py``), labelled ``machine="bridges.github"``: provenance, and how it finds its own
+series again on restart. The label says nothing about which flows the bridge influences
+(Orchestra's rules 6 and 7)."""
 
 from __future__ import annotations
 

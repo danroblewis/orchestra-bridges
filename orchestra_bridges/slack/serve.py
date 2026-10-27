@@ -1,4 +1,5 @@
-"""``/metrics``: the bridge's counts in the Prometheus text format, for Orchestra's ``[[scrape]]``.
+"""``/metrics``: the bridge's counts in the Prometheus text format, for the instrument that stores
+them (the scrape ``bridges.slack`` the plugin declares, ``plugin.py``).
 
 It listens on ``127.0.0.1`` by default, answers ``GET /metrics`` with what ``render`` returns (or
 503 while that is None: the bridge has not read its past back yet) and anything else with 404. It

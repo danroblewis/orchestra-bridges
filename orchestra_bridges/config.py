@@ -25,7 +25,7 @@
     dms = true                        # whether a direct message is a ping
     expire = "168h"                   # a ping unanswered this long stops waiting
     host = "127.0.0.1"                # where /metrics listens: local only unless you change it
-    port = 9465                       # where /metrics is served, for a [[scrape]]
+    port = 9465                       # where /metrics is served; the plugin scrapes it (0: any port, no scrape)
     token_file = "~/.config/orchestra-bridges/slack-token"   # never the token itself
     queries = ["<@{me}>", "to:<@{me}>"]   # replaces the default searches (slack/search.py); {me} is your member id
     api = "https://slack.com/api"     # https on slack.com, or a local fake (loopback) in tests
