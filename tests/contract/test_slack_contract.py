@@ -1,6 +1,6 @@
 """The fake Slack against the real Web API, and the canary against the real API (opt in:
 ``ORCHESTRA_BRIDGES_SLACK_CONTRACT=1``, with ``SLACK_USER_TOKEN`` or the token file set up as the
-README says). Read-only: ``auth.test``, a few ``search.messages`` and ``reactions.get`` calls.
+README says). Read-only: ``auth.test``, a few ``search.messages`` and ``reactions.list`` calls.
 
 Only shapes are compared, never content: every key the fake serves must be one the real API serves
 (the fake invents nothing), and the fields the bridge reads must have the same types. Slack adds
@@ -8,13 +8,17 @@ keys from time to time; a real key the fake lacks is printed, not failed.
 
 **The canary.** Before running, have someone else (a second account in a personal workspace is
 enough) send the token's owner a direct message and a mention whose text includes the value of
-``SLACK_CANARY``, e.g. ``SLACK_CANARY=CANARY-$(uuidgen)``. The test runs the bridge once against the
-real API into a scratch project, checks that those pings were published, and that the canary is in
-no event, file, log line or metric."""
+``SLACK_CANARY``, e.g. ``SLACK_CANARY=CANARY-$(uuidgen)``, within the last 48 hours. With
+``SLACK_CANARY`` set, the default searches, spelled as the bridge spells them (with its ``after:``),
+must each find a ping of their kind; ``SLACK_GROUP`` (a user group id the owner is in, mentioned in
+such a message) adds the group search. The test then runs the bridge once against the real API into
+a scratch project, checks that a DM and a mention were published, and that the canary is in no
+event, file, log line or metric."""
 
 import json
 import os
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -29,7 +33,12 @@ pytestmark = pytest.mark.skipif(os.environ.get("ORCHESTRA_BRIDGES_SLACK_CONTRACT
 READ = {"match": {"ts": str, "channel": dict, "permalink": str, "text": str},
         "channel": {"id": str, "is_im": bool, "is_mpim": bool, "is_private": bool},
         "paging": {"pages": int, "page": int},
-        "auth": {"user_id": str, "team_id": str, "user": str}}
+        "auth": {"user_id": str, "team_id": str, "user": str},
+        "reactions.list": {"items": list, "response_metadata": dict},
+        "item": {"type": str, "channel": str, "message": dict},
+        "reacted message": {"ts": str, "reactions": list},
+        "reaction": {"name": str, "users": list, "count": int}}
+canary = pytest.mark.skipif(not os.environ.get("SLACK_CANARY"), reason="set SLACK_CANARY to a string a ping to you contains")
 
 
 def api() -> Slack:
@@ -82,28 +91,39 @@ def test_search_shapes(world, me):
         search.message(m, {me["user_id"]})
 
 
-def test_each_default_search_finds_what_it_should(me):
-    """Prints how many of each search's matches the bridge would take as pings: a search that finds
-    none of its kind is a spelling Slack does not read (adjust ``queries``)."""
+@canary
+@pytest.mark.parametrize("which", ["mention", "dm", "group"])
+def test_each_default_search_finds_a_ping_of_its_kind(me, which):
+    """Each search as the bridge sends it (with ``after:``, from ``search.since``) finds a recent ping
+    that ``kind`` takes for its own: a search that finds none is a spelling Slack does not read
+    (adjust ``queries``)."""
     from orchestra_bridges.slack.pings import kind
-    a = api()
-    for q in (search.mention_query(me["user_id"]), search.dm_query(me["user_id"]), search.own_query(me["user_id"])):
-        got = [search.message(m, {me["user_id"]}) for m in a.search(q, 1, 50).get("matches") or []]
-        kinds = [kind(m, me["user_id"], [], True) for m in got if m]
-        print(f"{q!r}: {len(got)} matches; as pings: {', '.join(sorted({str(k) for k in kinds}))}")
+    group = os.environ.get("SLACK_GROUP")
+    if which == "group" and not group:
+        pytest.skip("set SLACK_GROUP to a user group id mentioned in a recent message")
+    who = me["user_id"]
+    q = {"mention": search.mention_query(who), "dm": search.dm_query(who), "group": search.group_query(group or "")}[which]
+    got = search.since(api(), q, time.time() - 48 * 3600, {who, *([group] if group else [])})
+    kinds = {kind(m, who, [group] if group else [], True) for m in got}
+    assert which in kinds, f"{q!r} with after: found {len(got)} messages, none a {which}"
 
 
-def test_reactions_shape(world, me):
-    a = api()
-    [m] = a.search(f"from:<@{me['user_id']}>", 1, 1).get("matches") or [None]
-    if m is None:
-        pytest.skip("the owner has no messages to read reactions on")
-    body = a.call("reactions.get", {"channel": m["channel"]["id"], "timestamp": m["ts"], "full": "true"})
-    fake = world.reactions_get({"channel": CHANNEL, "timestamp": world.messages[0]["ts"]})
-    compare("reactions.get", [fake], [body])
+def test_reactions_list_shape(world, me):
+    body = api().call("reactions.list", {"full": "true", "limit": 20})
+    real = [i for i in body.get("items") or [] if i.get("type") == "message"]
+    if not real:
+        pytest.skip("the owner has reacted to no message")
+    fake = world.reactions_list({})
+    compare("reactions.list", [fake], [body])
+    compare("response_metadata", [fake["response_metadata"]], [body["response_metadata"]])
+    compare("item", fake["items"], real)
+    compare("reacted message", [i["message"] for i in fake["items"]], [i["message"] for i in real])
+    compare("reaction", [r for i in fake["items"] for r in i["message"]["reactions"]],
+            [r for i in real for r in i["message"].get("reactions") or []])
+    assert all(isinstance(u, str) for i in real for r in i["message"].get("reactions") or [] for u in r["users"])
 
 
-@pytest.mark.skipif(not os.environ.get("SLACK_CANARY"), reason="set SLACK_CANARY to a string a ping to you contains")
+@canary
 def test_the_canary_never_leaves_the_bridge(tmp_path, monkeypatch, capsys):
     from conftest import new_project
     from orchestra.events import Events
@@ -117,7 +137,8 @@ def test_the_canary_never_leaves_the_bridge(tmp_path, monkeypatch, capsys):
     b = Bridge(conf, api(), Events.for_project(project, source=MACHINE), ProjectStore(for_project(project), project.key))
     b.run(threading.Event(), once=True)
     evs = Events.for_project(project).after(0)[0]
-    assert [e for e in evs if e["type"] == "slack.ping.received"], "no pings found: send yourself one with the canary"
+    kinds = {e["data"]["kind"] for e in evs if e["type"] == "slack.ping.received"}
+    assert {"dm", "mention"} <= kinds, f"found pings of kinds {sorted(kinds)}: have someone send you a DM and a mention"
     out = capsys.readouterr()
     for where in (json.dumps(evs), b.render() or "", out.out + out.err):
         assert canary not in where

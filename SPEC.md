@@ -14,9 +14,12 @@ This repository holds the bridges. Orchestra holds no bridge (its rule 1).
   these in Orchestra's counts by type. Events published before the prefix (`issue.opened`) are
   still read back on a restart (`translate.current`).
 - **Source**: who acted, as a machine (`identity.py`). Someone listed in the owner's identity map
-  is `person.<key>`, or `bot.<key>` for a bot, whichever system they acted in. Anyone else is
-  `person.<login>` or `bot.<login>`, by their account on that system. The source is not
-  pseudonymous: the owner chose people by name, each with a team.
+  is `person.<key>`, or `bot.<key>` for a bot, whichever system they acted in: only the map joins
+  accounts across systems. Anyone else is known by their account on that system: `person.<login>`
+  or `bot.<login>` on GitHub (as first published), `person.slack.<handle>` or `bot.slack.<handle>`
+  on Slack, so two strangers who share a login on two systems are two machines. Later bridges name
+  their system the same way. The source is not pseudonymous: the owner chose people by name, each
+  with a team.
 - **Subject**: the item, e.g. `microsoft/vscode#1234`. Orchestra infers hand-offs from subjects.
 - **Time and id**: the system's own. The id is built from the system's id for the occurrence
   (`github:<repo>:comment:<id>`), so it is the same however many times it is read.
@@ -38,6 +41,7 @@ passes to the package's card without reading. A person is announced again whenev
 bridge would announce differs from their last announcement on the bus: before their next event,
 and on start for everyone the map lists who was announced before, so a team changed in the map
 shows even if they do nothing. Someone the map lists but the bridge never saw is not announced.
+Every bridge does this through one module (`announce.py`).
 
 The bridge itself is the machine `bridges.<system>`. It announces itself (continuous, with its log)
 when it starts, and it labels its series `machine="bridges.<system>"`. The plugin also declares it
@@ -45,20 +49,21 @@ when it starts, and it labels its series `machine="bridges.<system>"`. The plugi
 
 ## 3. No state of its own
 
-A bridge keeps nothing outside the bus and the metrics store (the proposal's rule 5). On start, it
+A bridge keeps nothing outside the bus and the metrics store (the proposal's rule 5). What follows
+is the GitHub bridge's way; the Slack bridge's differences are in §5. On start, the GitHub bridge
 reads its own events back from the bus (ids starting `github:`), and from them it learns:
 
 - which events are already published, so they are skipped from then on;
 - its counts, rebuilt by replaying those events in time order, each counter then continuing from
   the value last written to the store (a trimmed bus, or a different order, never makes a counter
   go down, which discovery would read as a reset);
-- where to read from next: the later of its last event and its last measurement (the store's
-  latest point is the last poll), less `overlap`. With nothing on the bus, it reads from `lookback`
-  ago.
+- where to read from next: the later of its last event and its last measurement (for the GitHub
+  bridge, which writes its points itself, the store's latest point is the last poll), less
+  `overlap`. With nothing on the bus, it reads from `lookback` ago.
 
-An event is published as soon as it is read but counted only once it is older than `overlap`, so
-an event GitHub shows late (a comment stamped before a close already read) is counted in time
-order, as a restart's replay counts it.
+The GitHub bridge publishes an event as soon as it is read but counts it only once it is older than
+`overlap`, so an event GitHub shows late (a comment stamped before a close already read) is
+counted in time order, as a restart's replay counts it. (The Slack bridge counts at once: §5.)
 
 **Gaps** (Orchestra runs on a laptop that sleeps). A poll that succeeds more than three rounds
 after the last good one publishes `bridge.gap` {repository, from, to, recovered} from the bridge's
@@ -93,7 +98,7 @@ is counters by bucket (`within`), because Orchestra's collectors keep no histogr
 | Module | What it does |
 |---|---|
 | `token.py` | The user token: `SLACK_USER_TOKEN`, or a file outside the repository readable by its owner only |
-| `api.py` | Read-only Web API client (`auth.test`, `search.messages`, `reactions.get`). Honours `Retry-After`, sends the token only to the configured host |
+| `api.py` | Read-only Web API client (`auth.test`, `search.messages`, `reactions.list`). Honours a `Retry-After` up to one poll long, on the stop event; sends the token only to the configured host, which `config.py` allows to be slack.com or a loopback fake only |
 | `search.py` | The searches, newest first until older than the window. A match's text is checked for mentions in memory and dropped |
 | `pings.py` | What a ping is (a DM, or a mention of the owner or a configured group, from someone else), ids, subjects |
 | `waits.py` | The waiting pings and the counters, as Prometheus text |
@@ -101,9 +106,16 @@ is counters by bucket (`within`), because Orchestra's collectors keep no histogr
 | `bridge.py` | Identify, resume, read, publish, record gaps, the loop |
 
 **Answered** is a checkmark reaction by the owner by default (the owner's answer, 2026-10-26). The
-owner's first message after the ping in its thread (the reply rule) is the alternative. Slack keeps
-no time for a reaction, so a checkmark answer is stamped when first seen, with `not_before` in its
-data.
+owner's first message after the ping in its thread (the reply rule) is the alternative; both can be
+on. A checkmark answers what a reply in the same place would: the ping and the earlier ones still
+waiting in its thread, or, for a ping not in a thread, the earlier ones in its channel not in a
+thread either. When both rules see an answer in the same poll, the reply wins (it has a time).
+Slack keeps no time for a reaction, so a checkmark answer is stamped when first seen, with
+`not_before` (the last moment the ping could have been seen unanswered) in its data. When that is
+more than two polls back (a gap, a first start) its wait is not known: the answer is counted
+`within="unknown"` and left out of the summed waits. The `within` buckets are exclusive, and the
+promise is (5m + 15m) / (5m + 15m + 60m + over). Waits run on the clock: working hours are not
+modelled (an open question for the owner).
 
 **It serves its counts; it does not write them.** Unlike the GitHub bridge, which writes to the
 store through `orchestra.metrics`, the Slack bridge serves `/metrics` for a `[[scrape]]` named
@@ -119,14 +131,16 @@ of the store's latest point is not the last poll (as it is for the GitHub bridge
 serves `slack_bridge_last_poll_timestamp_seconds`, the start of its last successful poll, and on
 start reads that value back: it is the last good poll for the gap test, and the later of it and
 the last event, less `overlap`, is where reading resumes. A restart after an outage therefore reads
-the outage back and records one `bridge.gap`.
+the outage back and records one `bridge.gap`. While it runs, the gap test measures from the end of
+the last good poll, so a poll slowed by a `Retry-After` is not taken for a gap. It counts each event
+as it publishes it (no `overlap` delay): the counts are served, not stamped at Slack's times.
 
-**Reactions never block the searches.** Only `auth.test` and the searches fail a poll. A
-`reactions.get` that fails for its own message (`message_not_found`; `channel_not_found`,
-`not_in_channel`, `bad_timestamp`) ends that ping as expired (`deleted`, `unreadable`). Any other
-failure (a rate limit past its retries, the network, a scope the token lacks) ends that poll's
-reaction reads: the pings not read stay waiting for the next poll, and everything else the poll
-read is published.
+**Reactions never block the searches.** Only `auth.test` and the searches fail a poll. The owner's
+checkmarks come from `reactions.list` (the owner's reactions, most recent first, up to five pages
+of 100 a poll), not one `reactions.get` per waiting ping, so the cost does not grow with the pings
+waiting. If that read fails (a rate limit, the network, a scope the token lacks), the pings stay
+waiting for the next poll, and everything else the poll read is published. A deleted ping is not
+noticed: it expires like any other.
 
 **`after:`** narrows each search by day in the searcher's own time zone, which the bridge does not
 know, so it names the UTC date two days before the window: earlier than the window's start in
@@ -151,10 +165,12 @@ pages. What a bridge shows is Orchestra's own Machines page, map and series.
 - `tests/e2e`: a real `orchestra run` in a scratch project starts the bridge from the plugin's
   declaration, the bridge publishes the fake's issues as their people, and stopping the host stops
   the bridge.
-- `tests/fake_slack.py`: a fake of `auth.test`, `search.messages` and `reactions.get` with a
+- `tests/fake_slack.py`: a fake of `auth.test`, `search.messages` and `reactions.list` with a
   scripted world on a clock (pings, replies and reactions appear when the clock reaches them),
-  injected 429s with `Retry-After`, and an asleep mode that drops every connection. Every message
-  carries the canary.
+  injected 429s with `Retry-After`, a body that is not JSON, and an asleep mode that drops every
+  connection. Every message carries the canary.
+- The e2e tests put this checkout first on `PYTHONPATH` for `orchestra run`, so the bridges it
+  starts run the code under test.
 - `tests/contract` (opt in, `ORCHESTRA_BRIDGES_CONTRACT=1`, and `ORCHESTRA_BRIDGES_SLACK_CONTRACT=1`
   for Slack, whose canary test also needs `SLACK_CANARY`): the real API for the fake. The fake
   must serve no key the real one lacks, the fields the bridge reads must match in type, and the

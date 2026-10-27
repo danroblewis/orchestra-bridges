@@ -117,9 +117,19 @@ def test_slack_settings():
         ["reply"], ["ok"], ["S1"], Path("~/t").expanduser(), ["<@{me}> in:#ops"])
 
 
+@pytest.mark.parametrize("api", ["https://slack.com/api", "https://acme.enterprise.slack.com/api/",
+                                 "http://127.0.0.1:8123/api", "http://localhost:9/api", "http://[::1]:9/api"])
+def test_the_token_goes_only_to_slack_or_a_local_fake(api):
+    assert cfg.slack(proj(f'[bridges.slack]\napi = "{api}"\n').config.raw, Path("/repo")).api == api.rstrip("/")
+
+
 @pytest.mark.parametrize("toml", ['[bridges.slack]\ntoken = "xyz"\n', '[bridges.slack]\nanswered = ["emoji"]\n',
                                   '[bridges.slack]\ngroups = ["sre"]\n', '[bridges.slack]\nevery = "1s"\n',
-                                  '[bridges.slack]\nport = "x"\n', ""])
+                                  '[bridges.slack]\nport = "x"\n', '[bridges.slack]\nanswered = []\n',
+                                  '[bridges.slack]\napi = "http://slack.com/api"\n',
+                                  '[bridges.slack]\napi = "https://slack.com.evil.example/api"\n',
+                                  '[bridges.slack]\napi = "https://evil.example/api"\n',
+                                  '[bridges.slack]\napi = "http://10.0.0.5:8080/api"\n', ""])
 def test_bad_slack_settings_are_refused(toml):
     with pytest.raises(ConfigError):
         cfg.slack(proj(toml).config.raw, Path("/repo"))

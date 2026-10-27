@@ -6,16 +6,20 @@ workspace:
 - ``slack_pings_unanswered``: the pings waiting now (the stock);
 - ``slack_pings_oldest_unanswered_seconds``: how long the oldest has waited;
 - ``slack_pings_received_total``: pings received while watched (the inflow);
-- ``slack_pings_answered_total{within="5m|15m|60m|over"}``: answered, by how long it took, since a
-  scrape keeps no histogram buckets;
+- ``slack_pings_answered_total{within="5m|15m|60m|over|unknown"}``: answered, by how long it took,
+  since a scrape keeps no histogram buckets. The buckets are exclusive (``15m`` is over 5 and up to
+  15 minutes). ``unknown`` is a checkmark the bridge first saw more than two polls after the ping
+  could last have been seen unanswered (after a gap, or on a first start): its wait is somewhere in
+  that span, so it goes in no timed bucket. The promise is (5m + 15m) / (5m + 15m + 60m + over);
 - ``slack_pings_expired_total``: stopped waiting unanswered (``pings.py``);
-- ``slack_ping_wait_seconds_total``: the answered waits added up (the mean is its rate over the
-  answered rate);
+- ``slack_ping_wait_seconds_total``: the waits of the answers in a timed bucket added up (the mean
+  is its rate over the rate of those answers; ``unknown`` ones are left out of both);
 - ``slack_bridge_last_poll_timestamp_seconds``: when the last successful poll began (Unix seconds),
   absent before the first. A scrape stores it even while polls fail, so on restart its value, not
   the time of the scrape, says where the bridge left off.
 
-So ``unanswered`` changes by received − answered − expired, exactly. The state is rebuilt from the
+So ``unanswered`` changes by received − answered (every bucket) − expired, exactly, while the bus
+keeps the bridge's events. The state is rebuilt from the
 bridge's own events when it starts, and every counter then continues from the larger of what was
 rebuilt and what the store last holds for it (``continue_from``): a trimmed bus never takes a
 counter down, and a count the store had not scraped yet is not lost."""
@@ -26,9 +30,11 @@ from collections import Counter
 from dataclasses import dataclass, field
 
 from .pings import ANSWERED, EXPIRED, RECEIVED
+from .pings import subject as subject_of
 
 WITHIN = ((300, "5m"), (900, "15m"), (3600, "60m"))
-BUCKETS = [*(n for _, n in WITHIN), "over"]
+UNKNOWN = "unknown"
+BUCKETS = [*(n for _, n in WITHIN), "over", UNKNOWN]
 LEVEL = "slack_pings_unanswered"
 OLDEST = "slack_pings_oldest_unanswered_seconds"
 LAST_POLL = "slack_bridge_last_poll_timestamp_seconds"
@@ -51,9 +57,9 @@ class Waits:
     wait_seconds: float = 0.0
     offset: dict[str, float] = field(default_factory=dict)
 
-    def fold(self, type_: str, channel: str, ts: str, subject: str, t: float) -> float | None:
-        """Take one event (time order). For an answer, the wait; else 0 when a count changed, None
-        when nothing did."""
+    def fold(self, type_: str, channel: str, ts: str, subject: str, t: float, *, known: bool = True) -> float | None:
+        """Take one event (time order). For an answer, the wait (counted in ``unknown`` and not added
+        up when not ``known``); else 0 when a count changed, None when nothing did."""
         key = (channel, ts)
         if type_ == RECEIVED:
             if key in self.waiting:
@@ -68,6 +74,9 @@ class Waits:
             self.expired += 1
             return 0.0
         wait = max(t - since, 0.0)
+        if not known:
+            self.answered[UNKNOWN] += 1
+            return wait
         self.answered[within(wait)] += 1
         self.wait_seconds += wait
         return wait
@@ -75,6 +84,12 @@ class Waits:
     def in_thread(self, subject: str, before: float) -> list[tuple[str, str]]:
         """The pings waiting in thread ``subject`` that came before ``before``, oldest first."""
         return sorted((k for k, (s, t) in self.waiting.items() if s == subject and t < before), key=lambda k: float(k[1]))
+
+    def unthreaded(self, team: str, channel: str, before: float) -> list[tuple[str, str]]:
+        """The pings waiting in ``channel`` that were not in a thread and came before ``before``,
+        oldest first: what the owner's unthreaded message there answers."""
+        return sorted((k for k, (s, t) in self.waiting.items()
+                       if k[0] == channel and s == subject_of(team, channel, k[1]) and t < before), key=lambda k: float(k[1]))
 
     def oldest(self, now: float) -> float:
         return max((now - t for _, t in self.waiting.values()), default=0.0)

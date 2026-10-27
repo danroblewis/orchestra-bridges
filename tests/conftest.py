@@ -2,8 +2,10 @@
 configured (GitHub's, or Slack's), the fake of its API, a clock the test moves, and a bridge wired to
 all three."""
 
+import os
 import subprocess
 import threading
+from pathlib import Path
 
 import fake_slack
 import pytest
@@ -18,6 +20,7 @@ from orchestra_bridges.github.bridge import MACHINE, Bridge
 from orchestra_bridges.slack import bridge as slack_bridge
 from orchestra_bridges.slack.api import Slack
 
+ROOT = Path(__file__).resolve().parents[1]                 # the repository these tests run from
 T0 = 1_793_000_000.0         # 2026-10-26, a fixed "now" the fake's world is built around
 
 TOML = """[bridges]
@@ -45,6 +48,14 @@ port = 0
 api = "{api}"
 {extra}
 """
+
+
+def checkout_env(**extra: str) -> dict[str, str]:
+    """The environment for an ``orchestra run`` under test: this checkout first on ``PYTHONPATH``, so
+    the bridges it starts run the code under test, not whatever the environment's editable install
+    points at (another checkout, or none for an export of a commit)."""
+    path = os.pathsep.join(p for p in (str(ROOT), os.environ.get("PYTHONPATH")) if p)
+    return {**os.environ, **extra, "PYTHONPATH": path}
 
 
 class Clock:
@@ -101,14 +112,21 @@ def slack_project(tmp_path, monkeypatch, slack, slack_toml):
 
 
 @pytest.fixture
-def make_slack(slack_project, slack, clock):
+def slept():
+    """Each Retry-After a Slack bridge waited out, in order (``make_slack`` records, never sleeps)."""
+    return []
+
+
+@pytest.fixture
+def make_slack(slack_project, slack, clock, slept):
     """A new Slack bridge over the project's bus and store, not yet started (call it again for a
-    restart). Its Retry-After waits are recorded, not slept."""
+    restart), with its client set up as ``__main__`` sets it (no wait longer than a poll). Its
+    Retry-After waits are recorded in ``slept``, not slept."""
     def make():
         conf = cfg.slack(slack_project.config.raw, slack_project.repo_root)
         events = Events.for_project(slack_project, source=slack_bridge.MACHINE)
         store = ProjectStore(for_project(slack_project), slack_project.key)
-        api = Slack(fake_slack.TOKEN, slack.base, sleep=lambda s: None)
+        api = Slack(fake_slack.TOKEN, slack.base, sleep=slept.append, max_wait=conf.every)
         return slack_bridge.Bridge(conf, api, events, store, clock=clock)
     return make
 

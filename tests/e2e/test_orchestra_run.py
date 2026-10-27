@@ -1,14 +1,13 @@
 """``orchestra run`` starts the bridge the plugin declares, the bridge publishes what the fake GitHub
 holds as the people who did it, and stopping ``orchestra run`` stops it."""
 
-import os
 import signal
 import subprocess
 import sys
 import time
 from pathlib import Path
 
-from conftest import published
+from conftest import checkout_env, published
 from fake_github import TOKEN
 
 
@@ -21,7 +20,7 @@ def test_orchestra_run_keeps_the_bridge_running(project, github, tmp_path):
     github.open(1, "alice", now - 600)
     github.comment(1, "bob", now - 300)
     orchestra = Path(sys.executable).with_name("orchestra")
-    env = {**os.environ, "GH_ENTERPRISE_TOKEN": TOKEN}        # the fake is not github.com: gh's variable for other hosts
+    env = checkout_env(GH_ENTERPRISE_TOKEN=TOKEN)             # the fake is not github.com: gh's variable for other hosts
     host = subprocess.Popen([str(orchestra), "run"], cwd=project.repo_root, env=env, stdout=subprocess.DEVNULL,
                             stderr=subprocess.STDOUT, start_new_session=True)
     try:

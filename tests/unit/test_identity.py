@@ -33,3 +33,14 @@ def test_a_deleted_account_is_ghost_and_odd_characters_are_made_safe():
 def test_no_map_file_lists_nobody(tmp_path):
     assert People.load(tmp_path / "missing.toml").actor("github", "x").source == "person.x"
     assert People.load(None).actor("github", "x").source == "person.x"
+
+
+def test_a_namespaced_system_keeps_unlisted_strangers_apart_and_the_map_joins_them(tmp_path):
+    f = tmp_path / "people.toml"
+    f.write_text('[people.alex]\nname = "Alex"\ngithub = "alex"\nslack = "alex"\n')
+    nobody = People()
+    assert nobody.actor("github", "alex").source == "person.alex"                     # GitHub's as first published
+    assert nobody.actor("slack", "alex", namespaced=True).source == "person.slack.alex"   # a different machine
+    assert nobody.actor("slack", "bot", True, namespaced=True).source == "bot.slack.bot"
+    listed = People.load(f)
+    assert listed.actor("github", "alex").source == listed.actor("slack", "alex", namespaced=True).source == "person.alex"

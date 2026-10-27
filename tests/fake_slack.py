@@ -1,11 +1,13 @@
 """A fake of Slack's Web API, speaking the real shapes, for the three methods the bridge calls.
 
 It serves ``auth.test``, ``search.messages`` (paged by ``page`` and ``count``, newest first with
-``sort=timestamp``) and ``reactions.get``, under ``/api/``. It demands the bearer token (a wrong one
-is ``ok: false, invalid_auth``, as Slack answers), and it can be told to answer the next requests
-with a rate limit (429 and ``Retry-After``) or to be **asleep** (every connection dropped, as for a
-laptop whose network is gone). ``reaction_errors`` makes ``reactions.get`` answer ``ok: false`` with
-an error, for one message (keyed by channel and ts) or for every one (keyed by None).
+``sort=timestamp``) and ``reactions.list`` (the token owner's reactions, the message reacted to
+most recently first, paged by ``cursor`` and ``limit``), under ``/api/``. It demands the bearer
+token (a wrong one is ``ok: false, invalid_auth``, as Slack answers), and it can be told to answer
+the next requests with a rate limit (429 and ``Retry-After``), with a 200 whose body is not JSON
+(``garbage_next``, as a captive portal answers), or to be **asleep** (every connection dropped, as
+for a laptop whose network is gone). ``reactions_error`` makes ``reactions.list`` answer ``ok:
+false`` with that error (``missing_scope``, say).
 
 The world is scripted ahead of time against a clock: a message, a reply or a reaction exists only
 once the clock has reached its time, so a test lays out a morning and moves the clock through it.
@@ -60,7 +62,8 @@ class FakeSlack:
         self.fail_next: list[tuple[int, dict]] = []             # (status, headers) for the next requests
         self.asleep = False
         self.tz = ZoneInfo("UTC")                                # the searcher's, for after:
-        self.reaction_errors: dict[tuple[str, str] | None, str] = {}
+        self.reactions_error: str | None = None
+        self.garbage_next = 0                                    # how many next answers are an HTML page
         self._seq = itertools.count(1)
         self._server: ThreadingHTTPServer | None = None
         self.base = ""
@@ -142,23 +145,35 @@ class FakeSlack:
             "paging": {"count": per, "total": len(found), "page": page, "pages": pages},
             "matches": [self.match(m) for m in chunk]}}
 
-    def reactions_get(self, q: dict) -> dict:
-        key = (q.get("channel"), q.get("timestamp"))
-        if error := self.reaction_errors.get(key) or self.reaction_errors.get(None):
-            return {"ok": False, "error": error}
-        [m] = [m for m in self._visible() if (m["channel"], m["ts"]) == key] or [None]
-        if m is None:
-            return {"ok": False, "error": "message_not_found"}
-        now = self.clock()
-        by: dict[str, list[str]] = {}
-        for name, uid, at in self.reacts.get(key, []):
-            if at <= now:
-                by.setdefault(name, []).append(uid)
+    def message_of(self, m: dict, reactions: dict[str, list[str]]) -> dict:
         msg = {"type": "message", "text": m["text"], "user": m["user"], "ts": m["ts"], "team": TEAM,
                "permalink": self.match(m)["permalink"]}
-        if by:
-            msg["reactions"] = [{"name": n, "users": us, "count": len(us)} for n, us in by.items()]
-        return {"ok": True, "type": "message", "channel": key[0], "message": msg}
+        if reactions:
+            msg["reactions"] = [{"name": n, "users": us, "count": len(us)} for n, us in reactions.items()]
+        return msg
+
+    def reactions_list(self, q: dict) -> dict:
+        """The owner's reactions so far: one item per message, the one reacted to last first."""
+        if self.reactions_error:
+            return {"ok": False, "error": self.reactions_error}
+        now, user = self.clock(), q.get("user") or OWNER
+        items = []
+        for m in self._visible():
+            key = (m["channel"], m["ts"])
+            by: dict[str, list[str]] = {}
+            mine = []
+            for name, uid, at in self.reacts.get(key, []):
+                if at <= now:
+                    by.setdefault(name, []).append(uid)
+                    if uid == user:
+                        mine.append(at)
+            if mine:
+                items.append((max(mine), {"type": "message", "channel": m["channel"], "message": self.message_of(m, by)}))
+        items = [i for _, i in sorted(items, key=lambda x: x[0], reverse=True)]
+        start, limit = int(q.get("cursor") or 0), int(q.get("limit") or 100)
+        chunk = items[start:start + limit]
+        more = start + limit < len(items)
+        return {"ok": True, "items": chunk, "response_metadata": {"next_cursor": str(start + limit) if more else ""}}
 
     def start(self) -> Self:
         fake = self
@@ -187,6 +202,15 @@ class FakeSlack:
                     self.close_connection = True
                     self.connection.close()
                     return None
+                if fake.garbage_next:
+                    fake.garbage_next -= 1
+                    raw = b"<html><body>Sign in to the Wi-Fi</body></html>"
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/html")
+                    self.send_header("Content-Length", str(len(raw)))
+                    self.end_headers()
+                    self.wfile.write(raw)
+                    return None
                 if fake.fail_next:
                     status, headers = fake.fail_next.pop(0)
                     return self._send(status, {"ok": False, "error": "ratelimited" if status == 429 else "fatal_error"},
@@ -198,8 +222,8 @@ class FakeSlack:
                                             "team_id": TEAM, "user_id": OWNER, "is_enterprise_install": False})
                 if method == "search.messages":
                     return self._send(200, fake.search(q))
-                if method == "reactions.get":
-                    return self._send(200, fake.reactions_get(q))
+                if method == "reactions.list":
+                    return self._send(200, fake.reactions_list(q))
                 return self._send(404, {"ok": False, "error": "unknown_method"})
 
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)

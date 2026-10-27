@@ -19,21 +19,27 @@
     lookback = "1h"                   # on the very first start, how far back to read
     max_catchup = "48h"               # after a gap, how far back it will catch up at most
     overlap = "10m"                   # each poll re-reads this much before the last one
-    answered = ["reaction"]           # what answers a ping: "reaction" (a checkmark), "reply", or both
+    answered = ["reaction"]           # what answers a ping: "reaction" (a checkmark), "reply", or both; never none
     reactions = ["white_check_mark", "heavy_check_mark"]   # the reactions that answer
     groups = []                       # user group ids (S...) whose mentions are pings too
     dms = true                        # whether a direct message is a ping
     expire = "168h"                   # a ping unanswered this long stops waiting
-    port = 9465                       # where /metrics is served, on 127.0.0.1, for a [[scrape]]
+    host = "127.0.0.1"                # where /metrics listens: local only unless you change it
+    port = 9465                       # where /metrics is served, for a [[scrape]]
     token_file = "~/.config/orchestra-bridges/slack-token"   # never the token itself
-    api = "https://slack.com/api"     # a fake in tests
+    queries = ["<@{me}>", "to:<@{me}>"]   # replaces the default searches (slack/search.py); {me} is your member id
+    api = "https://slack.com/api"     # https on slack.com, or a local fake (loopback) in tests
+
+``[bridges] people`` (the identity map) applies to every bridge.
 
 A bridge runs only where its section exists (``plugin.py``). The Slack token is never in
 orchestra.toml: a ``token`` key there is refused (``slack/token.py``)."""
 
 from __future__ import annotations
 
+import ipaddress
 import re
+import urllib.parse
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -123,6 +129,28 @@ def _strings(s: dict, key: str, default: list[str]) -> list[str]:
     return list(v)
 
 
+def _loopback(host: str) -> bool:
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def slack_api(url: str) -> str:
+    """``api`` when the owner's user token may go there: https on slack.com (or a host under it), or
+    a fake on this machine (http or https on a loopback host). Anything else is refused: the token
+    reads every one of the owner's messages, and orchestra.toml is committed."""
+    u = urllib.parse.urlsplit(url)
+    host = (u.hostname or "").lower()
+    if (u.scheme == "https" and (host == "slack.com" or host.endswith(".slack.com"))) or (
+            u.scheme in ("http", "https") and _loopback(host)):
+        return url.rstrip("/")
+    raise ConfigError(f"[bridges.slack] api must be https on slack.com, or a loopback host for a local fake, not {url!r}: "
+                      "the token goes nowhere else")
+
+
 def slack(raw: dict[str, Any], repo_root: Path) -> SlackConfig:
     s = section(raw, "slack")
     if s is None:
@@ -131,6 +159,8 @@ def slack(raw: dict[str, Any], repo_root: Path) -> SlackConfig:
         raise ConfigError("[bridges.slack] token: the token never goes in orchestra.toml; set SLACK_USER_TOKEN "
                           "or put it in a file outside the repository (token_file)")
     answered = _strings(s, "answered", ["reaction"])
+    if not answered:
+        raise ConfigError(f"[bridges.slack] answered must name at least one of {RULES}: with none, nothing answers a ping")
     if bad := [a for a in answered if a not in RULES]:
         raise ConfigError(f"[bridges.slack] answered must be among {RULES}, not {bad!r}")
     groups = _strings(s, "groups", [])
@@ -153,7 +183,7 @@ def slack(raw: dict[str, Any], repo_root: Path) -> SlackConfig:
         host=str(s.get("host") or "127.0.0.1"),
         port=port,
         token_file=Path(tf).expanduser() if isinstance(tf, str) and tf else None,
-        api=str(s.get("api") or "https://slack.com/api").rstrip("/"),
+        api=slack_api(str(s.get("api") or "https://slack.com/api")),
         people=people_file(raw, repo_root),
         queries=_strings(s, "queries", []) or None,
     )

@@ -100,8 +100,8 @@ def test_dms_group_mentions_and_replies_in_threads_are_pings(slack_project, slac
     slack.say(CAROL, CHANNEL, T0 - 100, mentions=(GROUP,))             # no group configured: not a ping
     run_once(make_slack())
     got = [(e["source"], e["data"]["kind"], e["subject"]) for e in published(slack_project)]
-    assert got == [("person.bob", "dm", f"{TEAM}/{dm}/{slack.messages[1]['ts']}"),
-                   ("person.carol", "mention", f"{TEAM}/{OTHER}/{root}")]
+    assert got == [("person.slack.bob", "dm", f"{TEAM}/{dm}/{slack.messages[1]['ts']}"),   # not in the identity map
+                   ("person.slack.carol", "mention", f"{TEAM}/{OTHER}/{root}")]
 
 
 @pytest.mark.parametrize("slack_toml", ['groups = ["S0SRE"]\ndms = false'])
@@ -131,7 +131,8 @@ def test_a_checkmark_by_the_owner_answers_and_moves_the_stock_and_the_within_cou
     [a] = published(slack_project, "slack.ping.answered")
     assert (a["source"], a["subject"], a["id"]) == ("person.daniel", f"{TEAM}/{CHANNEL}/{ts}", f"slack:{TEAM}:answered:{CHANNEL}:{ts}")
     assert a["time"] == "2026-10-26T07:36:20+00:00"                    # when the bridge saw it: Slack keeps no reaction time
-    assert a["data"] == {"workspace": TEAM, "channel": CHANNEL, "ts": ts, "wait_seconds": 210.0, "rule": "reaction",
+    assert a["data"] == {"workspace": TEAM, "channel": CHANNEL, "ts": ts, "wait_seconds": 210.0, "within": "5m",
+                         "rule": "reaction",
                          "reaction": "white_check_mark", "observed": True, "not_before": "2026-10-26T07:35:20+00:00"}
     assert stored(slack_project, "slack_pings_unanswered") == 0
     assert stored(slack_project, "slack_pings_received_total") == 1
@@ -153,8 +154,8 @@ def test_a_checkmark_answers_the_earlier_pings_in_its_thread(slack_project, slac
     assert sorted(e["data"]["ts"] for e in published(slack_project, "slack.ping.answered")) == [first, second]
     assert level(b, "slack_pings_unanswered") == 0
     slack.requests.clear()
-    tick(b, clock)                                                     # answered pings are not asked about again
-    assert [r[0] for r in slack.requests if r[0] == "reactions.get"] == []
+    tick(b, clock)                                                     # nothing waits: reactions are not read
+    assert [r[0] for r in slack.requests if r[0] == "reactions.list"] == []
 
 
 @pytest.mark.parametrize("slack_toml", ['answered = ["reply"]'])
@@ -178,11 +179,11 @@ def test_the_reply_rule_answers_at_the_owners_first_message_after_the_ping(slack
     assert answers[asked]["time"] == "2026-10-26T07:31:30.000006+00:00"   # the reply's own time
     assert (level(b, "slack_pings_answered_total", within="5m"), level(b, "slack_pings_answered_total", within="60m"),
             level(b, "slack_pings_unanswered")) == (1, 1, 1)
-    assert not [r for r in slack.requests if r[0] == "reactions.get"]
+    assert not [r for r in slack.requests if r[0] == "reactions.list"]
 
 
 @pytest.mark.parametrize("slack_toml", ['answered = ["reaction", "reply"]'])
-def test_with_both_rules_the_earlier_answer_wins(slack_project, slack, clock, make_slack):
+def test_with_both_rules_a_reply_beats_an_unstamped_checkmark(slack_project, slack, clock, make_slack):
     slack.user(BOB, "bob")
     ts = slack.say(BOB, CHANNEL, T0 - 30, mentions=(OWNER,))
     slack.react(CHANNEL, ts, "white_check_mark", OWNER, T0 + 30)
@@ -271,7 +272,15 @@ def test_a_gap_is_caught_up_and_recorded(slack_project, slack, clock, make_slack
     assert got[1]["time"].startswith("2026-10-26T08:03:20")             # caught up with Slack's own times
     answered = got[3]["data"]
     assert answered["not_before"] == "2026-10-26T08:03:20.000001+00:00"  # the reaction came somewhere in the gap
-    assert level(b, "slack_pings_answered_total", within="over") == 1    # stamped when seen: the gap's end
+    assert answered["within"] == "unknown"                               # so its wait is not known
+    assert level(b, "slack_pings_answered_total", within="unknown") == 1
+    assert level(b, "slack_pings_answered_total", within="over") == 0
+    assert level(b, "slack_ping_wait_seconds_total") == 0                # nor added to the waits
+    clock.t += 30
+    b2 = make_slack()
+    run_once(b2)                                                         # rebuilt from the bus the same way
+    assert (level(b2, "slack_pings_answered_total", within="unknown"), level(b2, "slack_pings_answered_total", within="over"),
+            level(b2, "slack_ping_wait_seconds_total")) == (1, 0, 0)
 
 
 def test_a_gap_longer_than_max_catchup_is_not_recovered(slack_project, slack, clock, make_slack):
@@ -313,29 +322,31 @@ def test_asleep_then_awake_publishes_one_gap_once_it_is_over(slack_project, slac
     assert (gap["data"]["from"], gap["data"]["to"]) == ("2026-10-26T07:33:20+00:00", "2026-10-26T07:50:20+00:00")
 
 
-def test_a_rate_limit_is_waited_out_for_its_retry_after(slack_project, slack, clock, make_slack):
+def test_a_rate_limit_is_waited_out_for_its_retry_after(slack_project, slack, clock, make_slack, slept):
     slack.user(BOB, "bob")
     slack.say(BOB, CHANNEL, T0 - 10, mentions=(OWNER,))
     b = make_slack()
     slack.fail_next = [(429, {"Retry-After": "7"}), (429, {"Retry-After": "3"})]
     run_once(b)
-    assert b.api.waited == [7.0, 3.0]
+    assert slept == [7.0, 3.0]
     assert len(published(slack_project, "slack.ping.received")) == 1
 
 
-def test_a_ping_waiting_too_long_expires_and_a_deleted_one_stops_waiting(slack_project, slack, clock, make_slack):
+def test_a_ping_waiting_too_long_expires_and_a_deleted_one_too(slack_project, slack, clock, make_slack):
     slack.user(BOB, "bob")
     old = slack.say(BOB, CHANNEL, T0 - 1000, mentions=(OWNER,))
     gone = slack.say(BOB, CHANNEL, T0 - 900, mentions=(OWNER,))
     b = make_slack()
     run_once(b)
-    slack.delete(CHANNEL, gone)
+    slack.delete(CHANNEL, gone)                                        # not noticed: it waits until expire
     tick(b, clock)
     b.config.expire = 1200.0
-    tick(b, clock, times=3)
+    tick(b, clock, times=5)
     got = {e["data"]["ts"]: e for e in published(slack_project, "slack.ping.expired")}
-    assert got[gone]["data"]["reason"] == "deleted" and got[gone]["source"] == "bridges.slack"
-    assert got[old]["data"]["reason"] == "expired" and got[old]["time"] == "2026-10-26T07:36:40.000001+00:00"
+    assert got[gone]["data"]["reason"] == "expired" and got[gone]["source"] == "bridges.slack"
+    assert got[old]["data"] == {"workspace": TEAM, "channel": CHANNEL, "ts": old, "reason": "expired",
+                                "wait_seconds": 1200.0}
+    assert got[old]["time"] == "2026-10-26T07:36:40.000001+00:00"
     assert level(b, "slack_pings_expired_total") == 2 and level(b, "slack_pings_unanswered") == 0
 
 
@@ -444,36 +455,18 @@ def test_a_restart_after_an_outage_reads_the_outage_and_records_it(slack_project
                            "recovered": True}
 
 
-def test_an_unreadable_ping_stops_waiting_and_blocks_nothing(slack_project, slack, clock, make_slack):
-    slack.user(BOB, "bob")
-    bad = slack.say(BOB, OTHER, T0 - 100, mentions=(OWNER,))
-    slack.reaction_errors[(OTHER, bad)] = "channel_not_found"
-    b = make_slack()
-    run_once(b)
-    later = slack.say(BOB, CHANNEL, T0 + 30, mentions=(OWNER,))
-    slack.react(CHANNEL, later, "white_check_mark", OWNER, T0 + 90)
-    tick(b, clock)
-    tick(b, clock)
-    assert [e["data"]["ts"] for e in published(slack_project, "slack.ping.received")] == [bad, later]
-    [x] = published(slack_project, "slack.ping.expired")
-    assert (x["data"]["ts"], x["data"]["reason"], x["source"]) == (bad, "unreadable", "bridges.slack")
-    [a] = published(slack_project, "slack.ping.answered")
-    assert a["data"]["ts"] == later
-    assert level(b, "slack_pings_unanswered") == 0 and level(b, "slack_pings_expired_total") == 1
-
-
 def test_reactions_that_cannot_be_read_leave_pings_waiting_and_the_poll_goes_on(
         slack_project, slack, clock, make_slack, capsys):
     slack.user(BOB, "bob")
     old = slack.say(BOB, CHANNEL, T0 - 1000, mentions=(OWNER,))
-    slack.reaction_errors[None] = "missing_scope"                      # the token lacks reactions:read
+    slack.reactions_error = "missing_scope"                            # the token lacks reactions:read
     b = make_slack()
     run_once(b)
     b.config.expire = 1100.0
     new = slack.say(BOB, CHANNEL, T0 + 30, mentions=(OWNER,))
     slack.requests.clear()
     tick(b, clock)
-    assert len([r for r in slack.requests if r[0] == "reactions.get"]) == 1   # the rest wait for the next poll
+    assert len([r for r in slack.requests if r[0] == "reactions.list"]) == 1   # tried once, then the poll goes on
     tick(b, clock)                                                     # T0+120: the old one has run out
     assert [e["data"]["ts"] for e in published(slack_project, "slack.ping.received")] == [old, new]
     [x] = published(slack_project, "slack.ping.expired")
@@ -482,8 +475,111 @@ def test_reactions_that_cannot_be_read_leave_pings_waiting_and_the_poll_goes_on(
     err = capsys.readouterr().err
     assert len([line for line in err.splitlines() if "missing_scope" in line]) == 3      # one line per poll
     assert "poll failed" not in err
-    del slack.reaction_errors[None]                                    # the scope is granted
+    slack.reactions_error = None                                       # the scope is granted
     slack.react(CHANNEL, new, "white_check_mark", OWNER, clock.t)
     tick(b, clock)
     [a] = published(slack_project, "slack.ping.answered")
     assert a["data"]["ts"] == new
+
+
+def test_reactions_cost_a_bounded_number_of_requests_however_many_pings_wait(slack_project, slack, clock, make_slack):
+    slack.user(BOB, "bob")
+    pings = [slack.say(BOB, CHANNEL, T0 - 3000 + 10 * i, mentions=(OWNER,)) for i in range(200)]
+    for ts in pings[::3]:                                              # the owner reacts to many messages
+        slack.react(CHANNEL, ts, "eyes", OWNER, T0 - 10)
+    slack.react(CHANNEL, pings[7], "white_check_mark", OWNER, T0 + 30)
+    b = make_slack()
+    run_once(b)
+    assert level(b, "slack_pings_unanswered") == 200
+    slack.requests.clear()
+    tick(b, clock)
+    methods = [r[0] for r in slack.requests]
+    assert "reactions.get" not in methods and methods.count("reactions.list") == 1 and len(methods) <= 6
+    assert [e["data"]["ts"] for e in published(slack_project, "slack.ping.answered")] == pings[:8]   # and the earlier
+
+
+def test_a_checkmark_behind_many_later_reactions_is_still_found(slack_project, slack, clock, make_slack):
+    from orchestra_bridges.slack.bridge import REACTION_PAGES
+    slack.user(BOB, "bob")
+    old = [slack.say(BOB, OTHER, T0 - 90_000 + i) for i in range(250)]   # long before any ping
+    for i, ts in enumerate(old):
+        slack.react(OTHER, ts, "eyes", OWNER, T0 - 500 + i)
+    ping = slack.say(BOB, CHANNEL, T0 - 1000, mentions=(OWNER,))
+    slack.react(CHANNEL, ping, "white_check_mark", OWNER, T0 - 900)       # older than all those reactions
+    b = make_slack()
+    run_once(b)
+    assert [e["data"]["ts"] for e in published(slack_project, "slack.ping.answered")] == [ping]
+    calls = [r for r in slack.requests if r[0] == "reactions.list"]
+    assert len(calls) == 3 <= REACTION_PAGES                           # 100 + 100 + the last page, never more
+
+
+def test_a_checkmark_on_the_last_of_several_dm_lines_answers_them_all(slack_project, slack, clock, make_slack):
+    slack.user(BOB, "bob")
+    dm = slack.dm(BOB)
+    lines = [slack.say(BOB, dm, T0 - 50 + i) for i in range(5)]
+    other = slack.say(BOB, slack.dm(CAROL), T0 - 40)                   # another channel: not answered
+    threaded = slack.say(BOB, dm, T0 - 30, thread=lines[0])            # in a thread: not answered
+    slack.react(dm, lines[-1], "white_check_mark", OWNER, T0 + 10)
+    b = make_slack()
+    run_once(b)
+    tick(b, clock)
+    assert sorted(e["data"]["ts"] for e in published(slack_project, "slack.ping.answered")) == sorted(lines)
+    assert {e["data"]["ts"] for e in published(slack_project, "slack.ping.received")} >= {other, threaded}
+    assert level(b, "slack_pings_unanswered") == 2
+
+
+def test_a_body_that_is_not_json_fails_the_round_and_the_next_one_recovers(slack_project, slack, clock, make_slack,
+                                                                           capsys):
+    slack.user(BOB, "bob")
+    b = make_slack()
+    run_once(b)
+    ts = slack.say(BOB, CHANNEL, T0 + 30, mentions=(OWNER,))
+    slack.garbage_next = 1                                             # a captive portal's sign-in page
+    tick(b, clock)
+    err = capsys.readouterr().err
+    assert "poll failed" in err and "JSONDecodeError" in err and "Wi-Fi" not in err
+    assert published(slack_project, "slack.ping.received") == []
+    tick(b, clock)
+    assert [e["data"]["ts"] for e in published(slack_project, "slack.ping.received")] == [ts]
+
+
+def test_a_long_retry_after_is_not_waited_and_a_slow_poll_is_no_gap(slack_project, slack, clock, make_slack, slept):
+    slack.user(BOB, "bob")
+    b = make_slack()
+    run_once(b)
+    slack.fail_next = [(429, {"Retry-After": "240"})]                  # longer than a poll: not waited out
+    tick(b, clock)
+    assert slept == []
+    tick(b, clock)
+    assert published(slack_project, "bridge.gap") == []
+
+    def sleep(s):                                                      # a wait that takes the clock's time
+        slept.append(s)
+        clock.t += s
+    b.api.sleep = sleep
+    slack.fail_next = [(429, {"Retry-After": "55"})] * 3               # one poll takes 165 s
+    tick(b, clock)
+    tick(b, clock)                                                     # 225 s after it began, 60 s after it ended
+    assert slept == [55.0] * 3 and published(slack_project, "bridge.gap") == []
+
+
+def test_a_stop_during_a_retry_after_ends_the_wait(slack_project, slack, clock, make_slack):
+    from orchestra_bridges.slack.api import SlackError
+    b = make_slack()
+    stop = threading.Event()
+    stop.set()
+    b.api.sleep = stop.wait                                            # as __main__ sets it
+    slack.fail_next = [(429, {"Retry-After": "30"})]
+    with pytest.raises(SlackError, match="stopped"):
+        b.api.auth()
+    assert len([r for r in slack.requests if r[0] == "auth.test"]) == 1
+
+
+def test_reactions_are_read_no_further_than_the_page_cap(slack_project, slack, clock, make_slack):
+    from orchestra_bridges.slack.bridge import REACTION_PAGES
+    slack.user(BOB, "bob")
+    for i in range(REACTION_PAGES * 100 + 50):
+        slack.react(OTHER, slack.say(BOB, OTHER, T0 - 90_000 + i), "eyes", OWNER, T0 - 600 + i / 10)
+    slack.say(BOB, CHANNEL, T0 - 100, mentions=(OWNER,))
+    run_once(make_slack())
+    assert len([r for r in slack.requests if r[0] == "reactions.list"]) == REACTION_PAGES

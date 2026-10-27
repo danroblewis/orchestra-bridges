@@ -21,16 +21,17 @@ from .slack.api import Slack
 from .slack.token import TokenError, user_token
 
 
-def _github(project):
+def _github(project, stop: threading.Event):
     conf = cfg.github(project.config.raw, project.repo_root)
     api = GitHub(gh_token(conf.api), conf.api)
     return github.Bridge(conf, api, Events.for_project(project, source=github.MACHINE),
                          ProjectStore(for_project(project), project.key))
 
 
-def _slack(project):
+def _slack(project, stop: threading.Event):
+    """A Retry-After is waited out on ``stop`` (so SIGTERM ends it) and for no longer than a poll."""
     conf = cfg.slack(project.config.raw, project.repo_root)
-    api = Slack(user_token(project.repo_root, conf.token_file), conf.api)
+    api = Slack(user_token(project.repo_root, conf.token_file), conf.api, sleep=stop.wait, max_wait=conf.every)
     return slack.Bridge(conf, api, Events.for_project(project, source=slack.MACHINE),
                         ProjectStore(for_project(project), project.key))
 
@@ -44,12 +45,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--once", action="store_true", help="poll once and exit")
     args = ap.parse_args(argv)
     make, module = BRIDGES[args.bridge]
+    stop = threading.Event()
     try:
-        bridge = make(load_project())
+        bridge = make(load_project(), stop)
     except (ConfigError, GitHubError, IdentityError, TokenError) as e:
         print(f"{module.MACHINE}: {e}", file=sys.stderr)
         return 2
-    stop = threading.Event()
     for sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, lambda *_: stop.set())
     try:

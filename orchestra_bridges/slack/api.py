@@ -2,16 +2,22 @@
 
 - ``auth.test``: whose token it is (the owner) and which workspace;
 - ``search.messages``: paged by ``page`` (``count`` up to 100), newest first;
-- ``reactions.get``: the reactions on one message (``full=true``, so every user is listed).
+- ``reactions.list``: the owner's own reactions, the messages they reacted to most recently first
+  (``full=true``, so every user is listed), paged by cursor.
 
-The token goes in the ``Authorization`` header, only to the configured API's own scheme and host:
-a redirect anywhere else is refused. A 429 (or ``ok: false`` with ``ratelimited``) is waited out
-for its ``Retry-After``, up to ``MAX_WAIT_S`` and ``RETRIES`` times; any other failure fails the
-call, and the bridge tries again next round. Errors name the method and Slack's error code, never
-the token or what was asked for."""
+The token goes in the ``Authorization`` header, only to the configured API's own scheme and host
+(which ``config.py`` allows to be slack.com or a local fake only): a redirect anywhere else is
+refused. A 429 (or ``ok: false`` with ``ratelimited``) is waited out for its ``Retry-After``, up to
+``RETRIES`` times, when it asks for no more than ``max_wait`` (the bridge sets its poll interval);
+a longer demand fails the call at once. The wait is ``sleep``, which the bridge makes its stop
+event's ``wait``: a ``sleep`` that returns true (stop was asked for) fails the call instead of
+retrying. Any other failure, including a body that is not JSON or is cut short, fails the call, and
+the bridge tries again next round. Errors name the method and Slack's error code (or the kind of
+failure), never the token, the body, or what was asked for."""
 
 from __future__ import annotations
 
+import http.client
 import json
 import time
 import urllib.error
@@ -50,20 +56,19 @@ class _SameOrigin(urllib.request.HTTPRedirectHandler):
 
 def _retry_after(headers: dict[str, str]) -> float:
     try:
-        return min(max(float(headers.get("retry-after", "60")), 0.0), MAX_WAIT_S)
+        return max(float(headers.get("retry-after", "60")), 0.0)
     except ValueError:
         return 60.0
 
 
 class Slack:
     def __init__(self, token: str, base: str = "https://slack.com/api", *, timeout: float = 30.0,
-                 sleep: Callable[[float], None] = time.sleep):
+                 sleep: Callable[[float], object] = time.sleep, max_wait: float = MAX_WAIT_S):
         self._token = token
         self.base = base.rstrip("/")
         self.timeout = timeout
-        self.sleep = sleep
+        self.sleep, self.max_wait = sleep, max_wait
         self.requests = 0
-        self.waited: list[float] = []                # each Retry-After honoured
         self._opener = urllib.request.build_opener(_SameOrigin(self.base))
 
     def __repr__(self) -> str:                    # never the token
@@ -86,8 +91,8 @@ class Slack:
                 if e.code != 429:
                     raise SlackError(method, f"HTTP {e.code}") from None
                 body = {"ok": False, "error": "ratelimited"}
-            except (urllib.error.URLError, TimeoutError, OSError) as e:
-                raise SlackError(method, type(e).__name__) from None
+            except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException, ValueError) as e:
+                raise SlackError(method, type(e).__name__) from None   # never the body: it may hold text
             if not isinstance(body, dict):
                 raise SlackError(method, "not a JSON object")
             if body.get("ok"):
@@ -96,8 +101,10 @@ class Slack:
             if error != "ratelimited" or attempt == RETRIES:
                 raise SlackError(method, error)
             wait = _retry_after(headers)
-            self.waited.append(wait)
-            self.sleep(wait)
+            if wait > self.max_wait:
+                raise SlackError(method, f"ratelimited for {round(wait)} s")
+            if self.sleep(wait):
+                raise SlackError(method, "stopped")
         raise SlackError(method, "unreachable")       # pragma: no cover
 
     def auth(self) -> dict:
@@ -110,7 +117,12 @@ class Slack:
                                              "count": count, "page": page, "highlight": "false"})
         return body.get("messages") or {}
 
-    def reactions(self, channel: str, ts: str) -> list[dict]:
-        """The reactions on one message: ``[{name, users, count}]``."""
-        body = self.call("reactions.get", {"channel": channel, "timestamp": ts, "full": "true"})
-        return (body.get("message") or {}).get("reactions") or []
+    def my_reactions(self, cursor: str = "", limit: int = 100) -> tuple[list[dict], str]:
+        """One page of ``reactions.list`` for the token's owner: its items (``{type, channel,
+        message: {ts, reactions: [{name, users, count}]}}``) and the cursor of the next page ("" at
+        the end)."""
+        params: dict[str, str | int] = {"full": "true", "limit": limit}
+        if cursor:
+            params["cursor"] = cursor
+        body = self.call("reactions.list", params)
+        return body.get("items") or [], str((body.get("response_metadata") or {}).get("next_cursor") or "")

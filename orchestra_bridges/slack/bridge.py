@@ -6,11 +6,12 @@ publish again differently:
 
 1. the searches (``search.py``) over the window: pings, and the owner's own messages when the reply
    rule is on. Only these (and ``auth.test``) fail a poll;
-2. ``reactions.get`` for every ping that waits, when the reaction rule is on. A read that fails never
-   holds back the rest of the poll: a ping whose own message cannot be read (``UNREADABLE``: its
-   channel is gone or closed to the owner) stops waiting; any other failure (a rate limit that
-   outlasts its retries, the network, a missing scope) leaves the pings it did not read waiting, to
-   be read next poll, and is logged once.
+2. when the reaction rule is on and a ping waits, the owner's own reactions, the messages reacted
+   to most recently first, from ``reactions.list``: one call a page of 100, at most
+   ``REACTION_PAGES`` pages, however many pings wait. Slack gives no reaction's time, so there is no
+   safe place to stop sooner. A read that fails (a rate limit, the network, a missing scope) never
+   holds back the rest of the poll: the pings stay waiting, to be read next poll, and the failure
+   is logged once.
 
 Then, holding the lock the ``/metrics`` server reads under:
 
@@ -18,30 +19,31 @@ Then, holding the lock the ``/metrics`` server reads under:
 - **the reply rule**: the owner's first message after a ping in its thread (or in its channel after
   it, when the ping was not in a thread) answers it, at that message's time;
 - a ping that has waited ``expire`` stops waiting (``slack.ping.expired``, at the moment it ran out);
-- **the reaction rule** (the default): a checkmark the owner put on a ping answers it, and every
-  earlier ping still waiting in its thread. Slack does not say when a reaction was added, so the
-  answer is stamped when the bridge first saw it: up to a poll late, or at the end of a gap. Its
-  data says so (``observed``) and gives ``not_before``, the last poll that did not see it.
-- a ping whose message is gone (``message_not_found``) stops waiting, as expired (``deleted``); one
-  that cannot be read (``UNREADABLE``) too (``unreadable``).
+- **the reaction rule** (the default): a checkmark the owner put on a ping answers it, and the
+  earlier pings still waiting that the owner's reply there would answer: in its thread, or, for a
+  ping not in a thread, the earlier ones in its channel not in a thread either. Slack does not say
+  when a reaction was added, so the answer is stamped when the bridge first saw it: up to a poll
+  late. Its data says so (``observed``) and gives ``not_before``, the last moment it could have been
+  seen unanswered. When that is more than ``KNOWN_ROUNDS`` polls back (a gap, a first start), the
+  wait is not known, and the answer is counted ``within="unknown"`` (``waits.py``).
+
+When both rules see an answer in the same poll, the reply wins: it has its own time.
 
 **It keeps no state of its own.** On start it reads its own events back from the bus (ids starting
 ``slack:<workspace>:``) and rebuilds the waiting pings and the counts from them; each counter then
 continues from what the store last holds for it, if that is more (``waits.py``). It reads Slack
 again from the later of its last event and the last good poll the store holds
 (``slack_bridge_last_poll_timestamp_seconds``'s value, which a scrape keeps storing while polls
-fail), less ``overlap``; never further back than ``max_catchup``. With nothing on either, it reads from ``lookback`` ago. A poll
-that succeeds more than three rounds after the last good one (the laptop slept, the bridge was
-stopped, Slack or the network was down) records the gap once, as ``bridge.gap`` {workspace, from,
-to, recovered}, and reads back to where it left off.
+fail), less ``overlap``; never further back than ``max_catchup``. With nothing on either, it reads
+from ``lookback`` ago. A poll that succeeds more than three rounds after the end of the last good
+one (the laptop slept, the bridge was stopped, Slack or the network was down) records the gap once,
+as ``bridge.gap`` {workspace, from, to, recovered}, and reads back to where it left off.
 
 The bridge itself is the machine ``bridges.slack``. Its series reach the store through a
 ``[[scrape]]`` of the same name, which labels them ``machine="bridges.slack"``."""
 
 from __future__ import annotations
 
-import hashlib
-import json
 import os
 import sys
 import threading
@@ -51,19 +53,20 @@ from collections.abc import Callable
 from orchestra.events import Events, event_time
 from orchestra.metrics import MetricsStore
 
+from ..announce import Announcer
 from ..config import SlackConfig
 from ..identity import Actor, People
 from . import search
 from .api import Slack, SlackError
 from .pings import ANSWERED, EXPIRED, RANK, RECEIVED, event_id, iso, iso_ts, kind, parse_id, subject
 from .serve import MetricsServer
-from .waits import COUNTERS, LAST_POLL, Waits
+from .waits import COUNTERS, LAST_POLL, UNKNOWN, Waits, within
 
 MACHINE = "bridges.slack"
 SYSTEM = "slack"
-ANNOUNCED = "slack:announce:"
 GAP_ROUNDS = 3
-UNREADABLE = frozenset({"channel_not_found", "not_in_channel", "bad_timestamp"})   # this message, not the token
+KNOWN_ROUNDS = 2                                  # a checkmark seen within this many polls has a known wait
+REACTION_PAGES = 5
 
 
 def log(msg: str) -> None:
@@ -79,8 +82,9 @@ class Bridge:
         self.me = self.my_name = self.team = ""
         self.waits = Waits()
         self.seen: set[str] = set()
-        self.announced: dict[str, dict] = {}
+        self.announcer = Announcer(events, SYSTEM, self.people)
         self.last_ok: float | None = None             # when the last good poll began
+        self.last_end: float | None = None            # when it ended: gaps are measured from here
         self.since = 0.0                              # where the next poll reads from
         self.ready = False
         self.server: MetricsServer | None = None       # while it runs
@@ -97,11 +101,12 @@ class Bridge:
         return {"workspace": self.team}
 
     def actor(self, user: str | None, username: str | None, bot: bool = False) -> Actor:
-        """The identity map's person when it lists the member id or the handle; else by handle."""
+        """The identity map's person when it lists the member id or the handle; else
+        ``person.slack.<handle>`` (``identity.py``: only the map joins accounts across systems)."""
         for login in (user, username):
             if self.people.listed(SYSTEM, login):
                 return self.people.actor(SYSTEM, login, bot)
-        return self.people.actor(SYSTEM, username or user, bot)
+        return self.people.actor(SYSTEM, username or user, bot, namespaced=True)
 
     def owner(self) -> Actor:
         return self.actor(self.me, self.my_name)
@@ -135,19 +140,19 @@ class Bridge:
         for e in own:
             p = parse_id(e["id"])
             if p and p[0] == self.team:
-                mine.append((event_time(e) or 0.0, RANK[p[1]], p[1], p[2], p[3], e.get("subject") or ""))
+                known = (e.get("data") or {}).get("within") != UNKNOWN
+                mine.append((event_time(e) or 0.0, RANK[p[1]], p[1], p[2], p[3], e.get("subject") or "", known))
         waits = Waits()
-        for t, _, type_, channel, ts, subj in sorted(mine):
-            waits.fold(type_, channel, ts, subj, t)
+        for t, _, type_, channel, ts, subj, known in sorted(mine):
+            waits.fold(type_, channel, ts, subj, t, known=known)
         written, last_poll = self._stored()
         waits.continue_from(written)
         last = max([last_poll, *(m[0] for m in mine)])
         with self.lock:
             self.seen = {e["id"] for e in own}
-            self.announced = {e.get("source"): e.get("data") or {} for e in own
-                              if e["id"].startswith(ANNOUNCED) and e.get("type") == "orchestra.machine.started"}
+            self.announcer.from_events(own)
             self.waits = waits
-            self.last_ok = last_poll or None
+            self.last_ok = self.last_end = last_poll or None
             self.since = last - self.config.overlap if last else self.clock() - self.config.lookback
             self.ready = True
         log(f"resumed: {len(mine)} of its events on the bus, {len(waits.waiting)} pings waiting; "
@@ -159,37 +164,24 @@ class Bridge:
             "log": os.environ.get("ORCHESTRA_MACHINE_LOG"), "system": SYSTEM, "workspace": self.team,
             "answered": self.config.answered, "every_s": self.config.every}, source=MACHINE)
 
-    def _announce_actor(self, actor: Actor, when: str) -> None:
-        """Announce ``actor`` unless their last announcement on the bus says the same."""
-        about = actor.announcement(SYSTEM)
-        if self.announced.get(actor.source) == about:
-            return
-        aid = f"{ANNOUNCED}{actor.source}:{hashlib.sha1(json.dumps(about, sort_keys=True).encode()).hexdigest()[:12]}:{when}"
-        self.events.publish("orchestra.machine.started", about, source=actor.source, time=when, id=aid)
-        self.seen.add(aid)
-        self.announced[actor.source] = about
-
     def reannounce(self) -> None:
         """Everyone the identity map lists who was announced before, again when their name or team
         is not what their last announcement says."""
-        now = iso(self.clock())
-        for login in self.people.accounts(SYSTEM):
-            actor = self.people.actor(SYSTEM, login)
-            last = self.announced.get(actor.source)
-            if last is not None and (last.get("name"), last.get("team")) != (actor.name, actor.team):
-                self._announce_actor(actor, now)
+        self.announcer.reannounce(iso(self.clock()), lambda login: self.actor(login, login))
 
     def _window(self, now: float) -> tuple[float, dict | None]:
-        start, last = self.since, self.last_ok
+        """Where this poll reads from, and the gap it closes when the last good poll ended too long
+        ago (published only once the poll's reads succeed)."""
+        start, last = self.since, self.last_end
         floor = now - self.config.max_catchup
         gap = None
         if last and now - last > GAP_ROUNDS * self.config.every:
             gap = {"workspace": self.team, "from": iso(last), "to": iso(now), "recovered": start >= floor}
         return max(start, floor), gap
 
-    def _read(self, start: float) -> tuple[list[search.Message], list[search.Message], dict]:
-        """Every read of one poll: the pings, the owner's messages, and the reactions on each ping
-        that waits, as far as they could be read (``_reactions_of``)."""
+    def _read(self, start: float) -> tuple[list[search.Message], list[search.Message], dict[tuple[str, str], str]]:
+        """Every read of one poll: the pings, the owner's messages, and the checkmarks the owner has
+        put on pings that wait (``_checkmarks``)."""
         found: dict[tuple[str, str], search.Message] = {}
         for q in self.queries():
             for m in search.since(self.api, q, start, self.watched):
@@ -199,48 +191,61 @@ class Bridge:
         own = []
         if "reply" in self.config.answered:
             own = [m for m in search.since(self.api, search.own_query(self.me), start, self.watched) if m.user == self.me]
-        reactions: dict[tuple[str, str], list[dict] | str] = {}
+        marks: dict[tuple[str, str], str] = {}
         if "reaction" in self.config.answered:
             new = {(m.channel, m.ts) for m in pings if event_id(self.team, RECEIVED, m.channel, m.ts) not in self.seen}
-            reactions = self._reactions_of(sorted({*self.waits.waiting, *new}))
-        return pings, own, reactions
+            marks = self._checkmarks({*self.waits.waiting, *new})
+        return pings, own, marks
 
-    def _reactions_of(self, keys: list[tuple[str, str]]) -> dict[tuple[str, str], list[dict] | str]:
-        """The reactions on each ping, or why it stops waiting (``deleted``, ``unreadable``). A
-        failure that is not about the message itself (a rate limit past its retries, the network, a
-        scope the token lacks) ends this poll's reads: the pings not read stay waiting and are read
-        next poll. Searches have already succeeded, so the poll goes on."""
-        out: dict[tuple[str, str], list[dict] | str] = {}
-        for key in keys:
-            try:
-                out[key] = self.api.reactions(*key)
-            except SlackError as e:
-                if e.error == "message_not_found":
-                    out[key] = "deleted"
-                elif e.error in UNREADABLE:
-                    out[key] = "unreadable"
-                else:
-                    log(f"reactions not read for {len(keys) - len(out)} of {len(keys)} pings, "
-                        f"tried again next poll: {e.error}")
+    def _checkmarks(self, keys: set[tuple[str, str]]) -> dict[tuple[str, str], str]:
+        """Which of ``keys`` carry one of the owner's answering reactions (key -> its name), from
+        ``reactions.list``: the owner's reactions, the messages reacted to most recently first, page
+        after page until the last or ``REACTION_PAGES``. A read that fails keeps what the earlier
+        pages found and is logged; the pings it could not read stay waiting for the next poll.
+        Searches have already succeeded, so the poll goes on."""
+        if not keys:
+            return {}
+        out: dict[tuple[str, str], str] = {}
+        cursor = ""
+        try:
+            for _ in range(REACTION_PAGES):
+                items, cursor = self.api.my_reactions(cursor)
+                for item in items:
+                    msg = item.get("message") or {}
+                    if item.get("type") != "message" or not msg.get("ts"):
+                        continue
+                    key = (str(item.get("channel") or ""), str(msg["ts"]))
+                    if key in keys and (hit := self._hit(msg.get("reactions") or [])):
+                        out[key] = hit
+                if not cursor:
                     break
+        except SlackError as e:
+            log(f"reactions not read, the pings they would answer tried again next poll: {e.error}")
         return out
 
-    def _answer(self, key: tuple[str, str], at: float, when: str, data: dict) -> None:
+    def _hit(self, reactions: list[dict]) -> str | None:
+        """The first answering reaction the owner put, by name without its skin tone."""
+        names = set(self.config.reactions)
+        return next((r["name"].split("::")[0] for r in reactions if str(r.get("name", "")).split("::")[0] in names
+                     and self.me in (r.get("users") or [])), None)
+
+    def _answer(self, key: tuple[str, str], at: float, when: str, data: dict, *, known: bool = True) -> None:
         subj, t0 = self.waits.waiting[key]
         eid = event_id(self.team, ANSWERED, *key)
         owner = self.owner()
-        self._announce_actor(owner, when)
+        self.announcer.actor(owner, when)
         wait = round(max(at - t0, 0.0), 3)
-        self.events.publish(ANSWERED, {"workspace": self.team, "channel": key[0], "ts": key[1], "wait_seconds": wait, **data},
+        self.events.publish(ANSWERED, {"workspace": self.team, "channel": key[0], "ts": key[1], "wait_seconds": wait,
+                                       "within": within(wait) if known else UNKNOWN, **data},
                             source=owner.source, subject=subj, time=when, id=eid)
         self.seen.add(eid)
-        self.waits.fold(ANSWERED, *key, subj, at)
+        self.waits.fold(ANSWERED, *key, subj, at, known=known)
 
     def _expire(self, key: tuple[str, str], at: float, reason: str) -> None:
         subj, t0 = self.waits.waiting[key]
         eid = event_id(self.team, EXPIRED, *key)
         self.events.publish(EXPIRED, {"workspace": self.team, "channel": key[0], "ts": key[1], "reason": reason,
-                                      "waited_seconds": round(at - t0, 3)},
+                                      "wait_seconds": round(at - t0, 3)},
                             source=MACHINE, subject=subj, time=iso(at), id=eid)
         self.seen.add(eid)
         self.waits.fold(EXPIRED, *key, subj, at)
@@ -252,7 +257,7 @@ class Bridge:
         actor = self.actor(m.user, m.username, m.bot)
         when = iso_ts(m.ts)
         subj = subject(self.team, m.channel, m.thread)
-        self._announce_actor(actor, when)
+        self.announcer.actor(actor, when)
         self.events.publish(RECEIVED, {"workspace": self.team, "channel": m.channel, "channel_type": m.channel_type,
                                        "ts": m.ts, "thread_ts": m.thread_ts, "user": m.user,
                                        "kind": kind(m, self.me, self.config.groups, self.config.dms)},
@@ -269,9 +274,7 @@ class Bridge:
             if r.thread_ts:
                 keys = self.waits.in_thread(subject(self.team, r.channel, r.thread), r.t)
             else:
-                keys = sorted((k for k, (s, t) in self.waits.waiting.items()
-                               if k[0] == r.channel and s == subject(self.team, r.channel, k[1]) and t < r.t),
-                              key=lambda k: float(k[1]))
+                keys = self.waits.unthreaded(self.team, r.channel, r.t)
             for key in keys:
                 if self.waits.waiting[key][1] + self.config.expire > r.t:
                     self._answer(key, r.t, iso_ts(r.ts), {"rule": "reply", "reply_ts": r.ts})
@@ -281,40 +284,38 @@ class Bridge:
             if t0 + self.config.expire <= now:
                 self._expire(key, t0 + self.config.expire, "expired")
 
-    def _reactions(self, reactions: dict, now: float, not_before: float | None) -> None:
-        names = set(self.config.reactions)
-        for key, got in sorted(reactions.items(), key=lambda kv: float(kv[0][1])):
+    def _reactions(self, marks: dict[tuple[str, str], str], now: float, not_before: float | None) -> None:
+        """The reaction rule: each checkmark answers its ping and the earlier pings still waiting
+        that a reply there would answer (its thread's, or its channel's not in a thread)."""
+        for key, hit in sorted(marks.items(), key=lambda kv: float(kv[0][1])):
             if key not in self.waits.waiting:
                 continue
-            if isinstance(got, str):
-                self._expire(key, now, got)
-                continue
-            hit = next((r["name"] for r in got if r.get("name", "").split("::")[0] in names and self.me in (r.get("users") or [])),
-                       None)
-            if hit is None:
-                continue
             subj, t0 = self.waits.waiting[key]
-            for k in [*self.waits.in_thread(subj, t0), key]:
+            earlier = (self.waits.unthreaded(self.team, key[0], t0) if subj == subject(self.team, *key)
+                       else self.waits.in_thread(subj, t0))
+            for k in [*earlier, key]:
                 since = max(self.waits.waiting[k][1], not_before or 0.0)
-                self._answer(k, now, iso(now), {"rule": "reaction", "reaction": hit.split("::")[0], "observed": True,
-                                                "not_before": iso(since)})
+                self._answer(k, now, iso(now), {"rule": "reaction", "reaction": hit, "observed": True,
+                                                "not_before": iso(since)},
+                             known=now - since <= KNOWN_ROUNDS * self.config.every)
 
     def poll(self) -> int:
         """Read Slack once and publish what is new; how many pings were received."""
         now = self.clock()
         start, gap = self._window(now)
-        pings, own, reactions = self._read(start)
+        pings, own, marks = self._read(start)
         with self.lock:
             if gap:
                 self.events.publish("bridge.gap", gap, source=MACHINE)
-                log(f"gap of {round(now - self.last_ok)} s since the last good poll"
+                log(f"gap of {round(now - (self.last_end or now))} s since the last good poll"
                     + ("" if gap["recovered"] else f"; only the last {round(self.config.max_catchup)} s were read"))
             new = sum(self._receive(m) for m in pings)
             self._replies(own)
             self._expiries(now)
-            self._reactions(reactions, now, self.last_ok)
+            self._reactions(marks, now, self.last_ok)
             self.last_ok = now
             self.since = now - self.config.overlap
+            self.last_end = self.clock()
         return new
 
     def render(self) -> str | None:

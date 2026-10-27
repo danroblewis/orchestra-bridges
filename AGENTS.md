@@ -11,8 +11,8 @@ broken without updating the spec and saying so in the commit.
    every bridge.
 2. **Read only.** A bridge never writes to the system it reads: no comments, labels or reactions.
    Speaking into another system is a separate proposal (the outbox).
-3. **The token stays in memory.** A bridge takes credentials from the environment or the owner's
-   CLI login at start. It never writes, logs or publishes them, and sends them only to the
+3. **The token stays in memory.** A bridge takes credentials at start from the environment, a
+   token file outside the repository readable only by its owner, or the owner's CLI login. It never writes, logs or publishes them, and sends them only to the
    configured API host.
 4. **No state of its own.** What a bridge knows comes from its own events on the bus and its own
    series in the metrics store, rebuilt at start. Ids are the system's own, so re-reading never
