@@ -114,6 +114,24 @@ count. The cost: counts are stamped at the scrape, not at Slack's times, so a ga
 in the series at the moment the bridge woke. The events keep the true times. A plugin cannot
 declare a scrape today, so the owner adds it to `orchestra.toml` (README).
 
+**Where it left off.** A scrape stores the served counts whether or not polls succeed, so the time
+of the store's latest point is not the last poll (as it is for the GitHub bridge, §3). The bridge
+serves `slack_bridge_last_poll_timestamp_seconds`, the start of its last successful poll, and on
+start reads that value back: it is the last good poll for the gap test, and the later of it and
+the last event, less `overlap`, is where reading resumes. A restart after an outage therefore reads
+the outage back and records one `bridge.gap`.
+
+**Reactions never block the searches.** Only `auth.test` and the searches fail a poll. A
+`reactions.get` that fails for its own message (`message_not_found`; `channel_not_found`,
+`not_in_channel`, `bad_timestamp`) ends that ping as expired (`deleted`, `unreadable`). Any other
+failure (a rate limit past its retries, the network, a scope the token lacks) ends that poll's
+reaction reads: the pings not read stay waiting for the next poll, and everything else the poll
+read is published.
+
+**`after:`** narrows each search by day in the searcher's own time zone, which the bridge does not
+know, so it names the UTC date two days before the window: earlier than the window's start in
+every zone from UTC-12 to UTC+14. The exact cut is each match's own time.
+
 ## 6. Running
 
 `plugin.py` is the `orchestra.plugins` entry point `bridges`. For each bridge that has a section in

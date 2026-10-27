@@ -286,7 +286,7 @@ def test_a_gap_longer_than_max_catchup_is_not_recovered(slack_project, slack, cl
     assert [e["data"]["ts"] for e in published(slack_project, "slack.ping.received")] == [late]
 
 
-def test_a_restart_after_a_gap_records_it_from_the_last_scrape(slack_project, slack, clock, make_slack):
+def test_a_restart_after_a_gap_records_it_from_the_last_good_poll(slack_project, slack, clock, make_slack):
     slack.user(BOB, "bob")
     b = make_slack()
     run_once(b)
@@ -410,3 +410,80 @@ def test_no_text_and_no_token_anywhere(slack_project, slack, clock, make_slack, 
         if f.is_file() and ".git" not in f.parts:
             body = f.read_bytes()
             assert CANARY.encode() not in body and TOKEN.encode() not in body, f
+
+
+def test_a_searcher_west_of_utc_gets_their_evening_pings(slack_project, slack, clock, make_slack):
+    from zoneinfo import ZoneInfo
+    slack.tz = ZoneInfo("America/Los_Angeles")                         # the owner's: UTC-7 in October
+    slack.user(BOB, "bob")
+    evening = T0 + 70_000                                              # 20:00 on Oct 26 there, 03:00 on Oct 27 in UTC
+    clock.t = evening - 90
+    b = make_slack()
+    run_once(b)
+    ts = slack.say(BOB, CHANNEL, evening, mentions=(OWNER,))
+    tick(b, clock)
+    tick(b, clock)
+    assert [e["data"]["ts"] for e in published(slack_project, "slack.ping.received")] == [ts]
+
+
+def test_a_restart_after_an_outage_reads_the_outage_and_records_it(slack_project, slack, clock, make_slack):
+    slack.user(BOB, "bob")
+    b = make_slack()
+    run_once(b)
+    scrape(b, slack_project, clock.t)
+    slack.asleep = True                                                # Slack unreachable; Orchestra still scrapes
+    during = slack.say(BOB, CHANNEL, T0 + 3600, mentions=(OWNER,))
+    tick(b, clock, slack_project, times=150)                           # 2.5 h of failed polls
+    assert stored(slack_project, "slack_bridge_last_poll_timestamp_seconds") == T0
+    slack.asleep = False
+    clock.t += 60
+    run_once(make_slack())
+    assert [e["data"]["ts"] for e in published(slack_project, "slack.ping.received")] == [during]
+    [gap] = published(slack_project, "bridge.gap")
+    assert gap["data"] == {"workspace": TEAM, "from": "2026-10-26T07:33:20+00:00", "to": "2026-10-26T10:04:20+00:00",
+                           "recovered": True}
+
+
+def test_an_unreadable_ping_stops_waiting_and_blocks_nothing(slack_project, slack, clock, make_slack):
+    slack.user(BOB, "bob")
+    bad = slack.say(BOB, OTHER, T0 - 100, mentions=(OWNER,))
+    slack.reaction_errors[(OTHER, bad)] = "channel_not_found"
+    b = make_slack()
+    run_once(b)
+    later = slack.say(BOB, CHANNEL, T0 + 30, mentions=(OWNER,))
+    slack.react(CHANNEL, later, "white_check_mark", OWNER, T0 + 90)
+    tick(b, clock)
+    tick(b, clock)
+    assert [e["data"]["ts"] for e in published(slack_project, "slack.ping.received")] == [bad, later]
+    [x] = published(slack_project, "slack.ping.expired")
+    assert (x["data"]["ts"], x["data"]["reason"], x["source"]) == (bad, "unreadable", "bridges.slack")
+    [a] = published(slack_project, "slack.ping.answered")
+    assert a["data"]["ts"] == later
+    assert level(b, "slack_pings_unanswered") == 0 and level(b, "slack_pings_expired_total") == 1
+
+
+def test_reactions_that_cannot_be_read_leave_pings_waiting_and_the_poll_goes_on(
+        slack_project, slack, clock, make_slack, capsys):
+    slack.user(BOB, "bob")
+    old = slack.say(BOB, CHANNEL, T0 - 1000, mentions=(OWNER,))
+    slack.reaction_errors[None] = "missing_scope"                      # the token lacks reactions:read
+    b = make_slack()
+    run_once(b)
+    b.config.expire = 1100.0
+    new = slack.say(BOB, CHANNEL, T0 + 30, mentions=(OWNER,))
+    slack.requests.clear()
+    tick(b, clock)
+    assert len([r for r in slack.requests if r[0] == "reactions.get"]) == 1   # the rest wait for the next poll
+    tick(b, clock)                                                     # T0+120: the old one has run out
+    assert [e["data"]["ts"] for e in published(slack_project, "slack.ping.received")] == [old, new]
+    [x] = published(slack_project, "slack.ping.expired")
+    assert (x["data"]["ts"], x["data"]["reason"]) == (old, "expired")
+    assert level(b, "slack_pings_unanswered") == 1
+    err = capsys.readouterr().err
+    assert len([line for line in err.splitlines() if "missing_scope" in line]) == 3      # one line per poll
+    assert "poll failed" not in err
+    del slack.reaction_errors[None]                                    # the scope is granted
+    slack.react(CHANNEL, new, "white_check_mark", OWNER, clock.t)
+    tick(b, clock)
+    [a] = published(slack_project, "slack.ping.answered")
+    assert a["data"]["ts"] == new

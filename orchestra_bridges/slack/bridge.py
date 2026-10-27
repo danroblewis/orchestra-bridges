@@ -5,8 +5,12 @@ Each poll first reads, then publishes, so a poll that fails part way publishes n
 publish again differently:
 
 1. the searches (``search.py``) over the window: pings, and the owner's own messages when the reply
-   rule is on;
-2. ``reactions.get`` for every ping that waits, when the reaction rule is on.
+   rule is on. Only these (and ``auth.test``) fail a poll;
+2. ``reactions.get`` for every ping that waits, when the reaction rule is on. A read that fails never
+   holds back the rest of the poll: a ping whose own message cannot be read (``UNREADABLE``: its
+   channel is gone or closed to the owner) stops waiting; any other failure (a rate limit that
+   outlasts its retries, the network, a missing scope) leaves the pings it did not read waiting, to
+   be read next poll, and is logged once.
 
 Then, holding the lock the ``/metrics`` server reads under:
 
@@ -18,13 +22,15 @@ Then, holding the lock the ``/metrics`` server reads under:
   earlier ping still waiting in its thread. Slack does not say when a reaction was added, so the
   answer is stamped when the bridge first saw it: up to a poll late, or at the end of a gap. Its
   data says so (``observed``) and gives ``not_before``, the last poll that did not see it.
-- a ping whose message is gone (``message_not_found``) stops waiting, as expired.
+- a ping whose message is gone (``message_not_found``) stops waiting, as expired (``deleted``); one
+  that cannot be read (``UNREADABLE``) too (``unreadable``).
 
 **It keeps no state of its own.** On start it reads its own events back from the bus (ids starting
 ``slack:<workspace>:``) and rebuilds the waiting pings and the counts from them; each counter then
 continues from what the store last holds for it, if that is more (``waits.py``). It reads Slack
-again from the later of its last event and the store's last scrape of it, less ``overlap``; never
-further back than ``max_catchup``. With nothing on either, it reads from ``lookback`` ago. A poll
+again from the later of its last event and the last good poll the store holds
+(``slack_bridge_last_poll_timestamp_seconds``'s value, which a scrape keeps storing while polls
+fail), less ``overlap``; never further back than ``max_catchup``. With nothing on either, it reads from ``lookback`` ago. A poll
 that succeeds more than three rounds after the last good one (the laptop slept, the bridge was
 stopped, Slack or the network was down) records the gap once, as ``bridge.gap`` {workspace, from,
 to, recovered}, and reads back to where it left off.
@@ -51,12 +57,13 @@ from . import search
 from .api import Slack, SlackError
 from .pings import ANSWERED, EXPIRED, RANK, RECEIVED, event_id, iso, iso_ts, kind, parse_id, subject
 from .serve import MetricsServer
-from .waits import COUNTERS, LEVEL, Waits
+from .waits import COUNTERS, LAST_POLL, Waits
 
 MACHINE = "bridges.slack"
 SYSTEM = "slack"
 ANNOUNCED = "slack:announce:"
 GAP_ROUNDS = 3
+UNREADABLE = frozenset({"channel_not_found", "not_in_channel", "bad_timestamp"})   # this message, not the token
 
 
 def log(msg: str) -> None:
@@ -106,18 +113,19 @@ class Bridge:
         return qs + ([search.dm_query(self.me)] if self.config.dms else [])
 
     def _stored(self) -> tuple[dict[str, float], float]:
-        """Each counter's last value in the store, and when the store last scraped the bridge."""
+        """Each counter's last value in the store, and when the last good poll it holds began (the
+        value of ``LAST_POLL``, not when it was scraped: the scrape goes on while polls fail)."""
         base = {"machine": MACHINE, **self.labels()}
         written: dict[str, float] = {}
         try:
-            last = self.store.latest(LEVEL, base)
+            last = self.store.latest(LAST_POLL, base)
             for key, (name, extra) in COUNTERS.items():
                 if got := self.store.latest(name, {**base, **extra}):
                     written[key] = got[1]
         except Exception as e:  # noqa: BLE001 - measuring never stops the bridge
             log(f"metrics store not read ({type(e).__name__})")
             last = None
-        return written, (last[0] if last else 0.0)
+        return written, (last[1] if last else 0.0)
 
     def resume(self) -> None:
         """Read back what this bridge published before, and where to read Slack from."""
@@ -131,15 +139,15 @@ class Bridge:
         waits = Waits()
         for t, _, type_, channel, ts, subj in sorted(mine):
             waits.fold(type_, channel, ts, subj, t)
-        written, scraped = self._stored()
+        written, last_poll = self._stored()
         waits.continue_from(written)
-        last = max([scraped, *(m[0] for m in mine)])
+        last = max([last_poll, *(m[0] for m in mine)])
         with self.lock:
             self.seen = {e["id"] for e in own}
             self.announced = {e.get("source"): e.get("data") or {} for e in own
                               if e["id"].startswith(ANNOUNCED) and e.get("type") == "orchestra.machine.started"}
             self.waits = waits
-            self.last_ok = scraped or None
+            self.last_ok = last_poll or None
             self.since = last - self.config.overlap if last else self.clock() - self.config.lookback
             self.ready = True
         log(f"resumed: {len(mine)} of its events on the bus, {len(waits.waiting)} pings waiting; "
@@ -181,7 +189,7 @@ class Bridge:
 
     def _read(self, start: float) -> tuple[list[search.Message], list[search.Message], dict]:
         """Every read of one poll: the pings, the owner's messages, and the reactions on each ping
-        that waits (or ``None`` for one whose message is gone)."""
+        that waits, as far as they could be read (``_reactions_of``)."""
         found: dict[tuple[str, str], search.Message] = {}
         for q in self.queries():
             for m in search.since(self.api, q, start, self.watched):
@@ -191,17 +199,31 @@ class Bridge:
         own = []
         if "reply" in self.config.answered:
             own = [m for m in search.since(self.api, search.own_query(self.me), start, self.watched) if m.user == self.me]
-        reactions: dict[tuple[str, str], list[dict] | None] = {}
+        reactions: dict[tuple[str, str], list[dict] | str] = {}
         if "reaction" in self.config.answered:
             new = {(m.channel, m.ts) for m in pings if event_id(self.team, RECEIVED, m.channel, m.ts) not in self.seen}
-            for key in sorted({*self.waits.waiting, *new}):
-                try:
-                    reactions[key] = self.api.reactions(*key)
-                except SlackError as e:
-                    if e.error != "message_not_found":
-                        raise
-                    reactions[key] = None
+            reactions = self._reactions_of(sorted({*self.waits.waiting, *new}))
         return pings, own, reactions
+
+    def _reactions_of(self, keys: list[tuple[str, str]]) -> dict[tuple[str, str], list[dict] | str]:
+        """The reactions on each ping, or why it stops waiting (``deleted``, ``unreadable``). A
+        failure that is not about the message itself (a rate limit past its retries, the network, a
+        scope the token lacks) ends this poll's reads: the pings not read stay waiting and are read
+        next poll. Searches have already succeeded, so the poll goes on."""
+        out: dict[tuple[str, str], list[dict] | str] = {}
+        for key in keys:
+            try:
+                out[key] = self.api.reactions(*key)
+            except SlackError as e:
+                if e.error == "message_not_found":
+                    out[key] = "deleted"
+                elif e.error in UNREADABLE:
+                    out[key] = "unreadable"
+                else:
+                    log(f"reactions not read for {len(keys) - len(out)} of {len(keys)} pings, "
+                        f"tried again next poll: {e.error}")
+                    break
+        return out
 
     def _answer(self, key: tuple[str, str], at: float, when: str, data: dict) -> None:
         subj, t0 = self.waits.waiting[key]
@@ -264,8 +286,8 @@ class Bridge:
         for key, got in sorted(reactions.items(), key=lambda kv: float(kv[0][1])):
             if key not in self.waits.waiting:
                 continue
-            if got is None:
-                self._expire(key, now, "deleted")
+            if isinstance(got, str):
+                self._expire(key, now, got)
                 continue
             hit = next((r["name"] for r in got if r.get("name", "").split("::")[0] in names and self.me in (r.get("users") or [])),
                        None)
@@ -298,7 +320,7 @@ class Bridge:
     def render(self) -> str | None:
         """What ``/metrics`` serves; None until the bridge has read its past back."""
         with self.lock:
-            return self.waits.exposition(self.clock(), self.labels()) if self.ready else None
+            return self.waits.exposition(self.clock(), self.labels(), self.last_ok) if self.ready else None
 
     def round(self) -> None:
         try:

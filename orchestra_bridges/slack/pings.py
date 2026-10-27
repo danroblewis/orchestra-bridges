@@ -6,7 +6,7 @@ that mentions the owner, or one that mentions a configured group. Its events:
 - ``slack.ping.received``: source the pinger, subject the thread, time the message's;
 - ``slack.ping.answered``: source the owner, subject the thread (the rules are in ``bridge.py``);
 - ``slack.ping.expired``: source the bridge, when a ping waited ``expire`` without an answer, or
-  its message was deleted. The system's own doing, so the stock balances:
+  its message was deleted or cannot be read (``reason``). The system's own doing, so the stock balances:
   unanswered = received − answered − expired.
 
 The subject is ``<workspace>/<channel>/<thread ts>``, so a ping and its answer share it and

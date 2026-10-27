@@ -4,14 +4,16 @@ It serves ``auth.test``, ``search.messages`` (paged by ``page`` and ``count``, n
 ``sort=timestamp``) and ``reactions.get``, under ``/api/``. It demands the bearer token (a wrong one
 is ``ok: false, invalid_auth``, as Slack answers), and it can be told to answer the next requests
 with a rate limit (429 and ``Retry-After``) or to be **asleep** (every connection dropped, as for a
-laptop whose network is gone).
+laptop whose network is gone). ``reaction_errors`` makes ``reactions.get`` answer ``ok: false`` with
+an error, for one message (keyed by channel and ts) or for every one (keyed by None).
 
 The world is scripted ahead of time against a clock: a message, a reply or a reaction exists only
 once the clock has reached its time, so a test lays out a morning and moves the clock through it.
 Every message's text carries ``CANARY``, which must never leave the bridge.
 
 Search understands what the bridge asks: ``from:<@U>``, ``to:<@U>`` (a direct message to ``U``),
-``after:YYYY-MM-DD`` (strictly after that day, UTC), and any other word as text the message must
+``after:YYYY-MM-DD`` (strictly after that day, in the searcher's time zone ``tz``, UTC unless a
+test sets another), and any other word as text the message must
 contain (``<@U...>``, ``<!subteam^S...>``). Replies carry their thread only in the permalink
 (``?thread_ts=``), the harder of the two ways Slack shows it."""
 
@@ -23,9 +25,10 @@ import threading
 import time
 import urllib.parse
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Self
+from zoneinfo import ZoneInfo
 
 CANARY = "CANARY-5c2e-never-publish-me"
 TOKEN = "fake-slack-user-token-for-tests"
@@ -56,6 +59,8 @@ class FakeSlack:
         self.requests: list[tuple[str, dict, str | None]] = []
         self.fail_next: list[tuple[int, dict]] = []             # (status, headers) for the next requests
         self.asleep = False
+        self.tz = ZoneInfo("UTC")                                # the searcher's, for after:
+        self.reaction_errors: dict[tuple[str, str] | None, str] = {}
         self._seq = itertools.count(1)
         self._server: ThreadingHTTPServer | None = None
         self.base = ""
@@ -99,7 +104,7 @@ class FakeSlack:
                 to = word.removeprefix("to:<@").rstrip(">")
                 ok = m["channel"] in self.dm_with and m["user"] != to and to == OWNER
             elif word.startswith("after:"):
-                ok = datetime.fromtimestamp(float(m["ts"]), UTC).strftime("%Y-%m-%d") > word.removeprefix("after:")
+                ok = datetime.fromtimestamp(float(m["ts"]), self.tz).strftime("%Y-%m-%d") > word.removeprefix("after:")
             elif word.startswith("<") and word.endswith(">"):     # a mention, with or without its |label
                 ok = word in m["text"] or f"{word[:-1]}|" in m["text"]
             else:
@@ -139,6 +144,8 @@ class FakeSlack:
 
     def reactions_get(self, q: dict) -> dict:
         key = (q.get("channel"), q.get("timestamp"))
+        if error := self.reaction_errors.get(key) or self.reaction_errors.get(None):
+            return {"ok": False, "error": error}
         [m] = [m for m in self._visible() if (m["channel"], m["ts"]) == key] or [None]
         if m is None:
             return {"ok": False, "error": "message_not_found"}

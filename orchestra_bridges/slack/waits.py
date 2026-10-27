@@ -10,7 +10,10 @@ workspace:
   scrape keeps no histogram buckets;
 - ``slack_pings_expired_total``: stopped waiting unanswered (``pings.py``);
 - ``slack_ping_wait_seconds_total``: the answered waits added up (the mean is its rate over the
-  answered rate).
+  answered rate);
+- ``slack_bridge_last_poll_timestamp_seconds``: when the last successful poll began (Unix seconds),
+  absent before the first. A scrape stores it even while polls fail, so on restart its value, not
+  the time of the scrape, says where the bridge left off.
 
 So ``unanswered`` changes by received − answered − expired, exactly. The state is rebuilt from the
 bridge's own events when it starts, and every counter then continues from the larger of what was
@@ -28,6 +31,7 @@ WITHIN = ((300, "5m"), (900, "15m"), (3600, "60m"))
 BUCKETS = [*(n for _, n in WITHIN), "over"]
 LEVEL = "slack_pings_unanswered"
 OLDEST = "slack_pings_oldest_unanswered_seconds"
+LAST_POLL = "slack_bridge_last_poll_timestamp_seconds"
 COUNTERS = {"received": ("slack_pings_received_total", {}),
             "expired": ("slack_pings_expired_total", {}),
             "wait_seconds": ("slack_ping_wait_seconds_total", {}),
@@ -91,10 +95,11 @@ class Waits:
         out += [(name, extra, round(counts[k] + self.offset.get(k, 0.0), 1)) for k, (name, extra) in COUNTERS.items()]
         return out
 
-    def exposition(self, now: float, labels: dict[str, str]) -> str:
-        """The Prometheus text format, one sample per series."""
+    def exposition(self, now: float, labels: dict[str, str], last_poll: float | None = None) -> str:
+        """The Prometheus text format, one sample per series; ``last_poll`` too, when there was one."""
         lines, typed = [], set()
-        for name, extra, value in self.values(now):
+        last = [(LAST_POLL, {}, last_poll)] if last_poll else []
+        for name, extra, value in [*self.values(now), *last]:
             if name not in typed:
                 lines.append(f"# TYPE {name} {'counter' if name.endswith('_total') else 'gauge'}")
                 typed.add(name)

@@ -11,8 +11,11 @@ The searches, unless ``[bridges.slack] queries`` replaces them (``{me}`` is the 
 - ``to:<@{me}>``: direct messages to the owner (when ``dms``);
 - ``from:<@{me}>``: the owner's own messages, read for the reply rule.
 
-Each is narrowed with ``after:<the day before the window>`` (Slack's date filter is by day, in the
-searcher's time zone) and read newest first, page by page, until a match is older than the window.
+Each is narrowed with ``after:<two days before the window, in UTC>`` and read newest first, page by
+page, until a match is older than the window. Slack reads ``after:D`` as strictly after day ``D`` in
+the searcher's own time zone, which the bridge does not know. Two days back covers every zone from
+UTC-12 to UTC+14: the UTC date two days before ``t`` is earlier than ``t``'s date anywhere. The
+filter only saves requests; the precise cut is each match's own time.
 Whatever the searches return, the bridge decides what is a ping by its own rule (``pings.py``), so
 a search that returns too much costs requests, never correctness. Whether Slack's search reads
 these spellings the same way in every workspace is for the contract test to show."""
@@ -96,8 +99,12 @@ def message(match: dict, watched: set[str]) -> Message | None:
                    bool(match.get("bot_id")), _channel_type(ch), mentions)
 
 
+AFTER_DAYS = 2                       # how many days back ``after:`` reaches, for any time zone
+
+
 def day_before(t: float) -> str:
-    return datetime.fromtimestamp(t - 86400, UTC).strftime("%Y-%m-%d")
+    """The day for ``after:``: one that ends before ``t`` in every time zone (UTC-12 to UTC+14)."""
+    return datetime.fromtimestamp(t - AFTER_DAYS * 86400, UTC).strftime("%Y-%m-%d")
 
 
 def since(api: Slack, query: str, t: float, watched: set[str]) -> list[Message]:

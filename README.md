@@ -119,15 +119,20 @@ measures that promise. Every minute it searches your workspace with your own **u
 |---|---|---|---|
 | `slack.ping.received` | the pinger | the thread (`<workspace>/<channel>/<thread ts>`) | workspace, channel and its kind, ts, thread ts, member id, kind (`dm`, `mention`, `group`) |
 | `slack.ping.answered` | you | the same thread | the same ids, the rule that answered it, the wait |
-| `slack.ping.expired` | `bridges.slack` | the same thread | the same ids, `expired` or `deleted`, the wait |
+| `slack.ping.expired` | `bridges.slack` | the same thread | the same ids, `expired`, `deleted` or `unreadable`, the wait |
 
 **Answered** means, by default, that you put a checkmark reaction (`white_check_mark` or
 `heavy_check_mark`) on the ping. That also answers any earlier pings still waiting in the same
 thread. With `answered = ["reply"]`, your first message after the ping in its thread answers it
 instead. A ping that was not in a thread is answered by your next message in the same channel,
 also not in a thread. With both rules, whichever comes first answers it. A ping nobody answers
-stops waiting after `expire` (7 days), and so does one whose message was deleted. Either way it
-counts as expired, so `unanswered = received - answered - expired` holds exactly.
+stops waiting after `expire` (7 days). So does one whose message was deleted (`deleted`), and one
+whose reactions Slack refuses to read because its channel is gone or closed to you
+(`channel_not_found`, `not_in_channel`: `unreadable`). Each counts as expired, so
+`unanswered = received - answered - expired` holds exactly. Any other failure to read reactions (a
+rate limit that outlasts its retries, the network, a token without `reactions:read`) never stops
+the poll: new pings, replies and expiries are still published, the pings whose reactions were not
+read stay waiting and are read again next poll, and the log says why, once a poll.
 
 It serves these series at `http://127.0.0.1:<port>/metrics`, each labelled with the workspace, for
 Orchestra to scrape:
@@ -138,7 +143,9 @@ Orchestra to scrape:
   `slack_pings_expired_total`: what moves the stock. The share answered within 15 minutes is the
   promise;
 - `slack_ping_wait_seconds_total`: the answered waits added up. The mean wait is its rate divided
-  by the answered rate.
+  by the answered rate;
+- `slack_bridge_last_poll_timestamp_seconds`: when the last successful poll began (Unix seconds).
+  Its age is how stale the counts are; it is absent until the first poll succeeds.
 
 The counters never go down, including across a restart.
 
@@ -203,8 +210,11 @@ As with GitHub: on start, the bridge rebuilds the waiting pings and the counts f
 It then continues each counter from the store's last scraped value, if that is higher. Then it
 reads Slack again from where it left off. A poll that comes more than three rounds after the last
 good one publishes `bridge.gap` {workspace, from, to, recovered} and catches up. Pings missed in the
-gap are published with their Slack times. A restart measures its gap from the store's last scrape
-of the bridge, so it records a gap only when the `[[scrape]]` is configured.
+gap are published with their Slack times. A restart reads where it left off from the store: the
+value of `slack_bridge_last_poll_timestamp_seconds`, not the time of the last scrape, because
+Orchestra keeps scraping the bridge while Slack or the network is down. So a restart after an
+outage reads the outage's pings back and records the gap. It needs the `[[scrape]]`: without it, a
+restart reads from its last event on the bus and records no gap.
 
 ### Limits, plainly
 
@@ -219,7 +229,9 @@ of the bridge, so it records a gap only when the `[[scrape]]` is configured.
 - Messages without a member (old-style bot posts, webhooks) are not pings. `@here` and `@channel`
   are not pings either.
 - Search syntax: the default searches are `<@you>`, `<!subteam^group>`, `to:<@you>` and
-  `from:<@you>`, narrowed with `after:`. The fake reads them as described. Whether a real workspace
+  `from:<@you>`, narrowed with `after:` two days before the window. Slack reads `after:` by day
+  in your own time zone, which the bridge does not know; two days back holds in every zone, and
+  each match's own time makes the exact cut. The fake reads them as described. Whether a real workspace
   reads them the same way is what the contract test shows (below). `queries` replaces them if not.
 - Search indexing can lag. Each poll re-reads `overlap` (10 minutes), so a ping indexed late is
   still found.
