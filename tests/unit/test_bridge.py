@@ -159,3 +159,20 @@ def test_a_failed_poll_is_logged_and_the_next_round_tries_again(project, github,
     clock.t += 60
     b.round()
     assert len(published(project, "issue.opened")) == 2
+
+
+def test_an_outage_publishes_one_gap_once_it_is_over(project, github, clock, make_bridge):
+    b = make_bridge()
+    run_once(b)                                        # the last good poll, at T0
+    for _ in range(5):                                 # GitHub is down for five rounds, several minutes apart
+        clock.t += 240
+        github.fail_next = [(502, {})]
+        b.round()
+    assert published(project, "bridge.gap") == []
+    clock.t += 240
+    b.round()                                          # it answers again
+    clock.t += 60
+    b.round()
+    [gap] = published(project, "bridge.gap")
+    assert (gap["data"]["from"], gap["data"]["to"]) == ("2026-10-26T07:33:20Z", "2026-10-26T07:57:20Z")
+    assert gap["data"]["recovered"] is True

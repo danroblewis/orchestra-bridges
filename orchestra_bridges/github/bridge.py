@@ -12,9 +12,11 @@ or team is announced again.
 ``github:``): what it already published is never published again, the first-response counts are
 rebuilt from them, and it reads GitHub again from the later of its last event and its last
 measurement (the last poll), less ``overlap``; never further back than ``max_catchup``. A poll that
-starts more than three rounds after the last one (the laptop slept, the bridge was stopped) is a
-**gap**, recorded on the bus as ``bridge.gap`` {repository, from, to, recovered}: ``recovered`` is
-false when the gap was longer than ``max_catchup``, so some of it was not read.
+succeeds more than three rounds after the last good one (the laptop slept, the bridge was stopped,
+GitHub or the network was down for a while) closes a **gap**, recorded on the bus once, when the
+poll has succeeded, as ``bridge.gap`` {repository, from, to, recovered}: from the last good poll to
+this one; ``recovered`` is false when the gap was longer than ``max_catchup``, so some of it was
+not read. Failed polls in between publish nothing.
 
 The bridge itself is the machine ``bridges.github``; it announces itself when it starts and its
 measurements carry ``machine="bridges.github"``."""
@@ -100,24 +102,29 @@ class Bridge:
             self.events.publish("orchestra.machine.started", about, source=actor.source, time=when, id=aid)
             self.seen.add(aid)
 
-    def _window(self, repo: str, now: float) -> float:
-        """Where this poll reads from; records a gap when the last poll was too long ago."""
+    def _window(self, repo: str, now: float) -> tuple[float, dict | None]:
+        """Where this poll reads from, and the gap it closes when the last good poll was too long
+        ago (published only once the poll succeeds)."""
         start = self.since[repo]
         last = self.last_ok.get(repo)
         floor = now - self.config.max_catchup
+        gap = None
         if last and now - last > GAP_ROUNDS * self.config.every:
-            recovered = start >= floor
-            self.events.publish("bridge.gap", {"repository": repo, "from": poll.iso(last), "to": poll.iso(now),
-                                               "recovered": recovered}, source=MACHINE)
-            log(f"{repo}: gap of {round(now - last)} s since the last poll"
-                + ("" if recovered else f"; only the last {round(self.config.max_catchup)} s are read"))
-        return max(start, floor)
+            gap = {"repository": repo, "from": poll.iso(last), "to": poll.iso(now), "recovered": start >= floor}
+        return max(start, floor), gap
+
+    def _gap(self, gap: dict, seconds: float) -> None:
+        self.events.publish("bridge.gap", gap, source=MACHINE)
+        log(f"{gap['repository']}: gap of {round(seconds)} s since the last good poll"
+            + ("" if gap["recovered"] else f"; only the last {round(self.config.max_catchup)} s were read"))
 
     def poll(self, repo: str) -> int:
         """Read ``repo`` once and publish what is new; how many events."""
         now = self.clock()
-        start = self._window(repo, now)
+        start, gap = self._window(repo, now)
         found = poll.since(self.api, repo, start)
+        if gap:
+            self._gap(gap, now - self.last_ok[repo])
         new = [s for s in found if s.id not in self.seen]
         responses = self.responses[repo]
         for s in new:
