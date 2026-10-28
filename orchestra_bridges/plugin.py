@@ -1,12 +1,12 @@
 """The bridges as an Orchestra plugin (``orchestra/plugins.py``): for each bridge configured in the
-project's ``orchestra.toml`` (``[bridges.github]``, ``[bridges.github_prs]``, ``[bridges.jira]`` and
-any second Jira site, ``[bridges.jira_<name>]``), the process
+project's ``orchestra.toml`` (``[bridges.github]``, ``[bridges.github_prs]``, ``[bridges.slack]``,
+``[bridges.jira]`` and any second Jira site, ``[bridges.jira_<name>]``), the process
 ``orchestra run`` keeps running (named ``bridges.<system>`` there and in its log's name) and a
 placeholder for the machine it is, so the Machines page lists it before its first event (it is a
 machine by the events it publishes, not by this declaration). The people it publishes for are known
 only once seen.
 
-For the pull-request and Jira bridges it also declares the instrument that stores what each
+For the pull-request, Slack and Jira bridges it also declares the instrument that stores what each
 measures: a scrape of its ``/metrics`` (the section's ``host`` and ``port``), which Orchestra runs as
 ``bridges.<section>`` and whose points it labels ``instrument="bridges.<section>"``. The bridge
 reads its last good poll back by that label when it restarts. A project's own ``[[scrape]]`` of the
@@ -25,8 +25,8 @@ from orchestra.plugins import Declared, Plugin
 
 from .config import JIRA_PORT, jira_sections, section
 
-SYSTEMS = ("github", "github_prs")
-SCRAPED = {"github_prs": 9466, "jira": JIRA_PORT}   # the bridges that serve /metrics, and their default port
+SYSTEMS = ("github", "github_prs", "slack")
+SCRAPED = {"github_prs": 9466, "slack": 9465, "jira": JIRA_PORT}   # the bridges that serve /metrics, and their default port
 SCRAPE_EVERY_S = 30.0
 
 

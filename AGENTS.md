@@ -11,16 +11,17 @@ broken without updating the spec and saying so in the commit.
    every bridge.
 2. **Read only.** A bridge never writes to the system it reads: no comments, labels or reactions.
    Speaking into another system is a separate proposal (the outbox).
-3. **The token stays in memory.** A bridge takes credentials from the environment or the owner's
-   CLI login at start. It never writes, logs or publishes them, and sends them only to the
-   configured API host.
+3. **The token stays in memory.** A bridge takes credentials at start from the environment, a
+   token file outside the repository readable only by its owner (`secret.py`), or the owner's CLI
+   login. It never writes, logs or publishes them, and sends them only to the configured API host.
 4. **No state of its own.** What a bridge knows comes from its own events on the bus and its own
    series in the metrics store, rebuilt at start. Ids are the system's own, so re-reading never
    duplicates.
 5. **Through Orchestra's library only.** Events go through `orchestra.events.Events` and metrics
-   through `orchestra.metrics`. Processes and machines are declared through `orchestra.plugins` and
-   `orchestra.launcher.Process`. Nothing here imports Orchestra's web app, model or host, and
-   nothing in Orchestra knows a bridge (Orchestra's rule 1).
+   through `orchestra.metrics`. Processes, placeholder machines and instruments are declared through
+   `orchestra.plugins`, `orchestra.launcher.Process` and `orchestra.collect.spec.Collector`. Nothing
+   here imports Orchestra's web app, model or host, and nothing in Orchestra knows a bridge
+   (Orchestra's rule 1).
 6. **Sources are actors.** An event's source is the person or bot who acted (`identity.py`), and
    its subject is the item. A system's own doing has the bridge's machine as its source.
 7. **Catch up, never assume continuity.** After a gap, a bridge reads back to where it left off

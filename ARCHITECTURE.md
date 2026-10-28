@@ -5,17 +5,14 @@ for two readers: the owner, who runs it on a laptop that sleeps, and engineers n
 `SPEC.md` is the design and `AGENTS.md` lists the rules. This document links them to the code,
 which was checked statement by statement on 2026-10-27, and draws the moving parts. It was
 brought up to date the same day with Orchestra's instruments (Orchestra `8344264c`: collectors and
-scrapes are instruments, not machines) and the branch commit that follows them.
+scrapes are instruments, not machines), and again when the pull-request, Jira and Slack bridges
+were merged into `main`.
 
 Throughout, every part is marked by status:
 
-- **Built (main)**: on `main`, tested.
-- **Branch (`slack-bridge`)**: built and tested on the branch `slack-bridge` (commit `aae18aa`,
-  not merged; `45fb844` is the last one pushed). It is not on `main` yet.
-- **Branch (`pr-tracking`)**: the GitHub pull-request bridge (§12), built and tested on the branch
-  `pr-tracking`, not merged.
-- **Branch (`jira-bridge`)**: the Jira bridge (§13), built and tested on the branch `jira-bridge`,
-  not merged.
+- **Built (main)**: on `main`, tested. Every bridge in this document is: GitHub issues (§5), the
+  Slack pings bridge (§7, merged from `slack-bridge`), GitHub pull requests (§12, merged from
+  `pr-tracking`) and Jira (§13, merged from `jira-bridge`).
 - **Proposed**: designed in Orchestra's `docs/proposals/event-sources.md`, not built.
 
 ## Contents
@@ -26,13 +23,13 @@ Throughout, every part is marked by status:
 4. [How it plugs into Orchestra](#4-how-it-plugs-into-orchestra)
 5. [The GitHub issues bridge (main)](#5-the-github-issues-bridge-main)
 6. [Counted traffic: the RabbitMQ preset and rig (main)](#6-counted-traffic-the-rabbitmq-preset-and-rig-main)
-7. [The Slack pings bridge (branch `slack-bridge`)](#7-the-slack-pings-bridge-branch-slack-bridge)
+7. [The Slack pings bridge](#7-the-slack-pings-bridge)
 8. [Contracts](#8-contracts)
 9. [Add a new bridge](#9-add-a-new-bridge)
 10. [Proposed, not built](#10-proposed-not-built)
 11. [Where the docs and the code disagree](#11-where-the-docs-and-the-code-disagree)
-12. [The GitHub pull-request bridge (branch `pr-tracking`)](#12-the-github-pull-request-bridge-branch-pr-tracking)
-13. [The Jira bridge (branch `jira-bridge`)](#13-the-jira-bridge-branch-jira-bridge)
+12. [The GitHub pull-request bridge](#12-the-github-pull-request-bridge)
+13. [The Jira bridge](#13-the-jira-bridge)
 
 ---
 
@@ -47,8 +44,8 @@ companies' message brokers. This package brings that work in, in three ways:
 
 | What we care about | How it arrives | Where |
 |---|---|---|
-| **Other systems' activity as machines and events.** An issue opened, a comment, a Slack ping and its answer | A **bridge** polls the system and publishes real CloudEvents on Orchestra's bus. The source is the actor and the subject is the item | `orchestra_bridges/github/` (main), `orchestra_bridges/slack/` (branch) |
-| **People as machines, with names and teams** | Each actor becomes an event `source` (`person.<key>`, `bot.<key>`). The bridge announces each one with `orchestra.machine.started`, giving the name and team from the owner's identity map | `identity.py` (main), `announce.py` (branch) |
+| **Other systems' activity as machines and events.** An issue opened, a comment, a Slack ping and its answer | A **bridge** polls the system and publishes real CloudEvents on Orchestra's bus. The source is the actor and the subject is the item | `orchestra_bridges/github/`, `github_prs/`, `jira/`, `slack/` |
+| **People as machines, with names and teams** | Each actor becomes an event `source` (`person.<key>`, `bot.<key>`). The bridge announces each one with `orchestra.machine.started`, giving the name and team from the owner's identity map | `identity.py`, `announce.py` |
 | **Counted traffic.** What producers put into a broker and consumers took out, without reading a message | A **preset** of series definitions that Orchestra's `[[sources]]` reads from a Prometheus-compatible store. Nothing is published on the bus | `orchestra_bridges/rabbitmq/` (main) |
 
 A bridge is a **machine outside Orchestra** (Orchestra's rule 1: the core knows no tickets or
@@ -65,8 +62,7 @@ Every bridge holds to the rules in `AGENTS.md`:
 4. **No state of its own.** What it knows comes from its own events on the bus and its own series
    in the store, rebuilt at start.
 5. **Through Orchestra's library only.** It uses `orchestra.events`, `orchestra.metrics`,
-   `orchestra.plugins`, `orchestra.launcher.Process` and, on the branch,
-   `orchestra.collect.spec.Collector`.
+   `orchestra.plugins`, `orchestra.launcher.Process` and `orchestra.collect.spec.Collector`.
 6. **Sources are actors.** The system's own doing has the bridge's machine as source.
 7. **Catch up, never assume continuity.** After a gap it reads back to where it left off and
    records the gap.
@@ -75,16 +71,17 @@ Every bridge holds to the rules in `AGENTS.md`:
 
 | Piece | Status | Code |
 |---|---|---|
-| Plugin declaration (processes, machines, instruments) | Built (main): GitHub only, no instruments. Branch: GitHub and Slack, and the scrape of the Slack bridge's `/metrics` | `plugin.py` |
-| Config parsing (`[bridges]`, `[bridges.github]`) | Built (main). Branch adds `[bridges.slack]` | `config.py` |
-| Identity map and actors | Built (main). Branch adds Slack's namespaced sources | `identity.py` |
-| Shared announcer | Branch only. On main this logic is inside `github/bridge.py` | `announce.py` |
+| Plugin declaration (processes, machines, instruments) | Built (main): every configured bridge, and the scrape of each `/metrics` (pull requests, Jira, Slack) | `plugin.py` |
+| Config parsing (`[bridges]`, `[bridges.github]`, `[bridges.github_prs]`, `[bridges.jira]`, `[bridges.jira_<name>]`, `[bridges.slack]`) | Built (main) | `config.py` |
+| Identity map and actors, with namespaced strangers (`person.jira.<login>`, `person.slack.<handle>`) | Built (main) | `identity.py` |
+| Shared announcer | Built (main) | `announce.py` |
+| Shared `/metrics` server | Built (main) | `serve.py` |
+| Shared token reading (environment, or a `chmod 600` file outside the repository) | Built (main): Jira and Slack | `secret.py` |
 | GitHub issues bridge | Built (main) | `github/` |
-| GitHub pull-request bridge, its `/metrics` and the instrument the plugin declares | Built (main, merged from `pr-tracking`) | `github_prs/`, `serve.py`, `announce.py` |
-| Jira bridge (Data Center first, and Cloud), its `/metrics`, its instrument, a second site | Branch (`jira-bridge`) | `jira/`, `secret.py` |
-| Shared token reading (environment, or a `chmod 600` file outside the repository) | Branch (`jira-bridge`); the Slack branch has the same rules in `slack/token.py` | `secret.py` |
+| GitHub pull-request bridge, its `/metrics` and the instrument the plugin declares | Built (main, merged from `pr-tracking`) | `github_prs/` |
+| Jira bridge (Data Center first, and Cloud), its `/metrics`, its instrument, a second site | Built (main, merged from `jira-bridge`) | `jira/` |
+| Slack pings bridge, its `/metrics` and its instrument | Built (main, merged from `slack-bridge`) | `slack/` |
 | RabbitMQ preset, simulated fleet, Docker rig | Built (main). Orchestra's side (`orchestra/sources/traffic.py`, `preset.py`) is built in Orchestra | `rabbitmq/` |
-| Slack pings bridge | Branch only | `slack/` |
 | Confluence, Google Drive bridges; Bluesky stand-in; Pub/Sub preset; webhooks; team-only mode; write-back (the outbox) | Proposed | none |
 
 ## 3. The parts
@@ -92,14 +89,14 @@ Every bridge holds to the rules in `AGENTS.md`:
 ```mermaid
 flowchart LR
     subgraph owner["Owner's files"]
-        toml["orchestra.toml<br/>[bridges], [bridges.github],<br/>[bridges.slack]*, [[sources]]"]
+        toml["orchestra.toml<br/>[bridges], [bridges.github],<br/>[bridges.slack], [[sources]]"]
         people["people.toml<br/>(identity map)"]
-        tok["~/.config/orchestra-bridges/slack-token*<br/>or gh login / GH_TOKEN"]
+        tok["~/.config/orchestra-bridges/slack-token<br/>(secret.py) or gh login / GH_TOKEN"]
     end
 
     subgraph ext["Other systems"]
         gh["GitHub REST API"]
-        sl["Slack Web API*"]
+        sl["Slack Web API"]
         rmq["RabbitMQ<br/>rabbitmq_prometheus"]
         vm["VictoriaMetrics<br/>(scrapes RabbitMQ)"]
     end
@@ -109,9 +106,9 @@ flowchart LR
         main["__main__.py<br/>python -m orchestra_bridges"]
         cfg["config.py"]
         ident["identity.py"]
-        ann["announce.py*"]
+        ann["announce.py"]
         ghb["github/<br/>api, poll, translate,<br/>responses, measures, bridge"]
-        slb["slack/*<br/>token, api, search, pings,<br/>waits, serve, bridge"]
+        slb["slack/<br/>api, search, pings,<br/>waits, bridge"]
         preset["rabbitmq/preset.toml"]
         fleet["rabbitmq/fleet.py + rig/"]
     end
@@ -120,14 +117,14 @@ flowchart LR
         launcher["launcher<br/>(orchestra run)"]
         bus[("event bus<br/>orchestra.#lt;key#gt;.events")]
         store[("metrics store")]
-        scrape["instrument bridges.slack*<br/>(scrape the plugin declares)"]
+        scrape["instrument bridges.slack<br/>(scrape the plugin declares)"]
         sources["sources: catalogue,<br/>preset, traffic"]
         ui["Machines and<br/>Instruments pages, map"]
         sd["SD discovery<br/>(the model)"]
     end
 
     plugin -- "Plugin(processes, machines)" --> launcher
-    plugin -- "Plugin(collectors)*" --> scrape
+    plugin -- "Plugin(collectors)" --> scrape
     launcher -- "starts, restarts" --> main
     main --> cfg
     cfg -. reads .-> toml
@@ -158,7 +155,9 @@ flowchart LR
     bus --> sd
 ```
 
-`*` marks a part that exists only on the branch `slack-bridge`.
+The diagram draws the GitHub issues and Slack bridges; the pull-request (§12) and Jira (§13)
+bridges plug in the same way as Slack's, each with its own instrument (`bridges.github_prs`,
+`bridges.jira`), and share `serve.py`, `announce.py` and, for Jira, `secret.py`.
 
 Two kinds of observation enter Orchestra, and they never mix (Orchestra's rule 3: "Counted traffic
 is never turned into events"):
@@ -182,13 +181,13 @@ bridges = "orchestra_bridges.plugin:plugin"
 
 Orchestra calls `plugin(project)` and gets an `orchestra.plugins.Plugin`:
 
-| Field | On main | On the branch |
-|---|---|---|
-| `name` | `"bridges"` | `"bridges"` |
-| `machines` | `[Declared("bridges.github", "program", "continuous")]` if `[bridges.github]` exists | one `Declared("bridges.<s>", "program", "continuous")` per configured system in `SYSTEMS = ("github", "slack")` |
-| `processes` | `[Process("github", [sys.executable, "-m", "orchestra_bridges", "github"], stop_grace_s=10)]` if configured | one such `Process(s, ...)` per configured system |
-| `collectors` | none | `[Collector.scrape("slack", "http://<host>:<port>/metrics", every_s=30)]` if `[bridges.slack]` exists and its `port` is fixed (not 0); a wildcard host is scraped on loopback (§4.3) |
-| pages, router, scripts | none | none |
+| Field | Value |
+|---|---|
+| `name` | `"bridges"` |
+| `machines` | one `Declared("bridges.<s>", "program", "continuous")` per configured section: `SYSTEMS = ("github", "github_prs", "slack")`, then `jira` and any `jira_<name>` |
+| `processes` | one `Process(s, [sys.executable, "-m", "orchestra_bridges", s], stop_grace_s=10)` per configured section |
+| `collectors` | one `Collector.scrape(s, "http://<host>:<port>/metrics", every_s=30)` per configured bridge that serves `/metrics` (`SCRAPED`: `github_prs` 9466, `slack` 9465, `jira` 9467, and any `jira_<name>`) whose `port` is fixed (not 0); a wildcard host is scraped on loopback (§4.3) |
+| pages, router, scripts | none |
 
 The plugin has no pages. What a bridge shows is Orchestra's own Machines and Instruments pages,
 map and series. A `Declared` machine is a placeholder: it only fills in a machine nobody has seen
@@ -217,12 +216,13 @@ poll once by hand:
 ORCHESTRA_REPO=/path/to/project uv run python -m orchestra_bridges github --once
 ```
 
-### 4.3 The instrument that stores the Slack bridge's counts (branch)
+### 4.3 The instruments that store what the bridges serve (Slack's as the example)
 
 The GitHub bridge writes its points itself through `orchestra.metrics`. The Slack bridge serves its
 counts at `/metrics` instead (§7.6), and an **instrument** stores them. Since Orchestra `8344264c`
-a plugin can declare instruments (`Plugin.collectors`, Orchestra's PLUGINS.md §4.7), so the
-branch's `plugin.py` declares the scrape itself whenever `[bridges.slack]` exists:
+a plugin can declare instruments (`Plugin.collectors`, Orchestra's PLUGINS.md §4.7), so
+`plugin.py` declares the scrape itself whenever `[bridges.slack]` exists (and likewise for the
+pull-request and Jira bridges):
 
 ```python
 Collector.scrape("slack", "http://127.0.0.1:9465/metrics", every_s=30)   # host and port from [bridges.slack]
@@ -480,7 +480,7 @@ github = "vscode-triage-bot"
 | Deleted account (no login) | `person.ghost` |
 
 Sources are lowercased. Any character other than `a-z 0-9 . _ -` becomes `-`. Every key other than
-`name`, `team` and `bot` in an entry names a system (`github`, and `slack` on the branch). Through
+`name`, `team` and `bot` in an entry names a system (`github`, `jira`, `slack`). Through
 those keys, the map joins one person's accounts into one machine. People are shown by name, not as
 pseudonyms: this follows the owner's answer 6 and replaces the proposal's salted-hash default.
 
@@ -676,12 +676,10 @@ newest 30 seconds from range queries.
 
 ---
 
-## 7. The Slack pings bridge (branch `slack-bridge`)
+## 7. The Slack pings bridge
 
-> **On branch `slack-bridge` (aae18aa; 45fb844 pushed), not merged.** Nothing in this section is on `main`.
-> It was read with `git show slack-bridge:<path>`. The branch also changes shared modules
-> (`identity.py`, `config.py`, `plugin.py`, `__main__.py`) and adds `announce.py`, which the
-> GitHub bridge uses there too.
+> **Built (main)**, merged from `slack-bridge` (`aae18aa`). It uses the shared `secret.py`,
+> `serve.py`, `announce.py` and `identity.py` like the other bridges.
 
 The need comes from the proposal: "someone will @ ping me on Slack and be mad if I don't respond
 within 15 minutes". The bridge measures that promise as a stock.
@@ -690,14 +688,14 @@ within 15 minutes". The bridge measures that promise as a stock.
 
 | Module | Responsibility |
 |---|---|
-| `slack/token.py` | Finds the user token (§7.8) |
 | `slack/api.py` | Read-only Web API client for `auth.test`, `search.messages` and `reactions.list`. Same-origin token. `Retry-After` handling bounded by one poll |
 | `slack/search.py` | The searches, newest first, until a match is older than the window. Reads a match's text in memory for mentions, then drops it |
 | `slack/pings.py` | What a ping is. Event types, ids and subjects |
 | `slack/waits.py` | The waiting pings and the counters, rendered as Prometheus text |
-| `slack/serve.py` | `/metrics` HTTP server for a `[[scrape]]` |
 | `slack/bridge.py` | Identify, resume, read, publish, record gaps, the loop |
-| `announce.py` | The shared announcer, also used by the GitHub bridge on this branch |
+| `secret.py` | Finds the user token (§7.9), shared with the Jira bridge |
+| `serve.py` | `/metrics` HTTP server for the instrument, shared |
+| `announce.py` | The shared announcer |
 
 ### 7.2 Pings
 
@@ -865,7 +863,7 @@ answer whose `within` was `unknown` is replayed as unknown.
 
 ### 7.9 Token rules
 
-`token.py` looks for the token in this order:
+`secret.read_token("SLACK_USER_TOKEN", "slack-token", …)` looks for the token in this order:
 
 1. `SLACK_USER_TOKEN`;
 2. the file named by `SLACK_USER_TOKEN_FILE`;
@@ -920,15 +918,15 @@ events carry the system's own `id` and `time`.
 | `github.issue.labelled` | main | who added the label | same | `github:<repo>:event:<id>` | `repository`, `issue`, `login`, `label` (name) |
 | `github.issue.closed` | main | who closed it | same | `github:<repo>:event:<id>` | `repository`, `issue`, `login`, `reason` (`state_reason`) |
 | `github.issue.reopened` | main | who reopened it | same | `github:<repo>:event:<id>` | `repository`, `issue`, `login` |
-| `bridge.gap` | main (GitHub), branch (Slack) | `bridges.github` / `bridges.slack` | none | fresh | GitHub: `repository`, `from`, `to`, `recovered`. Slack: `workspace`, `from`, `to`, `recovered` |
+| `bridge.gap` | main (GitHub, Slack) | `bridges.github` / `bridges.slack` | none | fresh | GitHub: `repository`, `from`, `to`, `recovered`. Slack: `workspace`, `from`, `to`, `recovered` |
 | `orchestra.machine.started` (actor) | main | the actor | none | `<system>:announce:<source>:<hash12>:<time>` | `kind` (`person`/`program`), `mode` (`ad hoc`), `package` (`bridges`), `<system>` (login), `bot`, `name`?, `team`? |
 | `orchestra.machine.started` (bridge) | main | `bridges.<system>` | none | fresh | `mode` (`continuous`), `kind` (`program`), `package`, `listens_for` (`[]`), `log`, `system`, `every_s`. GitHub adds `repos`. Slack adds `workspace` and `answered` |
-| `slack.ping.received` | branch | the pinger | `<workspace>/<channel>/<thread ts>` | `slack:<ws>:ping:<ch>:<ts>` | `workspace`, `channel`, `channel_type` (`im`/`mpim`/`group`/`channel`), `ts`, `thread_ts`, `user` (member id), `kind` (`dm`/`mention`/`group`) |
-| `slack.ping.answered` | branch | the owner | same | `slack:<ws>:answered:<ch>:<ping ts>` | `workspace`, `channel`, `ts`, `wait_seconds`, `within`, `rule` (`reply`/`reaction`). Reply adds `reply_ts`. Reaction adds `reaction`, `observed: true`, `not_before` |
-| `slack.ping.expired` | branch | `bridges.slack` | same | `slack:<ws>:expired:<ch>:<ping ts>` | `workspace`, `channel`, `ts`, `reason` (`expired`), `wait_seconds` |
-| `github.pr.*` (13 types) | branch `pr-tracking` | who acted | `<owner>/<repo>#<n>` | `github:<repo>:pr:<n>:<kind>:<GitHub id>` | §12.3 |
-| `jira.issue.created`, `.assigned`, `.transitioned`, `.updated`, `jira.comment.added` | branch `jira-bridge` | who acted (`person.<key>`, `person.jira.<account>`), or `bridges.jira` for Jira's own change | the issue key, `ABC-12` | `jira:<site>:issue:<issue id>:<created, history:<id>:<kind>, comment:<id>>` | §13.2 |
-| `bridge.gap` (Jira) | branch `jira-bridge` | `bridges.jira` (or `bridges.jira_<name>`) | none | fresh | `site`, `from`, `to`, `recovered` |
+| `slack.ping.received` | main | the pinger | `<workspace>/<channel>/<thread ts>` | `slack:<ws>:ping:<ch>:<ts>` | `workspace`, `channel`, `channel_type` (`im`/`mpim`/`group`/`channel`), `ts`, `thread_ts`, `user` (member id), `kind` (`dm`/`mention`/`group`) |
+| `slack.ping.answered` | main | the owner | same | `slack:<ws>:answered:<ch>:<ping ts>` | `workspace`, `channel`, `ts`, `wait_seconds`, `within`, `rule` (`reply`/`reaction`). Reply adds `reply_ts`. Reaction adds `reaction`, `observed: true`, `not_before` |
+| `slack.ping.expired` | main | `bridges.slack` | same | `slack:<ws>:expired:<ch>:<ping ts>` | `workspace`, `channel`, `ts`, `reason` (`expired`), `wait_seconds` |
+| `github.pr.*` (13 types) | main | who acted | `<owner>/<repo>#<n>` | `github:<repo>:pr:<n>:<kind>:<GitHub id>` | §12.3 |
+| `jira.issue.created`, `.assigned`, `.transitioned`, `.updated`, `jira.comment.added` | main | who acted (`person.<key>`, `person.jira.<account>`), or `bridges.jira` for Jira's own change | the issue key, `ABC-12` | `jira:<site>:issue:<issue id>:<created, history:<id>:<kind>, comment:<id>>` | §13.2 |
+| `bridge.gap` (Jira) | main | `bridges.jira` (or `bridges.jira_<name>`) | none | fresh | `site`, `from`, `to`, `recovered` |
 
 Events published before 2026-10-27 have unprefixed types (`issue.opened`, …). They are still read
 back on a restart.
@@ -938,9 +936,9 @@ back on a restart.
 | Series | Status | Written how | Labels |
 |---|---|---|---|
 | `github_issues_unanswered`, `github_issues_unanswered_oldest_seconds`, `github_issues_opened_total`, `github_issues_answered_total{within}`, `github_issues_closed_unanswered_total`, `github_issue_first_response_seconds_total` | main | Written by the bridge (`orchestra.metrics`) at each change and each poll | `machine="bridges.github"`, `repo`, `project` |
-| `slack_pings_unanswered`, `slack_pings_oldest_unanswered_seconds`, `slack_pings_received_total`, `slack_pings_answered_total{within}`, `slack_pings_expired_total`, `slack_ping_wait_seconds_total`, `slack_bridge_last_poll_timestamp_seconds` | branch | Served at `/metrics` and stored by the instrument `bridges.slack` the plugin declares | `workspace`, plus `instrument="bridges.slack"` and `project` from the scrape (`machine="bridges.slack"` before 2026-10-27) |
-| `github_prs_open`, `github_prs_awaiting_review`, `github_prs_awaiting_changes`, `github_prs_approved`, `github_prs_awaiting_label_result`, `github_prs_checks_failing`, `github_prs_review_request_oldest_seconds`, `github_prs_bridge_last_poll_timestamp_seconds` | branch `pr-tracking` | Served at `/metrics` (levels read from GitHub each round) and stored by the instrument `bridges.github_prs` the plugin declares | `repo`, plus `instrument="bridges.github_prs"` and `project` from the scrape |
-| `jira_issues{jira_project, category}`, `jira_issues_mine_not_started`, `jira_comments_unanswered`, `jira_comment_unanswered_oldest_seconds` (each `{jira_project}`), `jira_bridge_last_poll_timestamp_seconds` | branch `jira-bridge` | Served at `/metrics` (read from Jira each round; `done` every `done_every`) and stored by the instrument `bridges.jira` the plugin declares | `jira_project`, `category`, plus `instrument` and `project` from the scrape |
+| `slack_pings_unanswered`, `slack_pings_oldest_unanswered_seconds`, `slack_pings_received_total`, `slack_pings_answered_total{within}`, `slack_pings_expired_total`, `slack_ping_wait_seconds_total`, `slack_bridge_last_poll_timestamp_seconds` | main | Served at `/metrics` and stored by the instrument `bridges.slack` the plugin declares | `workspace`, plus `instrument="bridges.slack"` and `project` from the scrape (`machine="bridges.slack"` before 2026-10-27) |
+| `github_prs_open`, `github_prs_awaiting_review`, `github_prs_awaiting_changes`, `github_prs_approved`, `github_prs_awaiting_label_result`, `github_prs_checks_failing`, `github_prs_review_request_oldest_seconds`, `github_prs_bridge_last_poll_timestamp_seconds` | main | Served at `/metrics` (levels read from GitHub each round) and stored by the instrument `bridges.github_prs` the plugin declares | `repo`, plus `instrument="bridges.github_prs"` and `project` from the scrape |
+| `jira_issues{jira_project, category}`, `jira_issues_mine_not_started`, `jira_comments_unanswered`, `jira_comment_unanswered_oldest_seconds` (each `{jira_project}`), `jira_bridge_last_poll_timestamp_seconds` | main | Served at `/metrics` (read from Jira each round; `done` every `done_every`) and stored by the instrument `bridges.jira` the plugin declares | `jira_project`, `category`, plus `instrument` and `project` from the scrape |
 | `rabbit:rabbitmq_published_total`, `rabbit:rabbitmq_acked_total`, `rabbit:rabbitmq_backlog`, `rabbit:rabbitmq_consumers` (prefix = the source's) | main | Read by Orchestra's sources from the store that scrapes RabbitMQ. Nothing is written | `vhost`, `exchange`, `queue`, `consumer` → `machine = rabbit.<consumer>`, with traffic metadata in provenance |
 
 ### 8.3 Configuration keys
@@ -958,7 +956,7 @@ only when its section exists.
 | `overlap` | `10m` | Re-read before the last poll. Also the delay before an event is counted |
 | `bots_answer` | `false` | Whether a bot's comment or close is a first response |
 | `api` | `https://api.github.com` | GitHub Enterprise, or a fake |
-| `[bridges.slack] every`, `lookback`, `max_catchup`, `overlap` | `60s`, `1h`, `48h`, `10m` | **Branch.** As for GitHub; `every` at least 5 s |
+| `[bridges.slack] every`, `lookback`, `max_catchup`, `overlap` | `60s`, `1h`, `48h`, `10m` | As for GitHub; `every` at least 5 s |
 | `answered` | `["reaction"]` | `reaction`, `reply`, or both; never empty |
 | `reactions` | `["white_check_mark", "heavy_check_mark"]` | Colons are stripped |
 | `groups` | `[]` | User group ids, `S…` |
@@ -968,14 +966,14 @@ only when its section exists.
 | `token_file` | `~/.config/orchestra-bridges/slack-token` | Never the token itself. A `token` key is refused |
 | `queries` | the defaults (§7.2) | Replaces the ping searches; `{me}` is the owner's member id |
 | `api` | `https://slack.com/api` | Only `https` on slack.com, or loopback |
-| `[bridges.github_prs] repos` | none: required | **Branch `pr-tracking`.** `owner/name` strings |
+| `[bridges.github_prs] repos` | none: required | `owner/name` strings |
 | `branches`, `labels` | `[]`, `[]` | Follow pull requests whose branch matches a glob, or that carry a label; with neither, all |
 | `every`, `lookback`, `max_catchup`, `overlap` | `60s`, `1h`, `48h`, `10m` | As for issues |
 | `checks` | `true` | Read the head's check runs and statuses each round |
 | `host`, `port` | `127.0.0.1`, `9466` | Where `/metrics` listens and the plugin's instrument scrapes it. `port = 0`: any free port, no instrument |
 | `[bridges.github_prs.label_results]` | `{}` | A label (`SAIL`) and the labels that report its result; only the level `github_prs_awaiting_label_result` reads it |
 | `api` | `https://api.github.com` | As for issues. A `token` key is refused |
-| `[bridges.jira] api` | none: required | **Branch `jira-bridge`.** The Data Center base URL or a Cloud site; https, or loopback for a fake |
+| `[bridges.jira] api` | none: required | The Data Center base URL or a Cloud site; https, or loopback for a fake |
 | `deployment` | `datacenter` (`cloud` on `*.atlassian.net`) | `datacenter` or `cloud` |
 | `projects`, `jql` | one of the two, required | Project keys, or a JQL clause without `ORDER BY` |
 | `every`, `lookback`, `max_catchup`, `overlap` | `60s`, `1h`, `48h`, `10m` | As for GitHub |
@@ -985,17 +983,17 @@ only when its section exists.
 | `token_file`, `email` | `~/.config/orchestra-bridges/jira-token`, none | Never the token itself (a `token` key is refused). `email` is Cloud's only |
 | `host`, `port` | `127.0.0.1`, `9467` | `/metrics`, and the plugin's instrument. `port = 0`: no instrument |
 | `[bridges.jira_<name>]` | (none) | A second site: the same keys, `port` required |
-| `[[scrape]] name = "bridges.slack"` | (none) | **Branch.** Optional: replaces the plugin's instrument of that name, to scrape more often or elsewhere (§4.3) |
+| `[[scrape]] name = "bridges.slack"` | (none) | Optional: replaces the plugin's instrument of that name, to scrape more often or elsewhere (§4.3) |
 | `[[sources]] preset = ".../rabbitmq/preset.toml"`, `[sources.producers]` | (none) | Counted traffic (§6) |
 
 ### 8.4 Credentials
 
 | Bridge | Credential | Where from |
 |---|---|---|
-| GitHub issues (main) and pull requests (branch `pr-tracking`) | A token that can read the repositories. One is required, even for public repositories: the bridge exits 2 without one | `GH_TOKEN`/`GITHUB_TOKEN` (github.com) or `GH_ENTERPRISE_TOKEN`/`GITHUB_ENTERPRISE_TOKEN` (other hosts), else `gh auth token --hostname <host>` |
-| Slack (branch) | User token `xoxp-…` with `search:read` and `reactions:read` | `SLACK_USER_TOKEN`, else a `0600` file outside the repository (§7.9) |
-| Jira (branch `jira-bridge`) | Data Center: a personal access token, as `Bearer`. Cloud: an API token with the account's email, as Basic | `JIRA_API_TOKEN` (`JIRA_<NAME>_API_TOKEN` for a second site), else a `0600` file outside the repository (`JIRA_API_TOKEN_FILE`, `token_file`, `~/.config/orchestra-bridges/jira-token`). Cloud's email from `JIRA_EMAIL` or `email` |
-| RabbitMQ preset (main) | Whatever the store needs | Orchestra's `[[sources]] auth`, from an environment variable or a file outside the repository. The rig needs none |
+| GitHub issues and pull requests | A token that can read the repositories. One is required, even for public repositories: the bridge exits 2 without one | `GH_TOKEN`/`GITHUB_TOKEN` (github.com) or `GH_ENTERPRISE_TOKEN`/`GITHUB_ENTERPRISE_TOKEN` (other hosts), else `gh auth token --hostname <host>` |
+| Slack | User token `xoxp-…` with `search:read` and `reactions:read` | `SLACK_USER_TOKEN`, else a `0600` file outside the repository (`SLACK_USER_TOKEN_FILE`, `token_file`, `~/.config/orchestra-bridges/slack-token`; `secret.py`, §7.9) |
+| Jira | Data Center: a personal access token, as `Bearer`. Cloud: an API token with the account's email, as Basic | `JIRA_API_TOKEN` (`JIRA_<NAME>_API_TOKEN` for a second site), else a `0600` file outside the repository (`JIRA_API_TOKEN_FILE`, `token_file`, `~/.config/orchestra-bridges/jira-token`). Cloud's email from `JIRA_EMAIL` or `email` |
+| RabbitMQ preset | Whatever the store needs | Orchestra's `[[sources]] auth`, from an environment variable or a file outside the repository. The rig needs none |
 
 Every bridge reads its token once at start, keeps it in memory, and sends it only to the
 configured API origin.
@@ -1003,8 +1001,8 @@ configured API origin.
 ### 8.5 What it never does
 
 - **Never text.** No titles, bodies, comments, messages or document content in events, series,
-  logs, errors or files. Canary tests guard this for each bridge (`tests/unit/test_bridge.py` on
-  main; the Slack tests on the branch).
+  logs, errors or files. Canary tests guard this for each bridge (`tests/unit/test_bridge.py`,
+  `test_github_prs_bridge.py`, `test_jira_bridge.py`, `test_slack_bridge.py`).
 - **Never writes back.** No comments, labels or reactions, and nothing marked read. The only HTTP
   method used is GET. Speaking into another system is a separate proposal, the outbox.
 - **Never turns counts into events.** The preset publishes nothing.
@@ -1017,9 +1015,9 @@ configured API origin.
 
 ## 9. Add a new bridge
 
-Every bridge follows the same pattern. The GitHub bridge is the model on `main`. The Slack bridge
-on the branch shows the variant that serves its counts. Proposed next bridges: Jira, Confluence,
-Google Drive, and the Bluesky stand-in.
+Every bridge follows the same pattern. The GitHub issues bridge writes its points itself; the
+pull-request, Jira and Slack bridges show the variant that serves `/metrics` for an instrument.
+Proposed next bridges: Confluence, Google Drive, and the Bluesky stand-in.
 
 ### 9.1 The pattern
 
@@ -1057,24 +1055,25 @@ flowchart TB
    - ids `<system>:<scope>:<what>:<system's own id>`, stable across reads;
    - the system's time;
    - a subject naming the item, so hand-offs work.
-5. **Identity**: `People.actor(system, login, bot)`. On the branch, a new system passes
-   `namespaced=True`, so strangers are `person.<system>.<login>`. Add `<system> = "<account>"` to
+5. **Identity**: `People.actor(system, login, bot)`. A new system passes
+   `namespaced=True` (as Jira and Slack do), so strangers are `person.<system>.<login>`. Add `<system> = "<account>"` to
    the identity map's entries.
-6. **Announcements**: use `announce.Announcer(events, system, people)`, which is on the branch.
-   Call `actor()` before each actor's event and `reannounce()` at start. On `main`, the equivalent
-   logic is still inside `github/bridge.py`, so build on the branch or extract it first.
+6. **Announcements**: use `announce.Announcer(events, system, people)`. Call `actor()` before
+   each actor's event and `reannounce()` at start.
 7. **Counts**: a fold over events in time order, rebuilt from the bus at start, with counters that
    continue from the store (`continue_from`) and never go down. Choose one of two ways to report:
    - **write** points through `orchestra.metrics` (GitHub): true times, never before the
      watermark, re-asserted each poll;
-   - **serve** `/metrics` (Slack): declare its scrape in `plugin.py` (`Plugin.collectors`, §4.3),
+   - **serve** `/metrics` (`serve.MetricsServer`; pull requests, Jira, Slack): declare its scrape in
+     `plugin.py` (`SCRAPED`, §4.3),
      read the counts back by `instrument="bridges.<system>"`, and serve a
      `*_last_poll_timestamp_seconds` value for resume.
 8. **`bridge.py`**: `resume`, `announce`, `reannounce`, `_window` with `GAP_ROUNDS = 3`, `poll`,
    `round` (catch the API error), and `run(stop, once=)`. Use `MACHINE = "bridges.<system>"`.
-9. **`__main__.py`**: on the branch, add a builder to `BRIDGES`. On `main`, the argument parser
-   accepts only `github`.
-10. **`plugin.py`**: on the branch, add the system to `SYSTEMS`. That declares the process
+9. **`__main__.py`**: add a builder `(project, stop)` to `BRIDGES`. A token that is not a CLI
+   login comes from `secret.read_token`.
+10. **`plugin.py`**: add the system to `SYSTEMS` (and its default port to `SCRAPED` if it serves
+    `/metrics`). That declares the process
     `bridges.<system>` and a placeholder for the machine; a bridge that serves `/metrics` also
     declares its scrape there (`collectors`).
 11. **Tests**, per the AGENTS.md conventions:
@@ -1089,15 +1088,15 @@ flowchart TB
 
 ### 9.3 Shared modules
 
-| Module | On main | On the branch | Provides |
-|---|---|---|---|
-| `config.py` | yes | yes, with Slack added | `section()`, `people_file()`, per-bridge dataclasses and parsers |
-| `identity.py` | yes | yes, with `listed()` and `namespaced=` added | `People.load/actor/accounts`, `Actor.announcement(system)` |
-| `announce.py` | no | yes; `pr-tracking` has the same file | `Announcer.from_events/actor/reannounce`, `prefix(system)` |
-| `serve.py` | no | `slack/serve.py` on `slack-bridge`; `serve.py` (the same code) on `pr-tracking` | `MetricsServer`: `GET /metrics`, 503 until ready |
-| `plugin.py` | GitHub only | `SYSTEMS` tuple on both branches; `pr-tracking` adds `SCRAPED` and a shared `metrics_url` | Process, machine and instrument declarations |
-| `secret.py` | no | `jira-bridge` (the Slack branch has the same rules in `slack/token.py`) | `read_token(name, default_file, repo_root, token_file)`: the environment, else a private file outside the repository |
-| `__main__.py` | `github` only | `BRIDGES` registry on both branches | The process entry point |
+| Module | Used by | Provides |
+|---|---|---|
+| `config.py` | every bridge | `section()`, `people_file()`, `_names()`, per-bridge dataclasses and parsers |
+| `identity.py` | every bridge | `People.load/actor/accounts/listed`, `namespaced=`, `Actor.announcement(system)` |
+| `announce.py` | every bridge | `Announcer.from_events/actor/reannounce`, `prefix(system)` |
+| `serve.py` | pull requests, Jira, Slack | `MetricsServer`: `GET /metrics`, 503 until ready |
+| `plugin.py` | every bridge | `SYSTEMS`, `SCRAPED` and `metrics_url`: process, machine and instrument declarations |
+| `secret.py` | Jira, Slack | `read_token(name, default_file, repo_root, token_file)`: the environment, else a private file outside the repository |
+| `__main__.py` | every bridge | The `BRIDGES` registry (and `jira[_<name>]`): the process entry point |
 
 ---
 
@@ -1137,12 +1136,12 @@ above.
    does not include `association` for these three; issue events carry no author association.
 2. **README "Every `every` seconds it reads" (main).** `every` is the pause after a round
    (`stop.wait(every)`), not the period. Slack's README says the same and has the same gap.
-3. **Slack `bridge.py` docstring (branch).** It says "Only these [the searches] (and `auth.test`)
+3. **Slack `bridge.py` docstring.** It says "Only these [the searches] (and `auth.test`)
    fail a poll". `auth.test` is not called in a poll. It is called once in `run()` before
    `resume()`, retried each round until it succeeds.
 4. **Proposal vs the built Slack bridge.**
    - The proposal's §5 names two events and the buckets `5m|15m|60m|over`, with the reply as the
-     default answer. The branch adds `slack.ping.expired`, the bucket `unknown`, and the checkmark
+     default answer. The bridge adds `slack.ping.expired`, the bucket `unknown`, and the checkmark
      default, following the owner's answer 5.
    - The proposal's §4 sources (`work.person.7f3a`, `work.jira`) became `person.<key>` and
      `bridges.<system>`.
@@ -1152,12 +1151,12 @@ above.
    listens for, its kind, where its log is and which package it belongs to". Orchestra's SPEC and
    `web/machines.py` also read `name` and `group`/`team`, which this package relies on for people's
    names and teams.
-7. **On the branch, the gap and resume behaviour differs between the bridges** (from the start vs
-   the end of the last poll; stored counters vs the larger of stored and rebuilt). This is
-   intended and documented in the branch's SPEC §5. It is noted here because readers of the
+7. **The gap and resume behaviour differs between the GitHub issues and Slack bridges** (from the
+   start vs the end of the last poll; stored counters vs the larger of stored and rebuilt). This is
+   intended and documented in SPEC §4d. It is noted here because readers of the
    GitHub section may assume the two bridges behave the same.
 
-## 12. The GitHub pull-request bridge (branch `pr-tracking`)
+## 12. The GitHub pull-request bridge
 
 Goal G6 in Orchestra's `docs/roadmap/goals.md`: pull requests tracked to resolution. The owner's
 company drives CI/CD with labels on pull requests: the owner adds `SAIL` by hand, and the pipeline
@@ -1191,8 +1190,8 @@ whichever bridge saw them. Announcements of both use ids `github:announce:…`.
 | `github_prs/translate.py` | `Pull` (a pull request as listed now) and `Seen` records: type, stable id, GitHub's time, metadata-only data |
 | `github_prs/levels.py` | `PullState` per open followed pull request (verdicts, review requests, checks), the levels, and their Prometheus text |
 | `github_prs/bridge.py` | Resume, follow, read then publish, pushes, announce, gaps, `/metrics`, the loop |
-| `serve.py` | `MetricsServer` (the Slack branch's, shared) |
-| `announce.py` | `Announcer` (the Slack branch's file, unchanged) |
+| `serve.py` | `MetricsServer`, shared with the Jira and Slack bridges |
+| `announce.py` | `Announcer`, shared with every bridge |
 | `config.py` | `GitHubPRsConfig`, `github_prs()`, `follows(branch, labels)` |
 
 ### 12.3 Events
@@ -1349,7 +1348,7 @@ fake only, as is a review request (the sandbox has no second account to ask).
 - Followed pull requests are read every round whether or not anything changed, which is what costs
   requests (§12.4).
 
-## 13. The Jira bridge (branch `jira-bridge`)
+## 13. The Jira bridge
 
 Building block 4 of Orchestra's `docs/roadmap/story-placement.md`. It unlocks the Jira half of ten
 of the owner's 21 user stories (1, 2, 3, 6, 8, 10, 12, 14, 15, 20): a request filed or assigned to

@@ -6,7 +6,8 @@ else the file the bridge's ``token_file`` key names; else ``~/.config/orchestra-
 file must not be inside the repository (where it could be committed) and must be readable by its
 owner only (``chmod 600``), as ssh asks of a key. The token is never in orchestra.toml (each
 bridge's config refuses a ``token`` key), and it is read once at start and kept in memory only. The
-rules are the Slack bridge's (``slack/token.py`` on its branch), made general."""
+Jira bridge reads ``JIRA_API_TOKEN`` (``jira-token``), the Slack bridge ``SLACK_USER_TOKEN``
+(``slack-token``)."""
 
 from __future__ import annotations
 

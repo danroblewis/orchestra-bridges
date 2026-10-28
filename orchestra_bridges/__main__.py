@@ -1,4 +1,4 @@
-"""``python -m orchestra_bridges github|github_prs|jira[_<name>] [--once]``: run a bridge for the
+"""``python -m orchestra_bridges github|github_prs|slack|jira[_<name>] [--once]``: run a bridge for the
 project at ORCHESTRA_REPO (the launcher sets it), else the working directory, until SIGTERM or
 SIGINT."""
 
@@ -23,16 +23,18 @@ from .identity import IdentityError
 from .jira import bridge as jira
 from .jira.api import Jira, JiraError
 from .secret import TokenError, read_token
+from .slack import bridge as slack
+from .slack.api import Slack
 
 
-def _github(project):
+def _github(project, stop: threading.Event):
     conf = cfg.github(project.config.raw, project.repo_root)
     api = GitHub(gh_token(conf.api), conf.api)
     return github.Bridge(conf, api, Events.for_project(project, source=github.MACHINE),
                          ProjectStore(for_project(project), project.key))
 
 
-def _github_prs(project):
+def _github_prs(project, stop: threading.Event):
     conf = cfg.github_prs(project.config.raw, project.repo_root)
     api = GitHub(gh_token(conf.api), conf.api)
     return github_prs.Bridge(conf, api, Events.for_project(project, source=github_prs.MACHINE),
@@ -49,7 +51,16 @@ def _jira(project, name: str, stop: threading.Event):
                        ProjectStore(for_project(project), project.key))
 
 
-BRIDGES = {"github": (_github, github), "github_prs": (_github_prs, github_prs)}
+def _slack(project, stop: threading.Event):
+    """A Retry-After is waited out on ``stop`` (so SIGTERM ends it) and for no longer than a poll."""
+    conf = cfg.slack(project.config.raw, project.repo_root)
+    token = read_token("SLACK_USER_TOKEN", "slack-token", project.repo_root, conf.token_file)
+    api = Slack(token, conf.api, sleep=stop.wait, max_wait=conf.every)
+    return slack.Bridge(conf, api, Events.for_project(project, source=slack.MACHINE),
+                        ProjectStore(for_project(project), project.key))
+
+
+BRIDGES = {"github": (_github, github), "github_prs": (_github_prs, github_prs), "slack": (_slack, slack)}
 
 
 def _log(name: str, msg: str) -> None:
@@ -66,7 +77,7 @@ def main(argv: list[str] | None = None) -> int:
     stop = threading.Event()
     try:
         if args.bridge in BRIDGES:
-            bridge = BRIDGES[args.bridge][0](load_project())
+            bridge = BRIDGES[args.bridge][0](load_project(), stop)
         else:
             bridge = _jira(load_project(), args.bridge, stop)
     except (ConfigError, GitHubError, IdentityError, JiraError, TokenError) as e:

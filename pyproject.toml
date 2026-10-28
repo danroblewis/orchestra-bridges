@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "orchestra-bridges"
 version = "0.1.0"
-description = "Bridges for Orchestra: machines that poll systems which are buses in all but name (GitHub issues first) and publish what people did there as metadata-only events on a project's Orchestra bus."
+description = "Bridges for Orchestra: machines that poll systems which are buses in all but name (GitHub issues and pull requests, Jira, Slack pings) and publish what people did there as metadata-only events on a project's Orchestra bus."
 requires-python = ">=3.12"
 dependencies = ["orchestra"]
 
@@ -23,7 +23,7 @@ packages = ["orchestra_bridges"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests/unit", "tests/e2e", "tests/contract"]
-pythonpath = ["tests"]          # the tests import conftest and fake_github
+pythonpath = ["tests"]          # the tests import conftest and the fakes (fake_*.py)
 
 [tool.ruff]
 line-length = 120

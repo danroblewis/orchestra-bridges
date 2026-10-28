@@ -26,13 +26,14 @@ An event is published as soon as it is read, but counted only once it is older t
 each poll re-reads that much, so an event GitHub shows late (a comment stamped before a close
 that was already read) is still counted in time order, as a restart's rebuild counts it.
 
-The bridge itself is the machine ``bridges.github``; it announces itself when it starts and its
-measurements carry ``machine="bridges.github"``."""
+The bridge itself is the machine ``bridges.github``, by its events: it announces itself when it
+starts and publishes ``bridge.gap`` under that source. It writes its measurements itself
+(``measures.py``), labelled ``machine="bridges.github"``: provenance, and how it finds its own
+series again on restart. The label says nothing about which flows the bridge influences
+(Orchestra's rules 6 and 7)."""
 
 from __future__ import annotations
 
-import hashlib
-import json
 import os
 import sys
 import threading
@@ -43,8 +44,9 @@ from collections.abc import Callable
 from orchestra.events import Events, event_time
 from orchestra.metrics import MetricsStore
 
+from ..announce import Announcer
 from ..config import GitHubConfig
-from ..identity import Actor, People
+from ..identity import People
 from . import poll
 from .api import GitHub, GitHubError
 from .measures import Measures
@@ -53,7 +55,6 @@ from .translate import RANK, current, prefix
 
 MACHINE = "bridges.github"
 SYSTEM = "github"
-ANNOUNCED = "github:announce:"
 GAP_ROUNDS = 3
 
 
@@ -72,15 +73,14 @@ class Bridge:
         self.last_ok: dict[str, float] = {}            # repo -> when its last poll began
         self.since: dict[str, float] = {}              # repo -> where its next poll reads from
         self.pending: dict[str, list[tuple]] = {r: [] for r in config.repos}   # repo -> (t, rank, type, subject, source) not counted yet
-        self.announced: dict[str, dict] = {}           # source -> its last announcement on the bus
+        self.announcer = Announcer(events, SYSTEM, self.people)
 
     def resume(self) -> None:
         """Read back what this bridge published before, and where to read GitHub from."""
         evs, _ = self.events.after(0)
         own = [e for e in evs if str(e.get("id", "")).startswith("github:")]
         self.seen = {e["id"] for e in own}
-        self.announced = {e.get("source"): e.get("data") or {} for e in own
-                          if e["id"].startswith(ANNOUNCED) and e.get("type") == "orchestra.machine.started"}
+        self.announcer.from_events(own)
         self.responses = {r: Responses(self.config.bots_answer) for r in self.config.repos}
         latest: dict[str, float] = defaultdict(float)
         for repo in self.config.repos:
@@ -106,26 +106,11 @@ class Bridge:
             "log": os.environ.get("ORCHESTRA_MACHINE_LOG"), "system": SYSTEM, "repos": self.config.repos,
             "every_s": self.config.every}, source=MACHINE)
 
-    def _announce_actor(self, actor: Actor, when: str) -> None:
-        """Announce ``actor`` unless their last announcement on the bus says the same."""
-        about = actor.announcement(SYSTEM)
-        if self.announced.get(actor.source) == about:
-            return
-        aid = f"{ANNOUNCED}{actor.source}:{hashlib.sha1(json.dumps(about, sort_keys=True).encode()).hexdigest()[:12]}:{when}"
-        self.events.publish("orchestra.machine.started", about, source=actor.source, time=when, id=aid)
-        self.seen.add(aid)
-        self.announced[actor.source] = about
-
     def reannounce(self) -> None:
         """Everyone the identity map lists who was announced before, announced again when their
         name or team is not what their last announcement says (the map changed while the bridge
         was stopped)."""
-        now = poll.iso(self.clock())
-        for login in self.people.accounts(SYSTEM):
-            actor = self.people.actor(SYSTEM, login)
-            last = self.announced.get(actor.source)
-            if last is not None and (last.get("name"), last.get("team")) != (actor.name, actor.team):
-                self._announce_actor(actor, now)
+        self.announcer.reannounce(poll.iso(self.clock()))
 
     def _window(self, repo: str, now: float) -> tuple[float, dict | None]:
         """Where this poll reads from, and the gap it closes when the last good poll was too long
@@ -154,7 +139,7 @@ class Bridge:
         responses = self.responses[repo]
         for s in new:
             actor = self.people.actor(SYSTEM, s.login, s.bot)
-            self._announce_actor(actor, s.time)
+            self.announcer.actor(actor, s.time)
             self.events.publish(s.type, s.data, source=actor.source, subject=s.subject, time=s.time, id=s.id)
             self.seen.add(s.id)
             self.pending[repo].append((s.ts, RANK[s.type], s.type, s.subject, actor.source))
