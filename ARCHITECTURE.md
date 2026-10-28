@@ -5,8 +5,9 @@ for two readers: the owner, who runs it on a laptop that sleeps, and engineers n
 `SPEC.md` is the design and `AGENTS.md` lists the rules. This document links them to the code,
 which was checked statement by statement on 2026-10-27, and draws the moving parts. It was
 brought up to date the same day with Orchestra's instruments (Orchestra `8344264c`: collectors and
-scrapes are instruments, not machines), and again when the pull-request, Jira and Slack bridges
-were merged into `main`.
+scrapes are instruments, not machines), again when the pull-request, Jira and Slack bridges
+were merged into `main`, and again when the bridges stopped being machines (Orchestra's decision
+D19, "the provider is never the machine": §1).
 
 Throughout, every part is marked by status:
 
@@ -45,12 +46,19 @@ companies' message brokers. This package brings that work in, in three ways:
 | What we care about | How it arrives | Where |
 |---|---|---|
 | **Other systems' activity as machines and events.** An issue opened, a comment, a Slack ping and its answer | A **bridge** polls the system and publishes real CloudEvents on Orchestra's bus. The source is the actor and the subject is the item | `orchestra_bridges/github/`, `github_prs/`, `jira/`, `slack/` |
-| **People as machines, with names and teams** | Each actor becomes an event `source` (`person.<key>`, `bot.<key>`). The bridge announces each one with `orchestra.machine.started`, giving the name and team from the owner's identity map | `identity.py`, `announce.py` |
+| **People as machines, with names and teams** | Each actor becomes an event `source` (`person.<key>`, `bot.<key>`). The bridge announces each one with `orchestra.machine.started`, giving the name and team from the owner's identity map. What a system did with no account behind it is the system's own bot (`bot.jira`) | `identity.py`, `announce.py`, `relay.py` |
 | **Counted traffic.** What producers put into a broker and consumers took out, without reading a message | A **preset** of series definitions that Orchestra's `[[sources]]` reads from a Prometheus-compatible store. Nothing is published on the bus | `orchestra_bridges/rabbitmq/` (main) |
 
-A bridge is a **machine outside Orchestra** (Orchestra's rule 1: the core knows no tickets or
-pings). Orchestra counts bridged events by type and source like any others, so flows, the Machines
-page, and hand-offs (one machine acting on a subject after another) come with no extra work.
+A bridge is a **relay outside Orchestra** (Orchestra's rule 1: the core knows no tickets or
+pings), **never a machine** (Orchestra's rule 2 and its decision D19, "the provider is never the
+machine"). The machines are the actors it relays: people and bots in the other system. A bridge
+never announces itself, never publishes under its own name (`relay.py` refuses any source but
+`person.…` or `bot.…`), is not declared as a machine, and never writes a metric: it serves
+`/metrics` for an instrument the plugin declares. What no one did (a gap in what the bridge saw, a
+Slack ping running out) is counted, not published. `bridges.<section>` names only a bridge's
+process, its log and its instrument. Orchestra counts bridged events by type and source like any
+others, so flows, the Machines page, and hand-offs (one machine acting on a subject after another)
+come with no extra work.
 
 Every bridge holds to the rules in `AGENTS.md`:
 
@@ -59,25 +67,28 @@ Every bridge holds to the rules in `AGENTS.md`:
 2. **Read only.** It never writes to the system it reads: no comments, labels or reactions.
 3. **The token stays in memory.** It is never written, logged or published, and it is sent only
    to the configured API host.
-4. **No state of its own.** What it knows comes from its own events on the bus and its own series
-   in the store, rebuilt at start.
-5. **Through Orchestra's library only.** It uses `orchestra.events`, `orchestra.metrics`,
+4. **No state of its own.** What it knows comes from the events it relayed (found by their ids)
+   and the series its instrument stored (found by `instrument=`), rebuilt at start.
+5. **Through Orchestra's library only.** It uses `orchestra.events`, `orchestra.metrics` (to read),
    `orchestra.plugins`, `orchestra.launcher.Process` and `orchestra.collect.spec.Collector`.
-6. **Sources are actors.** The system's own doing has the bridge's machine as source.
+6. **A bridge is a relay, never a machine.** Sources are the actors; a system's own act is the
+   system's bot (`bot.jira`); what no one did is counted, not published.
 7. **Catch up, never assume continuity.** After a gap it reads back to where it left off and
-   records the gap.
+   counts the gap through its instrument.
 
 ## 2. Status at a glance
 
 | Piece | Status | Code |
 |---|---|---|
-| Plugin declaration (processes, machines, instruments) | Built (main): every configured bridge, and the scrape of each `/metrics` (pull requests, Jira, Slack) | `plugin.py` |
+| Plugin declaration (processes and instruments; no machines) | Built (main): every configured bridge, and the scrape of each one's `/metrics` | `plugin.py` |
+| Relay guard: every source a person or a bot | Built (main) | `relay.py` |
+| Gap counts, served by every bridge | Built (main) | `gaps.py` |
 | Config parsing (`[bridges]`, `[bridges.github]`, `[bridges.github_prs]`, `[bridges.jira]`, `[bridges.jira_<name>]`, `[bridges.slack]`) | Built (main) | `config.py` |
 | Identity map and actors, with namespaced strangers (`person.jira.<login>`, `person.slack.<handle>`) | Built (main) | `identity.py` |
 | Shared announcer | Built (main) | `announce.py` |
 | Shared `/metrics` server | Built (main) | `serve.py` |
 | Shared token reading (environment, or a `chmod 600` file outside the repository) | Built (main): Jira and Slack | `secret.py` |
-| GitHub issues bridge | Built (main) | `github/` |
+| GitHub issues bridge, its `/metrics` and its instrument | Built (main) | `github/` |
 | GitHub pull-request bridge, its `/metrics` and the instrument the plugin declares | Built (main, merged from `pr-tracking`) | `github_prs/` |
 | Jira bridge (Data Center first, and Cloud), its `/metrics`, its instrument, a second site | Built (main, merged from `jira-bridge`) | `jira/` |
 | Slack pings bridge, its `/metrics` and its instrument | Built (main, merged from `slack-bridge`) | `slack/` |
@@ -117,13 +128,13 @@ flowchart LR
         launcher["launcher<br/>(orchestra run)"]
         bus[("event bus<br/>orchestra.#lt;key#gt;.events")]
         store[("metrics store")]
-        scrape["instrument bridges.slack<br/>(scrape the plugin declares)"]
+        scrape["instruments bridges.github, bridges.slack<br/>(scrapes the plugin declares)"]
         sources["sources: catalogue,<br/>preset, traffic"]
         ui["Machines and<br/>Instruments pages, map"]
         sd["SD discovery<br/>(the model)"]
     end
 
-    plugin -- "Plugin(processes, machines)" --> launcher
+    plugin -- "Plugin(processes)" --> launcher
     plugin -- "Plugin(collectors)" --> scrape
     launcher -- "starts, restarts" --> main
     main --> cfg
@@ -132,6 +143,7 @@ flowchart LR
     main --> ghb
     main --> slb
     ghb --> ident
+    ghb --> ann
     slb --> ident
     slb --> ann
     ghb -- "GET, read only" --> gh
@@ -140,9 +152,9 @@ flowchart LR
     tok -. "token, in memory" .-> slb
     ghb -- "events" --> bus
     slb -- "events" --> bus
-    ghb -- "points" --> store
+    scrape -- "GET /metrics" --> ghb
     scrape -- "GET /metrics" --> slb
-    scrape -- "instrument=bridges.slack" --> store
+    scrape -- "instrument=bridges.#lt;section#gt;" --> store
     fleet -- "AMQP" --> rmq
     vm -- "scrape /metrics/detailed" --> rmq
     preset -. "named by [[sources]] preset" .-> sources
@@ -156,8 +168,9 @@ flowchart LR
 ```
 
 The diagram draws the GitHub issues and Slack bridges; the pull-request (§12) and Jira (§13)
-bridges plug in the same way as Slack's, each with its own instrument (`bridges.github_prs`,
-`bridges.jira`), and share `serve.py`, `announce.py` and, for Jira, `secret.py`.
+bridges plug in the same way, each with its own instrument (`bridges.github_prs`,
+`bridges.jira`), and every bridge shares `relay.py`, `gaps.py`, `serve.py`, `announce.py` and,
+for Jira and Slack, `secret.py`. The events go to the bus only through `relay.py`, as the actors.
 
 Two kinds of observation enter Orchestra, and they never mix (Orchestra's rule 3: "Counted traffic
 is never turned into events"):
@@ -184,15 +197,16 @@ Orchestra calls `plugin(project)` and gets an `orchestra.plugins.Plugin`:
 | Field | Value |
 |---|---|
 | `name` | `"bridges"` |
-| `machines` | one `Declared("bridges.<s>", "program", "continuous")` per configured section: `SYSTEMS = ("github", "github_prs", "slack")`, then `jira` and any `jira_<name>` |
-| `processes` | one `Process(s, [sys.executable, "-m", "orchestra_bridges", s], stop_grace_s=10)` per configured section |
-| `collectors` | one `Collector.scrape(s, "http://<host>:<port>/metrics", every_s=30)` per configured bridge that serves `/metrics` (`SCRAPED`: `github_prs` 9466, `slack` 9465, `jira` 9467, and any `jira_<name>`) whose `port` is fixed (not 0); a wildcard host is scraped on loopback (§4.3) |
+| `machines` | none: a bridge is a relay, and the machines are the actors it publishes as, known once seen |
+| `processes` | one `Process(s, [sys.executable, "-m", "orchestra_bridges", s], stop_grace_s=10)` per configured section: `SYSTEMS = ("github", "github_prs", "slack")`, then `jira` and any `jira_<name>` |
+| `collectors` | one `Collector.scrape(s, "http://<host>:<port>/metrics", every_s=30)` per configured bridge (default ports, `PORTS`: `github` 9464, `slack` 9465, `github_prs` 9466, `jira` 9467; any `jira_<name>` must set its own) whose `port` is fixed (not 0); a wildcard host is scraped on loopback (§4.3) |
 | pages, router, scripts | none |
 
 The plugin has no pages. What a bridge shows is Orchestra's own Machines and Instruments pages,
-map and series. A `Declared` machine is a placeholder: it only fills in a machine nobody has seen
-yet, what is observed always wins, and it says nothing about flows. A bridge is a machine because
-it publishes events (it announces itself on start), not because of this declaration or its series.
+map and series. Until 2026-10-27 the plugin declared each bridge as a machine (a placeholder,
+`Declared("bridges.<s>", "program", "continuous")`) and each bridge announced itself; under D19 a
+bridge is infrastructure, so neither happens. A bus from before still holds those announcements
+and events, so Orchestra lists `bridges.<section>` there from them; a new bus never shows it.
 
 ### 4.2 Processes
 
@@ -218,11 +232,10 @@ ORCHESTRA_REPO=/path/to/project uv run python -m orchestra_bridges github --once
 
 ### 4.3 The instruments that store what the bridges serve (Slack's as the example)
 
-The GitHub bridge writes its points itself through `orchestra.metrics`. The Slack bridge serves its
-counts at `/metrics` instead (§7.6), and an **instrument** stores them. Since Orchestra `8344264c`
-a plugin can declare instruments (`Plugin.collectors`, Orchestra's PLUGINS.md §4.7), so
-`plugin.py` declares the scrape itself whenever `[bridges.slack]` exists (and likewise for the
-pull-request and Jira bridges):
+No bridge writes a metric (D19). Each serves its counts at `/metrics` (§5.6, §7.6), and an
+**instrument** stores them. Since Orchestra `8344264c` a plugin can declare instruments
+(`Plugin.collectors`, Orchestra's PLUGINS.md §4.7), so `plugin.py` declares the scrape itself
+whenever `[bridges.slack]` exists (and likewise for every other bridge):
 
 ```python
 Collector.scrape("slack", "http://127.0.0.1:9465/metrics", every_s=30)   # host and port from [bridges.slack]
@@ -235,9 +248,9 @@ is no fixed address to scrape, so the plugin declares none.
 
 Every point the instrument stores is labelled `instrument="bridges.slack"` and `project`, and keeps
 the bridge's own `workspace`. On start, the Slack bridge reads its counters and its last good poll
-back by `instrument="bridges.slack"` and its workspace. The instrument, the process and the machine
-share the name `bridges.slack` but are three different things: the machine is known by its events,
-the instrument measures the system, and the label is provenance, not a machine's.
+back by `instrument="bridges.slack"` and its workspace. The instrument and the process share the
+name `bridges.slack` but are two different things, and neither is a machine: the process relays
+the actors' acts, the instrument measures the system, and the label is provenance.
 
 **Before 2026-10-27** a plugin could not declare a scrape, so the owner added one by hand:
 
@@ -276,15 +289,15 @@ card unread.
 | `github/poll.py` | One read of a repository since a moment `t`: three paged lists, de-duplicated by id and sorted by (time, rank, id) |
 | `github/translate.py` | API objects become `Seen` records: type, stable id, GitHub's time, metadata-only data. Pull requests are dropped |
 | `github/responses.py` | First response: which issues wait, and how long answered ones waited. Counters that never go down |
-| `github/measures.py` | Writes those counts to the store at the time of each change, never before the last point written |
-| `github/bridge.py` | Resume, announce, poll, publish, record gaps, the loop |
+| `github/measures.py` | Serves those counts and the gap counts on `/metrics`, each point at the time of its change, never before the last point served; a scrape takes what waits |
+| `github/bridge.py` | Resume, announce the actors, poll, publish, count gaps, `/metrics`, the loop |
 | `identity.py` | Login to actor (`person.<key>`/`bot.<key>`), with the identity map |
 | `config.py` | `[bridges]` and `[bridges.github]` |
 
 ### 5.2 Polling
 
-`Bridge.run` calls `resume()`, then `announce()` (the bridge itself), then `reannounce()`, and then
-loops: `round()`, then `stop.wait(every)`. A round polls each repository in turn. A `GitHubError`
+`Bridge.run` starts `/metrics` (503 until resumed), calls `resume()`, then `reannounce()` (people
+whose name or team changed in the map), and then loops: `round()`, then `stop.wait(every)`. A round polls each repository in turn. A `GitHubError`
 fails only that repository's poll: it is logged, nothing is published for it, and the next round
 tries again.
 
@@ -331,8 +344,11 @@ The bridge writes no file. At start, `Bridge.resume()` does the following:
 3. For each repository, it **replays** that repository's issue events (`github:<repo>:*`) in time
    order through a fresh `Responses`. Events published before the `github.` prefix
    (`issue.opened`, …) are still read, through `translate.current`.
-4. Reads the store (`Measures.resume`): the latest point of `github_issues_unanswered{machine,repo}`
-   becomes the **watermark** (when the last poll wrote), and each counter's latest value is kept.
+4. Reads the store (`Measures.resume`): the latest point of
+   `github_issues_unanswered{instrument="bridges.github",repo}` becomes the **watermark** (when the
+   last poll's points were stamped), and each counter's latest value is kept. Points the bridge
+   wrote itself before 2026-10-27 (`machine="bridges.github"`) are read too, and the later time and
+   higher value taken. The gap counters continue from their stored values the same way.
    `Responses.continue_from` then adds an offset to each counter, so it continues from its last
    written value. A trimmed bus, or events folded in another order, can therefore never take a
    counter down, which discovery would read as a reset.
@@ -342,7 +358,7 @@ The bridge writes no file. At start, `Bridge.resume()` does the following:
 If the store cannot be read, the failure is logged and the bridge carries on with a zero
 watermark: measuring never stops the bridge.
 
-### 5.5 Catching up after the laptop sleeps, and gap events
+### 5.5 Catching up after the laptop sleeps, and gap counts
 
 Orchestra runs on the owner's laptop, which sleeps. The bridge never assumes it was running
 continuously (rule 7, and the owner's answer 3 in the proposal).
@@ -351,38 +367,44 @@ continuously (rule 7, and the owner's answer 3 in the proposal).
   (`now - last_ok > 3 × every`), this poll closes a gap.
 - **Catch-up.** The poll reads from `since`, but never from earlier than `now - max_catchup`
   (48 hours by default).
-- **Gap event.** Once the reads succeed, it publishes one `bridge.gap` from `bridges.github`, with
-  data `{repository, from: last_ok, to: now, recovered}`. `recovered` is false when `since` was
-  older than the `max_catchup` floor, which means part of the gap was not read. Failed polls in
-  between publish nothing, so one outage gives one gap event.
+- **Gap count.** Once the reads succeed, it counts the gap (`gaps.py`), never publishes it: a gap
+  is no one's act. `github_issues_bridge_gaps_total{repo}` goes up by one,
+  `github_issues_bridge_gap_seconds_total` by `now - last_ok`, and
+  `github_issues_bridge_gaps_recovered_total` by one unless `since` was older than the
+  `max_catchup` floor (part of the gap was not read). Failed polls in between count nothing, so
+  one outage is one gap. (Until 2026-10-27 this was a `bridge.gap` event from `bridges.github`;
+  nothing read it.)
 - **True times.** Events missed in the gap are published with GitHub's times. Points for the
-  changes they cause are written at those times too, because nothing was written during the gap:
-  each is stamped at `max(t, watermark)`.
+  changes they cause are served at those times too, because nothing was served during the gap:
+  each is stamped at `max(t, watermark)`, and one scrape takes them all.
 
 ```mermaid
 sequenceDiagram
     autonumber
     participant L as Launcher (orchestra run)
-    participant B as bridges.github
+    participant B as bridges.github (process)
     participant Bus as Orchestra bus
+    participant I as instrument bridges.github
     participant S as Metrics store
     participant G as GitHub API
 
     Note over B: Running normally: one poll every `every` (60 s)
     B->>G: issues, comments, events since (last poll − overlap)
     G-->>B: items
-    B->>Bus: new events (ids github:…, GitHub's times)
-    B->>S: points at now (watermark W)
+    B->>Bus: new events as their actors (ids github:…, GitHub's times)
+    Note over B: points at now wait for the scrape (watermark W)
+    I->>B: GET /metrics (every 30 s)
+    B-->>I: every point waiting, each with its time
+    I->>S: points labelled instrument=bridges.github
 
     Note over B,G: Laptop sleeps. The process is suspended or killed.
     L->>B: (if it exited) start again, with back-off
     B->>Bus: after(0)
     Bus-->>B: own events (ids github:…)
     Note over B: seen = their ids. Replay them in time order to rebuild the counts
-    B->>S: latest(github_issues_unanswered), latest(each counter)
+    B->>S: latest(github_issues_unanswered), latest(each counter), by instrument=bridges.github
     S-->>B: watermark W, last counter values
     Note over B: counters continue from stored values. last_ok = W. since = max(last event, W) − overlap
-    B->>Bus: orchestra.machine.started (bridges.github)
     B->>Bus: re-announce map-listed people whose name or team changed
 
     Note over B: Next round: now − W > 3 × every, so this poll closes a gap
@@ -392,20 +414,22 @@ sequenceDiagram
         Note over B: log it, publish nothing, try again next round
     else reads succeed
         G-->>B: everything since the window start
-        B->>Bus: bridge.gap {repository, from: W, to: now, recovered}
+        Note over B: count the gap: gaps_total +1, gap_seconds_total + (now − W)
         loop each item whose id is not in seen
             B->>Bus: orchestra.machine.started for the actor (if new or changed)
-            B->>Bus: github.issue.* with GitHub's id and time
+            B->>Bus: github.issue.* with GitHub's id and time, as the actor
         end
-        B->>S: count changes older than overlap, stamped at their GitHub times (≥ W)
-        B->>S: all series again at now
+        Note over B: count changes older than overlap, stamped at their GitHub times (≥ W); all series again at now
+        I->>B: GET /metrics
+        B-->>I: every point waiting
+        I->>S: points at their own times
         Note over B: last_ok = now. since = now − overlap
     end
 ```
 
 **What the restart does not see.** If the store holds no point for a repository (a first start,
 or a store that never took a point), `last_ok` stays unset after a restart, and the first poll
-records no gap. It still reads back from the last event on the bus.
+counts no gap. It still reads back from the last event on the bus.
 
 ### 5.6 First-response counters
 
@@ -425,10 +449,11 @@ counts only once it is older than `overlap`. Until then it stays in `pending`, b
 poll may still read an earlier event (a comment GitHub stamps before a close the bridge already
 read). A restart's replay counts the same way.
 
-The series, all labelled `machine="bridges.github"`, `repo="<owner>/<repo>"`, and `project`
-(added by `ProjectStore`). The bridge writes them itself, so `machine` here is provenance (who
-wrote them) and how the bridge finds its own series on restart; it does not make the bridge a
-machine, which its events do, and Orchestra does not associate a flow with a machine from it:
+The series, served at `/metrics` with `repo="<owner>/<repo>"` and stored by the instrument
+`bridges.github`, which adds `instrument="bridges.github"` and `project`. The label is provenance
+and how the bridge finds its series on restart; Orchestra never associates a flow with a machine
+from it. (Until 2026-10-27 the bridge wrote these series itself, labelled
+`machine="bridges.github"`; the names are unchanged.)
 
 | Series | Kind | Meaning |
 |---|---|---|
@@ -438,6 +463,7 @@ machine, which its events do, and Orchestra does not associate a flow with a mac
 | `github_issues_answered_total{within="15m\|1h\|1d\|over"}` | counter | Outflow, by wait: ≤15 min, ≤1 h, ≤1 day, longer. Buckets do not overlap |
 | `github_issues_closed_unanswered_total` | counter | Outflow: closed before anyone answered |
 | `github_issue_first_response_seconds_total` | counter | Sum of answered waits. Mean wait = its rate ÷ the answered rate |
+| `github_issues_bridge_gaps_total`, `…_gaps_recovered_total`, `…_gap_seconds_total` | counter | Gaps in what the bridge saw (§5.5) |
 
 All series are written together at each change, so they balance exactly:
 
@@ -446,12 +472,18 @@ unanswered = opened − Σ answered(within) − closed_unanswered
 ```
 
 The response-time distribution is a set of counters by bucket because Orchestra's collectors keep
-no histogram. `measures.py` writes every series once per poll at `now`, even when nothing changed,
-so a quiet repository can be told apart from a stopped bridge. It never writes a point earlier
+no histogram. `measures.py` serves every series once per poll at `now`, even when nothing changed,
+so a quiet repository can be told apart from a stopped bridge. It never serves a point earlier
 than the last one for that repository. The store reads a series as its last value at or before
 each instant, so a point slipped in behind a later one would change what was already read. A
-change GitHub reports late is therefore stamped up to one poll late. A store that cannot be
-reached loses points, never events.
+change GitHub reports late is therefore stamped up to one poll late.
+
+**Points wait for the scrape.** Each point is kept in memory, with its own time, until a
+`GET /metrics` takes it: the answer holds every point waiting, several of one series at their own
+times (the sample's timestamp in milliseconds). Orchestra keeps a sample's timestamp and keeps one
+point per series per timestamp, so a gap's catch-up reaches the store point by point. A scrape that
+fails after reading loses those points, never events; the next one's totals are whole. At most
+50,000 points wait (the oldest go first).
 
 ### 5.7 The identity map
 
@@ -487,14 +519,10 @@ pseudonyms: this follows the owner's answer 6 and replaces the proposal's salted
 ### 5.8 Announcements
 
 Orchestra learns a machine's kind and group from `orchestra.machine.started` (Orchestra's rule 2).
-The bridge announces two kinds of machine:
-
-- **Itself**, once per start: source `bridges.github`, a fresh id, the current time, and data
-  `{mode: "continuous", kind: "program", package: "bridges", listens_for: [], log:
-  $ORCHESTRA_MACHINE_LOG, system: "github", repos, every_s}`.
-- **Each actor**, just before the actor's first event, with that event's time and the id
-  `github:announce:<source>:<hash>:<time>`. The data is `Actor.announcement("github")`: `{kind:
-  "person" | "program", mode: "ad hoc", package: "bridges", github: <login>, bot, name?, team?}`.
+The bridge announces only the actors, never itself: each actor just before the actor's first
+event, with that event's time and the id `github:announce:<source>:<hash>:<time>`, through the
+shared `announce.Announcer`. The data is `Actor.announcement("github")`: `{kind: "person" |
+"program", mode: "ad hoc", package: "bridges", github: <login>, bot, name?, team?}`.
 
 An actor is announced again whenever the announcement would differ from their last one on the bus,
 for example when the map gave them a new team. This happens before their next event. It also
@@ -692,7 +720,7 @@ within 15 minutes". The bridge measures that promise as a stock.
 | `slack/search.py` | The searches, newest first, until a match is older than the window. Reads a match's text in memory for mentions, then drops it |
 | `slack/pings.py` | What a ping is. Event types, ids and subjects |
 | `slack/waits.py` | The waiting pings and the counters, rendered as Prometheus text |
-| `slack/bridge.py` | Identify, resume, read, publish, record gaps, the loop |
+| `slack/bridge.py` | Identify, resume, read, publish as the actors, count gaps, the loop |
 | `secret.py` | Finds the user token (§7.9), shared with the Jira bridge |
 | `serve.py` | `/metrics` HTTP server for the instrument, shared |
 | `announce.py` | The shared announcer |
@@ -773,13 +801,16 @@ expires.
 
 ### 7.5 Expiry
 
-A ping that has waited `expire` (default `168h`, 7 days) stops waiting. The bridge publishes
-`slack.ping.expired` from its own machine `bridges.slack`, stamped at `t0 + expire`, with `reason:
-"expired"`. A deleted ping is not noticed, so it too waits until it expires. A reply after the
+A ping that has waited `expire` (default `168h`, 7 days) stops waiting, at `t0 + expire`. No one
+did that, so nothing is published: `slack_pings_expired_total` counts it (`Waits.expire`). Until
+2026-10-27 the bridge published `slack.ping.expired` as itself; nothing else read it, and such
+events on a bus are still read back by their ids. On restart the replay expires, before each
+event, every ping whose `expire` had run out by then, as the polls did. A deleted ping is not noticed, so it too waits until it expires. A reply after the
 expiry does not answer. Within one poll, expiries are applied before reactions. A checkmark first
 seen on the poll where the ping expires therefore comes too late.
 
-So the stock balances exactly, as long as the bus keeps the bridge's events:
+So the stock balances exactly, as long as the bus keeps the bridge's events (and `expire` is not
+changed between runs; a counter still never goes down if it is):
 
 ```
 unanswered = received − Σ answered(within) − expired
@@ -787,7 +818,7 @@ unanswered = received − Σ answered(within) − expired
 
 ### 7.6 `/metrics`, and the 15-minute promise as a stock
 
-Unlike the GitHub bridge, the Slack bridge **serves** its counts rather than writing them.
+Like every bridge, the Slack bridge **serves** its counts rather than writing them.
 `serve.py` listens on `host:port` (default `127.0.0.1:9465`). `GET /metrics` returns Prometheus
 text, or 503 until `resume()` has finished. Other paths get 404. Requests are not logged. Orchestra
 reads it through the instrument `bridges.slack` the plugin declares (§4.3), which adds
@@ -802,6 +833,7 @@ reads it through the instrument `bridges.slack` the plugin declares (§4.3), whi
 | `slack_pings_expired_total` | counter | Outflow: expired |
 | `slack_ping_wait_seconds_total` | counter | Sum of waits in the timed buckets. `unknown` is excluded |
 | `slack_bridge_last_poll_timestamp_seconds` | gauge | Unix start time of the last successful poll. Absent until the first |
+| `slack_bridge_gaps_total`, `…_gaps_recovered_total`, `…_gap_seconds_total` | counter | Gaps in what the bridge saw (§7.8) |
 
 **The 15-minute promise**, as the proposal defines it (§5):
 
@@ -814,8 +846,8 @@ Inflow and outflow are also Orchestra's own counts of `slack.ping.received` and
 `slack.ping.answered`, a balance discovery should find. Waits run on the wall clock, nights and
 weekends included. Working hours are an open question for the owner.
 
-The cost of serving instead of writing: the counts are stamped at the scrape, not at Slack's
-times. A catch-up after a gap moves the counters when the bridge wakes. The events keep the true
+The cost of serving without timestamps (the GitHub issues bridge stamps its points, §5.6): the
+counts are stamped at the scrape, not at Slack's times. A catch-up after a gap moves the counters when the bridge wakes. The events keep the true
 times.
 
 ### 7.7 The ping lifecycle
@@ -826,7 +858,7 @@ stateDiagram-v2
 
     Waiting --> Waiting: reactions.list failed<br/>(logged, retried next poll)
     Waiting --> AnsweredReply: reply rule — owner's first later message<br/>in the thread (or unthreaded in the channel)<br/>stamped at the reply's ts
-    Waiting --> Expired: t0 + expire ≤ now (checked before reactions)<br/>publish slack.ping.expired<br/>source = bridges.slack, time = t0 + expire
+    Waiting --> Expired: t0 + expire ≤ now (checked before reactions)<br/>no event: counted in slack_pings_expired_total
     Waiting --> AnsweredCheck: reaction rule — owner's checkmark on this ping<br/>or on a later ping in the same thread or unthreaded channel<br/>stamped when first seen
 
     state AnsweredCheck {
@@ -849,15 +881,16 @@ This works as in §5.4–5.5, with three differences:
   served counts while polls fail, so the time of the latest point does not mark the last good
   poll. On start, the bridge reads the *value* of `slack_bridge_last_poll_timestamp_seconds`
   instead. That value becomes `last_ok`, and `since` is the later of it and the last event, less
-  `overlap`. Without the `[[scrape]]`, a restart reads from its last event and records no gap.
+  `overlap`. Without the scrape, a restart reads from its last event and counts no gap.
 - **Counters continue from the larger of the rebuilt and the stored values.** A trimmed bus does
-  not take them down, and a count the scrape had not yet stored is not lost. The GitHub bridge
-  instead continues from the stored value, because it wrote that value itself.
+  not take them down, and a count the scrape had not yet stored is not lost. The GitHub issues
+  bridge instead continues from the stored value, whose points it stamped itself.
 - **It counts at once, with no `overlap` delay**, and measures the gap from the *end* of the last
-  good poll, so a poll slowed by a `Retry-After` is not taken for a gap. The gap event is
-  `bridge.gap {workspace, from, to, recovered}`.
+  good poll, so a poll slowed by a `Retry-After` is not taken for a gap. The gap is counted by
+  workspace (`slack_bridge_gaps_total` and the rest), never published.
 
-Ids on this bridge are `slack:<workspace>:<ping|answered|expired>:<channel>:<ping ts>`. Note that
+Ids on this bridge are `slack:<workspace>:<ping|answered>:<channel>:<ping ts>` (and `expired`, on
+events from before 2026-10-27). Note that
 the id uses the **ping's** ts, even for an answer. On resume, events are replayed in time order. An
 answer whose `within` was `unknown` is replayed as unknown.
 
@@ -908,8 +941,9 @@ first published.
 
 ### 8.1 Events
 
-Every event is a CloudEvents 1.0 envelope written by `orchestra.events.Events.publish`. Bridged
-events carry the system's own `id` and `time`.
+Every event is a CloudEvents 1.0 envelope written by `orchestra.events.Events.publish`, behind
+`relay.Relay`, which refuses any source but `person.…` or `bot.…`. Bridged events carry the
+system's own `id` and `time`. No bridge publishes as itself.
 
 | Type | Status | Source | Subject | Id | Data (never text) |
 |---|---|---|---|---|---|
@@ -918,24 +952,25 @@ events carry the system's own `id` and `time`.
 | `github.issue.labelled` | main | who added the label | same | `github:<repo>:event:<id>` | `repository`, `issue`, `login`, `label` (name) |
 | `github.issue.closed` | main | who closed it | same | `github:<repo>:event:<id>` | `repository`, `issue`, `login`, `reason` (`state_reason`) |
 | `github.issue.reopened` | main | who reopened it | same | `github:<repo>:event:<id>` | `repository`, `issue`, `login` |
-| `bridge.gap` | main (GitHub, Slack) | `bridges.github` / `bridges.slack` | none | fresh | GitHub: `repository`, `from`, `to`, `recovered`. Slack: `workspace`, `from`, `to`, `recovered` |
 | `orchestra.machine.started` (actor) | main | the actor | none | `<system>:announce:<source>:<hash12>:<time>` | `kind` (`person`/`program`), `mode` (`ad hoc`), `package` (`bridges`), `<system>` (login), `bot`, `name`?, `team`? |
-| `orchestra.machine.started` (bridge) | main | `bridges.<system>` | none | fresh | `mode` (`continuous`), `kind` (`program`), `package`, `listens_for` (`[]`), `log`, `system`, `every_s`. GitHub adds `repos`. Slack adds `workspace` and `answered` |
+| `orchestra.machine.started` (the system itself) | main (Jira) | `bot.jira` | none | `jira:announce:bot.jira:<hash12>:<time>` | `kind` (`program`), `mode` (`ad hoc`), `package`, `bot` (true), `name` (`Jira`); no account |
 | `slack.ping.received` | main | the pinger | `<workspace>/<channel>/<thread ts>` | `slack:<ws>:ping:<ch>:<ts>` | `workspace`, `channel`, `channel_type` (`im`/`mpim`/`group`/`channel`), `ts`, `thread_ts`, `user` (member id), `kind` (`dm`/`mention`/`group`) |
 | `slack.ping.answered` | main | the owner | same | `slack:<ws>:answered:<ch>:<ping ts>` | `workspace`, `channel`, `ts`, `wait_seconds`, `within`, `rule` (`reply`/`reaction`). Reply adds `reply_ts`. Reaction adds `reaction`, `observed: true`, `not_before` |
-| `slack.ping.expired` | main | `bridges.slack` | same | `slack:<ws>:expired:<ch>:<ping ts>` | `workspace`, `channel`, `ts`, `reason` (`expired`), `wait_seconds` |
 | `github.pr.*` (13 types) | main | who acted | `<owner>/<repo>#<n>` | `github:<repo>:pr:<n>:<kind>:<GitHub id>` | §12.3 |
-| `jira.issue.created`, `.assigned`, `.transitioned`, `.updated`, `jira.comment.added` | main | who acted (`person.<key>`, `person.jira.<account>`), or `bridges.jira` for Jira's own change | the issue key, `ABC-12` | `jira:<site>:issue:<issue id>:<created, history:<id>:<kind>, comment:<id>>` | §13.2 |
-| `bridge.gap` (Jira) | main | `bridges.jira` (or `bridges.jira_<name>`) | none | fresh | `site`, `from`, `to`, `recovered` |
+| `jira.issue.created`, `.assigned`, `.transitioned`, `.updated`, `jira.comment.added` | main | who acted (`person.<key>`, `person.jira.<account>`), or `bot.jira` for Jira's own change (no author) | the issue key, `ABC-12` | `jira:<site>:issue:<issue id>:<created, history:<id>:<kind>, comment:<id>>` | §13.2 |
 
 Events published before 2026-10-27 have unprefixed types (`issue.opened`, …). They are still read
-back on a restart.
+back on a restart. A bus from before 2026-10-27 also holds events no bridge publishes any more:
+`bridge.gap` (now counted, §5.5), `slack.ping.expired` (now counted, §7.5), the bridges' own
+`orchestra.machine.started`, and Jira's own changes as `bridges.jira`. Slack's expired events are
+still read back by their ids; nothing reads the rest.
 
 ### 8.2 Series
 
 | Series | Status | Written how | Labels |
 |---|---|---|---|
-| `github_issues_unanswered`, `github_issues_unanswered_oldest_seconds`, `github_issues_opened_total`, `github_issues_answered_total{within}`, `github_issues_closed_unanswered_total`, `github_issue_first_response_seconds_total` | main | Written by the bridge (`orchestra.metrics`) at each change and each poll | `machine="bridges.github"`, `repo`, `project` |
+| `github_issues_unanswered`, `github_issues_unanswered_oldest_seconds`, `github_issues_opened_total`, `github_issues_answered_total{within}`, `github_issues_closed_unanswered_total`, `github_issue_first_response_seconds_total` | main | Served at `/metrics`, each point at the time of its change, and stored by the instrument `bridges.github` the plugin declares | `repo`, plus `instrument="bridges.github"` and `project` from the scrape (`machine="bridges.github"`, written by the bridge itself, before 2026-10-27) |
+| `<prefix>_bridge_gaps_total`, `<prefix>_bridge_gaps_recovered_total`, `<prefix>_bridge_gap_seconds_total`, prefix `github_issues`, `github_prs`, `jira`, `slack` | main | Served at `/metrics` beside each bridge's other series; continued from the store on start (`gaps.py`) | the bridge's scope (`repo`, `workspace`; none for Jira, whose instrument is per site), plus `instrument` and `project` |
 | `slack_pings_unanswered`, `slack_pings_oldest_unanswered_seconds`, `slack_pings_received_total`, `slack_pings_answered_total{within}`, `slack_pings_expired_total`, `slack_ping_wait_seconds_total`, `slack_bridge_last_poll_timestamp_seconds` | main | Served at `/metrics` and stored by the instrument `bridges.slack` the plugin declares | `workspace`, plus `instrument="bridges.slack"` and `project` from the scrape (`machine="bridges.slack"` before 2026-10-27) |
 | `github_prs_open`, `github_prs_awaiting_review`, `github_prs_awaiting_changes`, `github_prs_approved`, `github_prs_awaiting_label_result`, `github_prs_checks_failing`, `github_prs_review_request_oldest_seconds`, `github_prs_bridge_last_poll_timestamp_seconds` | main | Served at `/metrics` (levels read from GitHub each round) and stored by the instrument `bridges.github_prs` the plugin declares | `repo`, plus `instrument="bridges.github_prs"` and `project` from the scrape |
 | `jira_issues{jira_project, category}`, `jira_issues_mine_not_started`, `jira_comments_unanswered`, `jira_comment_unanswered_oldest_seconds` (each `{jira_project}`), `jira_bridge_last_poll_timestamp_seconds` | main | Served at `/metrics` (read from Jira each round; `done` every `done_every`) and stored by the instrument `bridges.jira` the plugin declares | `jira_project`, `category`, plus `instrument` and `project` from the scrape |
@@ -955,6 +990,7 @@ only when its section exists.
 | `max_catchup` | `48h` | After a gap, how far back to read at most |
 | `overlap` | `10m` | Re-read before the last poll. Also the delay before an event is counted |
 | `bots_answer` | `false` | Whether a bot's comment or close is a first response |
+| `host`, `port` | `127.0.0.1`, `9464` | Where `/metrics` listens, and where the plugin's instrument scrapes it. `port = 0`: any free port, and no instrument |
 | `api` | `https://api.github.com` | GitHub Enterprise, or a fake |
 | `[bridges.slack] every`, `lookback`, `max_catchup`, `overlap` | `60s`, `1h`, `48h`, `10m` | As for GitHub; `every` at least 5 s |
 | `answered` | `["reaction"]` | `reaction`, `reply`, or both; never empty |
@@ -983,7 +1019,7 @@ only when its section exists.
 | `token_file`, `email` | `~/.config/orchestra-bridges/jira-token`, none | Never the token itself (a `token` key is refused). `email` is Cloud's only |
 | `host`, `port` | `127.0.0.1`, `9467` | `/metrics`, and the plugin's instrument. `port = 0`: no instrument |
 | `[bridges.jira_<name>]` | (none) | A second site: the same keys, `port` required |
-| `[[scrape]] name = "bridges.slack"` | (none) | Optional: replaces the plugin's instrument of that name, to scrape more often or elsewhere (§4.3) |
+| `[[scrape]] name = "bridges.<section>"` | (none) | Optional: replaces the plugin's instrument of that name, to scrape more often or elsewhere (§4.3). It must keep the name |
 | `[[sources]] preset = ".../rabbitmq/preset.toml"`, `[sources.producers]` | (none) | Counted traffic (§6) |
 
 ### 8.4 Credentials
@@ -1006,17 +1042,22 @@ configured API origin.
 - **Never writes back.** No comments, labels or reactions, and nothing marked read. The only HTTP
   method used is GET. Speaking into another system is a separate proposal, the outbox.
 - **Never turns counts into events.** The preset publishes nothing.
-- **Never keeps state of its own.** It writes no file and no database, only the bus and the store.
+- **Never keeps state of its own.** It writes no file and no database, only the bus (as the actors).
+- **Never acts as a machine.** It never announces itself, never publishes under its own name, is
+  never declared as a machine and never writes a metric (`relay.py`, `plugin.py`; checked by
+  `tests/relayed.py` after every bridge's run against its fake).
 - **Never sends the token elsewhere**, never logs it, never prints it in a `repr`.
 - **Never imports Orchestra's web app, model or host.** It uses only `orchestra.events`,
-  `orchestra.metrics`, `orchestra.config`, `orchestra.plugins` and `orchestra.launcher`.
+  `orchestra.metrics`, `orchestra.config`, `orchestra.plugins`, `orchestra.launcher` and
+  `orchestra.collect.spec`. (The tests use Orchestra's Machines view and scrape parsing to check it.)
 
 ---
 
 ## 9. Add a new bridge
 
-Every bridge follows the same pattern. The GitHub issues bridge writes its points itself; the
-pull-request, Jira and Slack bridges show the variant that serves `/metrics` for an instrument.
+Every bridge follows the same pattern: a relay that publishes as the actors and serves `/metrics`
+for an instrument. The GitHub issues bridge shows serving points with their own times; the
+pull-request, Jira and Slack bridges serve current values.
 Proposed next bridges: Confluence, Google Drive, and the Bluesky stand-in.
 
 ### 9.1 The pattern
@@ -1024,14 +1065,14 @@ Proposed next bridges: Confluence, Google Drive, and the Bluesky stand-in.
 ```mermaid
 flowchart TB
     start["run(stop)"] --> res["resume()<br/>read own events back (ids #lt;system#gt;:…)<br/>seen, announcements, replayed counts<br/>store: watermark / last poll, counters"]
-    res --> ann["announce() itself<br/>reannounce() map changes"]
+    res --> ann["reannounce() map changes<br/>(never the bridge itself)"]
     ann --> round["round(): poll each scope"]
     round --> win["_window(now)<br/>start = max(since, now − max_catchup)<br/>gap if last good poll > 3 rounds ago"]
     win --> read["read the system (GET only)<br/>paged, Retry-After honoured"]
     read -- error --> logf["log, publish nothing"] --> wait
-    read -- ok --> gap["publish bridge.gap (once) if any"]
-    gap --> pub["for each new item not in seen:<br/>announce actor if changed;<br/>publish with the system's id and time"]
-    pub --> cnt["fold into counts<br/>write points or serve /metrics"]
+    read -- ok --> gap["count the gap (once) if any:<br/>gaps.close(), never an event"]
+    gap --> pub["for each new item not in seen:<br/>announce actor if changed;<br/>publish as the actor (relay.py), with the system's id and time"]
+    pub --> cnt["fold into counts<br/>serve /metrics (the instrument stores them)"]
     cnt --> adv["last_ok = now; since = now − overlap"]
     adv --> wait["stop.wait(every)"] --> round
 ```
@@ -1057,29 +1098,30 @@ flowchart TB
    - a subject naming the item, so hand-offs work.
 5. **Identity**: `People.actor(system, login, bot)`. A new system passes
    `namespaced=True` (as Jira and Slack do), so strangers are `person.<system>.<login>`. Add `<system> = "<account>"` to
-   the identity map's entries.
-6. **Announcements**: use `announce.Announcer(events, system, people)`. Call `actor()` before
-   each actor's event and `reannounce()` at start.
+   the identity map's entries. What the system does with no account behind it is
+   `People.itself(system, "<Name>")`: `bot.<system>`, never the bridge.
+6. **The relay and announcements**: wrap the events in `relay.Relay(events)` (it refuses any
+   source but `person.…` or `bot.…`) and use `announce.Announcer(relay, system, people)`. Call
+   `actor()` before each actor's event and `reannounce()` at start. Never announce the bridge.
 7. **Counts**: a fold over events in time order, rebuilt from the bus at start, with counters that
-   continue from the store (`continue_from`) and never go down. Choose one of two ways to report:
-   - **write** points through `orchestra.metrics` (GitHub): true times, never before the
-     watermark, re-asserted each poll;
-   - **serve** `/metrics` (`serve.MetricsServer`; pull requests, Jira, Slack): declare its scrape in
-     `plugin.py` (`SCRAPED`, §4.3),
-     read the counts back by `instrument="bridges.<system>"`, and serve a
-     `*_last_poll_timestamp_seconds` value for resume.
-8. **`bridge.py`**: `resume`, `announce`, `reannounce`, `_window` with `GAP_ROUNDS = 3`, `poll`,
-   `round` (catch the API error), and `run(stop, once=)`. Use `MACHINE = "bridges.<system>"`.
+   continue from the store (`continue_from`) and never go down. Serve them on `/metrics`
+   (`serve.MetricsServer`), with a timestamp per point when the true times matter (GitHub
+   issues), or as current values (pull requests, Jira, Slack); add the default port to `PORTS`
+   in `plugin.py`, which then declares the scrape (§4.3). Read the counts back by
+   `instrument="bridges.<section>"`, and serve a `*_last_poll_timestamp_seconds` value (or, as
+   GitHub issues does, re-serve every series each poll) for resume. Never write a metric.
+8. **`bridge.py`**: `resume`, `reannounce`, `_window` (`gaps.Gaps.late`), `poll` (count a closed
+   gap with `Gaps.close`; serve `Gaps.values` with the other series), `round` (catch the API
+   error), and `run(stop, once=)`. `bridges.<section>` is only the name in its log lines.
 9. **`__main__.py`**: add a builder `(project, stop)` to `BRIDGES`. A token that is not a CLI
    login comes from `secret.read_token`.
-10. **`plugin.py`**: add the system to `SYSTEMS` (and its default port to `SCRAPED` if it serves
-    `/metrics`). That declares the process
-    `bridges.<system>` and a placeholder for the machine; a bridge that serves `/metrics` also
-    declares its scrape there (`collectors`).
+10. **`plugin.py`**: add the system to `SYSTEMS` and its default port to `PORTS`. That declares
+    the process `bridges.<system>` and its scrape (`collectors`). Never a machine.
 11. **Tests**, per the AGENTS.md conventions:
     - `tests/fake_<system>.py` in the real shapes, with a canary in every text field;
     - unit tests for publishing, re-polls, restarts, gaps, the canary, and the token never
-      leaving;
+      leaving; after a run against the fake, `relayed.only_actors(bus)` (no `bridges.*` source,
+      no announcement from the bridge, only people and bots in Orchestra's Machines view);
     - an e2e test through `orchestra run`;
     - an opt-in contract test comparing the fake's shapes with the real API's (keys and types,
       never content).
@@ -1093,8 +1135,10 @@ flowchart TB
 | `config.py` | every bridge | `section()`, `people_file()`, `_names()`, per-bridge dataclasses and parsers |
 | `identity.py` | every bridge | `People.load/actor/accounts/listed`, `namespaced=`, `Actor.announcement(system)` |
 | `announce.py` | every bridge | `Announcer.from_events/actor/reannounce`, `prefix(system)` |
-| `serve.py` | pull requests, Jira, Slack | `MetricsServer`: `GET /metrics`, 503 until ready |
-| `plugin.py` | every bridge | `SYSTEMS`, `SCRAPED` and `metrics_url`: process, machine and instrument declarations |
+| `relay.py` | every bridge | `Relay`: publishes only as `person.…` or `bot.…`; `after` passed through |
+| `gaps.py` | every bridge | `Gaps`: `late`, `close`, `values`, `resume`: gaps counted, never published |
+| `serve.py` | every bridge | `MetricsServer`: `GET /metrics`, 503 until ready |
+| `plugin.py` | every bridge | `SYSTEMS`, `PORTS` and `metrics_url`: process and instrument declarations (no machines) |
 | `secret.py` | Jira, Slack | `read_token(name, default_file, repo_root, token_file)`: the environment, else a private file outside the repository |
 | `__main__.py` | every bridge | The `BRIDGES` registry (and `jira[_<name>]`): the process entry point |
 
@@ -1141,10 +1185,10 @@ above.
    `resume()`, retried each round until it succeeds.
 4. **Proposal vs the built Slack bridge.**
    - The proposal's §5 names two events and the buckets `5m|15m|60m|over`, with the reply as the
-     default answer. The bridge adds `slack.ping.expired`, the bucket `unknown`, and the checkmark
-     default, following the owner's answer 5.
-   - The proposal's §4 sources (`work.person.7f3a`, `work.jira`) became `person.<key>` and
-     `bridges.<system>`.
+     default answer. The bridge adds the bucket `unknown` and the checkmark default, following the
+     owner's answer 5, and counts expiries (`slack_pings_expired_total`) without an event.
+   - The proposal's §4 sources (`work.person.7f3a`, `work.jira`) became `person.<key>` and, for a
+     system's own act, `bot.<system>` (`bot.jira`); never the bridge (D19).
 5. **Proposal §4 privacy** (pseudonyms by default) is superseded by the owner's answer 6. The
    proposal text was not updated.
 6. **Orchestra's AGENTS.md rule 2** lists the announcement fields Orchestra reads as "mode, what it
@@ -1176,7 +1220,7 @@ The issues bridge drops pull requests on purpose, and extending it would have ta
 | Reads | three repository-wide lists since `t` | the open pulls, the recently closed pulls, then per followed pull request its timeline and its head's checks |
 | Which items | every issue | those whose branch or labels match, followed to resolution |
 | Why per item | not needed | a review does not always move a pull request's `updated_at` (seen on the real API), so `since` cannot say which to re-read |
-| Measures | counts it writes itself (`machine="bridges.github"`) | levels read from GitHub, served on `/metrics` for an instrument |
+| Measures | counts rebuilt from events, served with their own times for the instrument `bridges.github` | levels read from GitHub, served on `/metrics` for the instrument `bridges.github_prs` |
 
 Both share `github/api.py` (the client and `gh_token`; `get` was added for single objects), the
 identity map, and the announcer, so a person is one machine (`person.<login>` or their map key)
@@ -1189,7 +1233,7 @@ whichever bridge saw them. Announcements of both use ids `github:announce:…`.
 | `github_prs/poll.py` | The reads (GET only), each paged where GitHub pages |
 | `github_prs/translate.py` | `Pull` (a pull request as listed now) and `Seen` records: type, stable id, GitHub's time, metadata-only data |
 | `github_prs/levels.py` | `PullState` per open followed pull request (verdicts, review requests, checks), the levels, and their Prometheus text |
-| `github_prs/bridge.py` | Resume, follow, read then publish, pushes, announce, gaps, `/metrics`, the loop |
+| `github_prs/bridge.py` | Resume, follow, read then publish, pushes, announce the actors, count gaps, `/metrics`, the loop |
 | `serve.py` | `MetricsServer`, shared with the Jira and Slack bridges |
 | `announce.py` | `Announcer`, shared with every bridge |
 | `config.py` | `GitHubPRsConfig`, `github_prs()`, `follows(branch, labels)` |
@@ -1214,7 +1258,6 @@ the head when read). Never a title, body, review text, comment, diff hunk or com
 | `github.pr.merged` | who merged | `event:<issue event id>` | `merge_commit` |
 | `github.pr.closed` | who closed it, unmerged (a merge's own close, within 5 s of it, is left out) | `event:<issue event id>` | `merged: false` |
 | `github.pr.reopened` | who reopened | `event:<issue event id>` | none |
-| `bridge.gap` | `bridges.github_prs` | fresh | `repository`, `from`, `to`, `recovered` |
 
 Not published: drafts made ready or turned back, assignments, reviews still pending, a review's
 dismissal as an event of its own (the review's state becomes `dismissed`; a review first seen after
@@ -1230,7 +1273,7 @@ flowchart TB
     follow --> each["per pull request: GET its timeline,<br/>GET check-runs and statuses of its head (checks = true)"]
     each --> new["new review: GET its line comments (once per pull request)<br/>new head: GET the commit, for who pushed"]
     new -- "any read fails" --> fail["log it, publish nothing, try again next round"]
-    new -- "all read" --> gap["bridge.gap once, if any"]
+    new -- "all read" --> gap["count the gap once, if any (no event)"]
     gap --> pub["each record not seen, in time order:<br/>announce the actor if new or changed, publish"]
     pub --> lv["levels of the open followed pull requests, served on /metrics"]
     lv --> adv["last_ok = now, since = now - overlap"]
@@ -1253,7 +1296,8 @@ As for issues (§5.4, §5.5), with what is resumed adapted:
   that kept running while polls failed does not hide a gap;
 - `since`: the later of the last event and `last_ok`, less `overlap`; else `now - lookback`.
 
-The levels need no resume: each round reads them from GitHub.
+The levels need no resume: each round reads them from GitHub. The gap counters continue from the
+store, by the same `instrument` and `repo`.
 
 ### 12.6 The owner's loop, as the bridge sees it
 
@@ -1333,7 +1377,8 @@ The first run, on 2026-10-27, published exactly `opened`, `review_submitted` (`c
 comment), `review_commented`, `labelled`, `unlabelled`, `check_completed` (`failure`), `pushed`
 (previous and new head right) and `merged`, each once, all as `person.danroblewis` on the pull
 request, and no `closed` for the merge. A restart with the instrument's last good poll set before
-the run recorded one `bridge.gap` (`recovered: true`) and published nothing again. **GitHub refused
+the run recorded one `bridge.gap` (`recovered: true`; a gap is counted now, not published) and
+published nothing again. **GitHub refused
 "request changes"** on one's own pull request (HTTP 422, "Can not request changes on your own pull
 request"), so the test falls back to a commenting review, and `changes_requested` is covered by the
 fake only, as is a review request (the sandbox has no second account to ask).
@@ -1366,7 +1411,7 @@ the search's paging and the sign-in.
 | `jira/poll.py` | `site` (`/myself`, `/field` for the sprint field, `/status` for every status's category), `updated`, `open_issues`, `done_count`, `mine` |
 | `jira/translate.py` | Records to `Seen` events with stable ids |
 | `jira/levels.py` | The levels and their Prometheus text |
-| `jira/bridge.py` | Resume, the window and the gap, read then publish, announce, `/metrics`, the loop |
+| `jira/bridge.py` | Resume, the window and the gap (counted), read then publish as the actors (`bot.jira` for none), announce them, `/metrics`, the loop |
 | `secret.py` | The token from `JIRA_API_TOKEN`, the file `JIRA_API_TOKEN_FILE` names, `token_file`, or `~/.config/orchestra-bridges/jira-token`; a file must be outside the repository and `chmod 600` |
 
 ### 13.2 Events
@@ -1418,16 +1463,16 @@ sequenceDiagram
         Note over B: log the path and code, publish nothing, try again next round
     else every read succeeds
         opt more than 3 rounds since the last good poll
-            B->>Bus: bridge.gap {site, from, to, recovered}
+            Note over B: count the gap (jira_bridge_gaps_total, …), no event
         end
         loop each event not yet published, in Jira's time order
             B->>Bus: orchestra.machine.started for the actor (if new or changed)
-            B->>Bus: jira.* with Jira's id and time, subject the key
+            B->>Bus: jira.* with Jira's id and time, subject the key, as the actor (bot.jira if none)
         end
         Note over B: levels measured, last_ok = now, since = now - overlap
     end
     I->>B: GET /metrics (every 30 s)
-    B-->>I: jira_issues, ..._mine_not_started, ..._comments_unanswered, ..._oldest_seconds, last poll
+    B-->>I: jira_issues, ..._mine_not_started, ..._comments_unanswered, ..._oldest_seconds, gap counts, last poll
     I->>S: points labelled instrument=bridges.jira, project
 ```
 
@@ -1436,8 +1481,9 @@ sequenceDiagram
 As the pull-request bridge (§12.5): own events read back by the id prefix `jira:<site>:issue:` give
 `seen`; the store's `jira_bridge_last_poll_timestamp_seconds{instrument="bridges.jira"}` gives the
 last good poll; the next poll reads from the later of the two less `overlap`, no further back than
-`max_catchup`, and with neither from `lookback` ago. A gap is recorded once, when a poll succeeds,
-with `recovered` false when `max_catchup` cut it short. JQL's relative minutes (`"-Nm"`) cover the
+`max_catchup`, and with neither from `lookback` ago. A gap is counted once, when a poll succeeds
+(`jira_bridge_gaps_total`, `jira_bridge_gap_seconds_total`, and `jira_bridge_gaps_recovered_total`
+unless `max_catchup` cut it short), continued from the store on start. JQL's relative minutes (`"-Nm"`) cover the
 window on Jira's own clock, so the laptop's time zone and JQL's minute resolution do not matter.
 
 ### 13.5 People
@@ -1449,12 +1495,14 @@ window on Jira's own clock, so the laptop's time zone and JQL's minute resolutio
 | A stranger's source | `person.jira.<username>` | `person.jira.<account id>`, `bot.jira.<account id>` |
 | Announced name | the map's, else Jira's `displayName` | the same |
 
-A change with no author is Jira's own, published as `bridges.jira`. The owner is the token's account
+A change with no author (automation, a workflow post function, an import) is Jira's own act,
+published as `bot.jira` (`People.itself`: kind `program`, named `Jira`, no account), announced
+like anyone else; on every site, since the map's `jira` key serves them all. The owner is the token's account
 (`/myself`): the levels compare assignees and comment authors with it.
 
 ### 13.6 Two sites
 
-`[bridges.jira_<name>]` is a second bridge: process, machine and instrument `bridges.jira_<name>`,
+`[bridges.jira_<name>]` is a second bridge: process and instrument `bridges.jira_<name>`,
 its own `port` (required), its token from `JIRA_<NAME>_API_TOKEN` or
 `~/.config/orchestra-bridges/jira_<name>-token`. Ids carry the site's host, so the two never
 collide. Both announce people under the map's `jira` key, so one person on both sites is one

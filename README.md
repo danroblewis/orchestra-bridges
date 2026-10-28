@@ -7,6 +7,13 @@ they acted on, so people and bots appear on Orchestra's Machines page beside the
 Orchestra infers who hands work to whom from the subjects. The events hold metadata only, never
 text.
 
+**A bridge is a relay, never a machine** (Orchestra's AGENTS.md rule 2, decision D19). It never
+announces itself, never publishes under its own name and never writes a metric: the people and bots
+it relays are the machines. `bridges.<section>` names only its process, its log and the instrument
+that stores what it measures. What no one did (a gap in what the bridge saw, a Slack ping that ran
+out) is counted, not published; what a system did with no person behind it (a Jira automation) is
+that system's own act, published as the system as a bot (`bot.jira`).
+
 How it works, with diagrams, the contracts and how to add a bridge: [ARCHITECTURE.md](ARCHITECTURE.md).
 
 The first bridge reads **GitHub issues**; the second follows **GitHub pull requests** to
@@ -32,8 +39,11 @@ poll that overlaps the last one never publishes anything twice. Pull requests ar
 first time it sees someone, it announces them (`orchestra.machine.started`: kind `person`, or
 `program` for a bot; package `bridges`).
 
-It also writes these series itself, labelled `machine="bridges.github"` (who wrote them, which is
-how it finds them again on restart) and `repo`:
+It serves these series at `http://127.0.0.1:9464/metrics` (`host`, `port`), labelled with `repo`;
+the plugin declares the instrument that stores them, a scrape named `bridges.github` every 30 s, so
+each stored point is labelled `instrument="bridges.github"` (until 2026-10-27 the bridge wrote them
+itself, labelled `machine="bridges.github"`; the names are unchanged). Each point carries the time
+of the change it measures, and a scrape takes every point waiting:
 
 - `github_issues_unanswered`: issues opened while the bridge watched that nobody but the author
   has yet commented on or closed;
@@ -42,7 +52,9 @@ how it finds them again on restart) and `repo`:
   `github_issues_closed_unanswered_total`: what moves the level, so that
   unanswered = opened − answered − closed unanswered;
 - `github_issue_first_response_seconds_total`: the first-response waits added up. The mean wait
-  is its rate divided by the answered rate.
+  is its rate divided by the answered rate;
+- `github_issues_bridge_gaps_total`, `github_issues_bridge_gaps_recovered_total`,
+  `github_issues_bridge_gap_seconds_total`: gaps in what the bridge saw (below).
 
 A label is not a response, since triage bots label everything. A bot's comment or close counts as
 a response only with `bots_answer = true`.
@@ -62,13 +74,17 @@ lookback = "1h"                   # on the very first start, how far back to rea
 max_catchup = "48h"               # after a gap, how far back it reads at most
 overlap = "10m"                   # each poll reads again this far before the last one
 bots_answer = false
+host = "127.0.0.1"                # where /metrics listens
+port = 9464                       # where /metrics is served; 0: any free port, and no scrape
 ```
 
 With this package installed in the environment that runs Orchestra (`uv add` it, or
 `uv pip install -e ../orchestra-bridges`), `orchestra run` starts the bridge as the process
-`bridges.github`, logs it to `<state>/logs/machines/bridges.github.log` and restarts it if it
-exits. The Machines page lists it before its first event. Without a `[bridges.github]` section,
-nothing runs.
+`bridges.github`, logs it to `<state>/logs/machines/bridges.github.log` (Orchestra's place for
+process logs) and restarts it if it exits, and scrapes it as the instrument `bridges.github`. The
+bridge is not on the Machines page; the people it publishes as are, once seen. Without a
+`[bridges.github]` section, nothing runs. A project's own `[[scrape]]` named `bridges.github`
+replaces the plugin's; it must keep that name, by which a restarted bridge finds its counts.
 
 To try one poll by hand: `ORCHESTRA_REPO=/path/to/project uv run python -m orchestra_bridges github --once`.
 
@@ -95,10 +111,11 @@ That person is then `person.daniel`, announced with their name and team.
 
 The bridge keeps no state of its own. When it starts, it reads its own events back from the bus,
 rebuilds its counts from them, and reads GitHub again from where it left off. If a poll comes more
-than three rounds after the last one (because the machine slept or the bridge was stopped), it
-publishes `bridge.gap` {repository, from, to, recovered} and catches up: the events it missed are
-published with their GitHub times, and the series are filled in at those times too. A gap longer
-than `max_catchup` is read only back to that limit, and `recovered` is false.
+than three rounds after the last one (because the laptop slept or the bridge was stopped), it
+counts the gap (`github_issues_bridge_gaps_total` and the seconds it lasted) and catches up: the
+events it missed are published with their GitHub times, and the series are filled in at those
+times too. A gap longer than `max_catchup` is read only back to that limit, and is not counted in
+`github_issues_bridge_gaps_recovered_total`. A gap is no one's act, so it is not an event.
 
 ### Limits, plainly
 
@@ -106,9 +123,11 @@ than `max_catchup` is read only back to that limit, and `recovered` is false.
 - A reopened issue does not wait again.
 - How far back a busy repository's issue events can be paged is up to GitHub. `max_catchup`
   bounds what the bridge asks for.
-- A series point is never written before one already written. So a change that GitHub reports a
-  poll late is stamped up to one poll late. Only a gap, when nothing was written, gets its true
+- A series point is never served before one already served. So a change that GitHub reports a
+  poll late is stamped up to one poll late. Only a gap, when nothing was served, gets its true
   times.
+- Points wait in memory for the scrape. A scrape that fails after reading them loses them (the
+  next carries whole totals), and while nothing scrapes, at most 50,000 wait.
 - It remembers the ids of everything it has published for as long as it runs. That is a few
   thousand a day for a busy repository.
 - Busy repositories have hundreds of people, and each one becomes a machine.
@@ -166,7 +185,8 @@ stores them (the instrument `bridges.github_prs`):
 - `github_prs_awaiting_label_result`: carrying a label of `label_results` and none of its results;
 - `github_prs_checks_failing`: the head's latest run of some check or status failed;
 - `github_prs_review_request_oldest_seconds`: how long the oldest open review request has waited;
-- `github_prs_bridge_last_poll_timestamp_seconds`: when its last good poll began (for resume).
+- `github_prs_bridge_last_poll_timestamp_seconds`: when its last good poll began (for resume);
+- `github_prs_bridge_gaps_total`, `…_gaps_recovered_total`, `…_gap_seconds_total`: gaps (below).
 
 Flows (opened, reviewed, merged) are its events, which Orchestra counts by type itself.
 
@@ -203,9 +223,10 @@ allows. Raise `every`, narrow `branches`, or set `checks = false` on busy reposi
 
 As for issues: it keeps nothing of its own. On start it reads its own events back from the bus,
 which say what it published, which pull requests it follows and which heads it has seen, and the
-store gives its last good poll. A poll more than three rounds after the last good one publishes
-`bridge.gap` {repository, from, to, recovered} and catches up: what was missed is published once,
-with GitHub's times, back to `max_catchup` at most.
+store gives its last good poll. A poll more than three rounds after the last good one counts a gap
+(`github_prs_bridge_gaps_total{repo}`, `…_gaps_recovered_total`, `…_gap_seconds_total`, served
+with the levels) and catches up: what was missed is published once, with GitHub's times, back to
+`max_catchup` at most.
 
 ### Limits, plainly
 
@@ -246,7 +267,8 @@ Every event's data also holds `site` (the host), `project` (key), `issue` (Jira'
 twice; the id uses the issue's id, not its key, so an issue moved to another project keeps its ids.
 Summaries and descriptions are never even asked for; comment bodies, and the before and after of a
 text field's change, pass through memory and are dropped as they are read. A change Jira made itself
-(no author: a workflow post function, an import) is published as `bridges.jira`.
+(no author: automation, a workflow post function, an import) is Jira's own act, published as
+`bot.jira` (kind `program`, named `Jira`, announced like anyone else), on every site.
 
 **What waits** is served on `/metrics` and stored by the instrument `bridges.jira` the plugin
 declares (every 30 s), read from Jira each round:
@@ -258,7 +280,9 @@ declares (every 30 s), read from Jira each round:
 - `jira_comments_unanswered{jira_project}`: the owner's open issues where someone else commented
   since the owner last did. A bot's comment does not wait unless `bots_ask`;
 - `jira_comment_unanswered_oldest_seconds{jira_project}`: how long the oldest of those has waited;
-- `jira_bridge_last_poll_timestamp_seconds`: when the last good poll began (for resume).
+- `jira_bridge_last_poll_timestamp_seconds`: when the last good poll began (for resume);
+- `jira_bridge_gaps_total`, `jira_bridge_gaps_recovered_total`, `jira_bridge_gap_seconds_total`:
+  gaps (below).
 
 The label is `jira_project`, because `project` is Orchestra's own. Flows (created, transitioned,
 commented) are the events, which Orchestra counts by type itself.
@@ -299,7 +323,7 @@ projects = ["CUST"]
 port = 9468
 ```
 
-It runs as its own machine, process and instrument, `bridges.jira_fedramp`, and its token is
+It runs as its own process and instrument, `bridges.jira_fedramp`, and its token is
 `JIRA_FEDRAMP_API_TOKEN` or `~/.config/orchestra-bridges/jira_fedramp-token`, so neither site ever
 receives the other's token.
 
@@ -355,8 +379,9 @@ changed issue whose changelog or comments the search cut short.
 ### When the laptop sleeps
 
 It keeps nothing of its own. On start it reads its own events back from the bus, and the store gives
-its last good poll. A poll more than three rounds after the last good one publishes `bridge.gap`
-{site, from, to, recovered} and catches up: what was missed is published once, with Jira's times,
+its last good poll. A poll more than three rounds after the last good one counts a gap
+(`jira_bridge_gaps_total`, `jira_bridge_gaps_recovered_total`, `jira_bridge_gap_seconds_total`,
+served with the levels) and catches up: what was missed is published once, with Jira's times,
 back to `max_catchup` at most. While Jira cannot be reached, polls fail and publish nothing. A 429
 or 503 is waited out for its `Retry-After` (at most 15 minutes) and tried again.
 
@@ -389,7 +414,6 @@ measures that promise. Every minute it searches your workspace with your own **u
 |---|---|---|---|
 | `slack.ping.received` | the pinger | the thread (`<workspace>/<channel>/<thread ts>`) | workspace, channel and its kind, ts, thread ts, member id, kind (`dm`, `mention`, `group`) |
 | `slack.ping.answered` | you | the same thread | the same ids, the rule that answered it, the wait (`wait_seconds`) and its bucket (`within`) |
-| `slack.ping.expired` | `bridges.slack` | the same thread | the same ids, `reason: expired`, the wait (`wait_seconds`) |
 
 **Answered** means, by default, that you put a checkmark reaction (`white_check_mark` or
 `heavy_check_mark`) on the ping. A checkmark also answers the earlier pings still waiting that a
@@ -405,11 +429,13 @@ Under the default rule, a ping you answer only by replying is never answered: it
 `expire` (7 days) and counts as expired. Use `answered = ["reaction", "reply"]` if you answer by
 replying as often as by checkmark.
 
-A ping nobody answers stops waiting after `expire` and counts as expired. A deleted ping is not
-noticed: it too waits until `expire`. So `unanswered = received - answered - expired` changes
-balance exactly, while the bus keeps the bridge's events. If reading your reactions fails (a rate
-limit, the network, a token without `reactions:read`), the poll goes on: new pings, replies and
-expiries are still published, the pings stay waiting and are checked again next poll, and the log
+A ping nobody answers stops waiting after `expire` and counts as expired
+(`slack_pings_expired_total`). No one did that, so it is not an event (until 2026-10-27 it was
+`slack.ping.expired`, published as the bridge). A deleted ping is not noticed: it too waits until
+`expire`. So `unanswered = received - answered - expired` changes balance exactly, while the bus
+keeps the bridge's events: on restart, the expiries are found again from them. If reading your
+reactions fails (a rate limit, the network, a token without `reactions:read`), the poll goes on:
+new pings and replies are still published, expiries still counted, the pings stay waiting and are checked again next poll, and the log
 says why, once a poll.
 
 It serves these series at `http://127.0.0.1:<port>/metrics`, each labelled with the workspace.
@@ -428,7 +454,9 @@ Instruments page:
 - `slack_ping_wait_seconds_total`: the waits of the answers in the timed buckets, added up. The
   mean wait is its rate divided by the rate of those answers (`unknown` left out of both);
 - `slack_bridge_last_poll_timestamp_seconds`: when the last successful poll began (Unix seconds).
-  Its age is how stale the counts are; it is absent until the first poll succeeds.
+  Its age is how stale the counts are; it is absent until the first poll succeeds;
+- `slack_bridge_gaps_total`, `slack_bridge_gaps_recovered_total`, `slack_bridge_gap_seconds_total`:
+  gaps in what the bridge saw (below).
 
 The counters never go down, including across a restart.
 
@@ -519,12 +547,13 @@ To try one poll by hand:
 As with GitHub: on start, the bridge rebuilds the waiting pings and the counts from its own events.
 It then continues each counter from the store's last scraped value, if that is higher. Then it
 reads Slack again from where it left off. A poll that comes more than three rounds after the end of
-the last good one publishes `bridge.gap` {workspace, from, to, recovered} and catches up. Pings
+the last good one counts a gap (`slack_bridge_gaps_total`, `slack_bridge_gaps_recovered_total`,
+`slack_bridge_gap_seconds_total`, by workspace) and catches up. Pings
 missed in the gap are published with their Slack times. A restart reads where it left off from the
 store: the value of `slack_bridge_last_poll_timestamp_seconds`, not the time of the last scrape,
 because Orchestra keeps scraping the bridge while Slack or the network is down. So a restart after
-an outage reads the outage's pings back and records the gap. It needs the scrape: without it (with
-`port = 0`, or Orchestra not running it), a restart reads from its last event on the bus and records
+an outage reads the outage's pings back and counts the gap. It needs the scrape: without it (with
+`port = 0`, or Orchestra not running it), a restart reads from its last event on the bus and counts
 no gap.
 
 ### Limits, plainly
