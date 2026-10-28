@@ -31,6 +31,7 @@ def test_bad_settings_are_refused(toml):
 def test_the_plugin_runs_the_bridge_only_where_it_is_configured_and_declares_no_machine():
     off = plugin(proj("[events]\nurl = 'file'\n"))
     assert (off.name, off.processes, off.machines, off.pages, off.collectors) == ("bridges", [], [], [], [])
+    assert off.guide.is_file() and off.guide.name == "guide.md"                       # its operator's guide, configured or not
     on = plugin(proj("[bridges.github]\n"))
     [p] = on.processes
     assert (p.name, p.argv()) == ("github", [sys.executable, "-m", "orchestra_bridges", "github"])

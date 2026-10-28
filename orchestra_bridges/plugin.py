@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import ipaddress
 import sys
+from pathlib import Path
 
 from orchestra.collect.spec import Collector
 from orchestra.launcher import Process
@@ -53,4 +54,5 @@ def plugin(project) -> Plugin:
     return Plugin(
         "bridges",
         processes=[Process(s, [sys.executable, "-m", "orchestra_bridges", s], stop_grace_s=10) for s in configured],
-        collectors=[Collector.scrape(s, url, every_s=SCRAPE_EVERY_S) for s, url in scrapes])
+        collectors=[Collector.scrape(s, url, every_s=SCRAPE_EVERY_S) for s, url in scrapes],
+        guide=Path(__file__).parent / "guide.md")   # how to configure it, for an AI operator (/api/guides)
