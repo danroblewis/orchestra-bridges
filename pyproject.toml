@@ -7,8 +7,8 @@ name = "orchestra-bridges"
 version = "0.1.0"
 description = "Bridges for Orchestra: machines that poll systems which are buses in all but name (GitHub issues and pull requests, Jira, Slack pings) and publish what people did there as metadata-only events on a project's Orchestra bus."
 requires-python = ">=3.12"
-# orchestra: ours is 1.0.0a1; <1.0.0 keeps out the unrelated `orchestra` on PyPI (1.0.0 and up)
-dependencies = ["orchestra>=1.0.0a1,<1.0.0"]
+# orchestra: ours is 1.0.0a1; <1.0.0rc0 keeps out the unrelated `orchestra` on PyPI (1.0.0 and up)
+dependencies = ["orchestra>=1.0.0a1,<1.0.0rc0"]
 
 [project.optional-dependencies]
 # orchestra[sd]: the RabbitMQ contract test aligns series with discovery's own reader (orchestra.sd.rediscover).
@@ -20,10 +20,12 @@ bridges = "orchestra_bridges.plugin:plugin"
 [project.entry-points."orchestra.commands"]
 bridges = "orchestra_bridges.__main__:main"
 
-[tool.uv.sources]
-# This repository's own environment takes Orchestra from GitHub (README, "Developing against a local Orchestra");
-# ignored when the plugin is installed as a dependency.
-orchestra = { git = "https://github.com/danroblewis/orchestra", branch = "main" }
+[tool.uv]
+# This repository's own environment takes Orchestra's main from GitHub (README, "Developing against a
+# local Orchestra"). Read only at the root: installed as a dependency, the plugin takes the Orchestra
+# it is installed with ([tool.uv.sources] would not do: uv applies a git dependency's sources).
+# An override replaces every orchestra requirement, extras too, so it names the dev extra's.
+override-dependencies = ["orchestra[sd] @ git+https://github.com/danroblewis/orchestra@main"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["orchestra_bridges"]
