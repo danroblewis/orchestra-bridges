@@ -12,13 +12,14 @@ from fake_jira import CANARY, EMAIL, TOKEN, FakeJira
 from orchestra.config import load_project
 from orchestra.events import Events
 from orchestra.metrics import Point, ProjectStore, for_project
+from relayed import only_actors
 
 from orchestra_bridges import config as cfg
 from orchestra_bridges.jira.api import Jira
 from orchestra_bridges.jira.bridge import Bridge
 from orchestra_bridges.jira.levels import LAST_POLL
 
-MACHINE = "bridges.jira"
+INSTRUMENT = "bridges.jira"
 TOML = """[bridges]
 people = "people.toml"
 
@@ -72,7 +73,7 @@ def make(project, jira, clock, sleeps):
     def new():
         conf = cfg.jira(project.config.raw, project.repo_root)
         api = Jira(jira.base, TOKEN, deployment=conf.deployment, email=EMAIL, sleep=sleeps.append)
-        return Bridge(conf, api, Events.for_project(project, source=MACHINE),
+        return Bridge(conf, api, Events.for_project(project),
                       ProjectStore(for_project(project), project.key), clock=clock)
     return new
 
@@ -87,6 +88,11 @@ def jira_events(project):
 
 def once(b):
     b.run(threading.Event(), once=True)
+
+
+def gaps(b):
+    """The gap counters the bridge serves: (gaps, recovered, seconds)."""
+    return tuple(b.gaps.values(b.config.site).values())
 
 
 def who(jira, login):
@@ -144,6 +150,8 @@ def test_each_event_is_published_once_as_who_acted_on_the_issue(project, jira, m
     assert (d["sprints"], d["links"], d["labels"], d["priority"]) == ([12], ["OPS-7"], ["urgent"], "High")
     assert evs[0]["time"] == "2026-10-26T06:43:20+00:00"
     assert all(e["id"].startswith(f"jira:{b.config.site}:issue:{jira.issues[key]['id']}:") for e in evs)
+    machines = only_actors(bus(project))
+    assert {m["id"] for m in machines} == {a, bob, c, me}
 
 
 def test_a_data_center_user_key_in_a_change_is_published_as_the_username(project, jira, make):
@@ -191,6 +199,7 @@ def test_a_restart_neither_duplicates_nor_loses(project, jira, make, clock):
     clock.t += 60
     once(make())
     assert jira_events(project) == again
+    only_actors(bus(project))
 
 
 def test_after_the_laptop_sleeps_it_catches_up_once_and_records_the_gap(project, jira, make, clock):
@@ -203,13 +212,14 @@ def test_after_the_laptop_sleeps_it_catches_up_once_and_records_the_gap(project,
     for _ in range(3):                                                # polls fail and publish nothing
         clock.t += 1200
         b.round()
-    assert [e["type"] for e in bus(project) if e["type"] == "bridge.gap"] == []
+    assert gaps(b) == (0, 0, 0)
     jira.asleep = False
     clock.t += 1200
     b.round()
-    [gap] = [e for e in bus(project) if e["type"] == "bridge.gap"]
-    assert gap["source"] == MACHINE and gap["data"]["recovered"] is True and gap["data"]["site"] == b.config.site
-    assert (gap["data"]["from"], gap["data"]["to"]) == ("2026-10-26T07:33:20Z", "2026-10-26T08:53:20Z")
+    assert gaps(b) == (1, 1, 4800.0)                                 # from T0 to now, counted once
+    assert not [e for e in bus(project) if e["type"] == "bridge.gap"]
+    text = b.render()
+    assert "jira_bridge_gaps_total 1\n" in text and "jira_bridge_gap_seconds_total 4800\n" in text
     late = jira_events(project)[1:]
     assert [(e["type"], e["time"]) for e in late] == [("jira.comment.added", "2026-10-26T08:03:20+00:00"),
                                                        ("jira.issue.transitioned", "2026-10-26T08:33:20+00:00")]
@@ -223,18 +233,21 @@ def test_a_gap_longer_than_max_catchup_is_not_recovered(project, jira, make, clo
     jira.comment(key, "carol", T0 + 9 * 3600)
     clock.t += 10 * 3600
     b.round()
-    assert next(e for e in bus(project) if e["type"] == "bridge.gap")["data"]["recovered"] is False
+    assert gaps(b) == (1, 0, 36000.0)
     assert [e["source"] for e in jira_events(project) if e["type"] == "jira.comment.added"] == [who(jira, "carol")]
 
 
 def test_a_restart_finds_its_last_good_poll_in_the_store_and_records_the_gap(project, jira, make, clock):
     jira.create("ABC", "alice", T0 - 300)
     once(make())
-    ProjectStore(for_project(project), project.key).write([Point(LAST_POLL, T0, T0, {"instrument": MACHINE})])
+    labels = {"instrument": INSTRUMENT}
+    ProjectStore(for_project(project), project.key).write([Point(LAST_POLL, T0, T0, labels),
+                                                          Point("jira_bridge_gaps_total", 2, T0, labels),
+                                                          Point("jira_bridge_gaps_recovered_total", 2, T0, labels)])
     clock.t += 3 * 3600
-    once(make())
-    [gap] = [e for e in bus(project) if e["type"] == "bridge.gap"]
-    assert gap["data"]["from"] == "2026-10-26T07:33:20Z"
+    b = make()
+    once(b)
+    assert gaps(b) == (3, 3, 3 * 3600.0)                             # counted on from what was stored
 
 
 def test_a_429_is_honoured_and_the_poll_goes_on(project, jira, make, sleeps):
@@ -289,13 +302,33 @@ def test_people_map_through_the_identity_map_with_their_teams(project, jira, mak
     got = [(e["type"], e["source"]) for e in jira_events(project)]
     assert got == [("jira.issue.created", "person.al"), ("jira.issue.assigned", "person.al"),
                    ("jira.comment.added", "person.jira.carol"), ("jira.issue.transitioned", "bot.robot"),
-                   ("jira.issue.transitioned", MACHINE)]
+                   ("jira.issue.transitioned", "bot.jira")]
     assert jira_events(project)[1]["data"]["assignee_machine"] == "person.dan"
     started = {e["source"]: e["data"] for e in bus(project) if e["type"] == "orchestra.machine.started"}
     assert (started["person.al"]["name"], started["person.al"]["team"]) == ("Alice L", "web")
     assert started["person.jira.carol"]["name"] == "Carol Person" and "team" not in started["person.jira.carol"]
     assert started["bot.robot"]["kind"] == "program"
-    assert started[MACHINE]["system"] == "jira" and started[MACHINE]["deployment"] == "datacenter"
+    assert {k: started["bot.jira"][k] for k in ("kind", "name", "bot")} == {"kind": "program", "name": "Jira", "bot": True}
+    assert "jira" not in started["bot.jira"]                         # no account behind it
+    only_actors(bus(project))
+
+
+@pytest.mark.parametrize("deployment", ["datacenter", "cloud"], indirect=True)
+def test_a_change_with_no_author_is_credited_to_jira_itself(project, jira, make, clock):
+    key = jira.create("ABC", "alice", T0 - 300)
+    jira.transition(key, None, T0 - 200, "3")                         # automation, a post-function: no author
+    jira.transition(key, None, T0 - 100, "10002")
+    b = make()
+    once(b)
+    moved = [e for e in jira_events(project) if e["type"] == "jira.issue.transitioned"]
+    assert [e["source"] for e in moved] == ["bot.jira", "bot.jira"] and moved[0]["data"]["login"] is None
+    started = [e for e in bus(project) if e["type"] == "orchestra.machine.started" and e["source"] == "bot.jira"]
+    assert len(started) == 1 and started[0]["id"].startswith("jira:announce:bot.jira:")
+    clock.t += 60
+    once(make())                                                       # a restart announces it no more
+    assert len([e for e in bus(project) if e["source"] == "bot.jira" and e["type"] == "orchestra.machine.started"]) == 1
+    machines = {m["id"]: m for m in only_actors(bus(project))}
+    assert machines["bot.jira"]["kind"] == "program" and machines["bot.jira"]["name"] == "Jira"
 
 
 @pytest.mark.parametrize("deployment", ["datacenter", "cloud"], indirect=True)

@@ -3,10 +3,11 @@ as the people who did it. It only reads.
 
 **What it follows**: the issues of ``projects``, or those a ``jql`` query matches, on one Jira site
 (Data Center, or Cloud). A second site (the FedRAMP instance, say) is a second bridge,
-``[bridges.jira_<name>]``, with its own machine, instrument and token.
+``[bridges.jira_<name>]``, with its own process, instrument and token.
 
 **What it publishes** (``translate.py``): created, assigned, transitioned, updated (sprint,
-priority, labels, links, due date) and comment added; the source whoever acted, the subject the
+priority, labels, links, due date) and comment added; the source whoever acted (a change with no
+author is Jira's own, ``bot.jira``: ``identity.py``), the subject the
 issue's key, the time and id Jira's. Never text: summaries and descriptions are never asked for,
 and comment bodies are dropped as they are read (``records.py``).
 
@@ -16,19 +17,19 @@ and comment bodies are dropped as they are read (``records.py``).
 ``jira:<site>:issue:``), so nothing is published twice, and reads Jira again from the later of its
 last event and its last good poll (``jira_bridge_last_poll_timestamp_seconds``, which its
 instrument stored), less ``overlap``; never further back than ``max_catchup``; with neither, from
-``lookback`` ago. A poll that succeeds more than three rounds after the last good one records the
-gap once, as ``bridge.gap`` {site, from, to, recovered}, and the events missed are published with
-their own times.
+``lookback`` ago. A poll that succeeds more than three rounds after the last good one closes a
+**gap**: the events missed are published with their own times, and the gap is counted
+(``gaps.py``: ``jira_bridge_gaps_total`` and the rest), never published.
 
-**Levels** (``levels.py``) are read from Jira each round and served on ``/metrics``; the plugin
-declares the scrape that stores them (the instrument ``bridges.<section>``). The bridge itself is
-the machine ``bridges.<section>`` (``bridges.jira``): it announces itself on start and publishes
-``bridge.gap`` and Jira's own changes (a change with no author) under that source."""
+**Levels** (``levels.py``) and the gap counts are read each round and served on ``/metrics``; the
+plugin declares the scrape that stores them (the instrument ``bridges.<section>``).
+
+**The bridge is no machine** (``relay.py``): it never announces itself and publishes only as the
+people and bots who acted. ``bridges.<section>`` names its process, its log and its instrument."""
 
 from __future__ import annotations
 
 import dataclasses
-import os
 import sys
 import threading
 import time
@@ -41,7 +42,9 @@ from orchestra.metrics import MetricsStore
 
 from ..announce import Announcer
 from ..config import JiraConfig
+from ..gaps import Gaps
 from ..identity import Actor, People
+from ..relay import Relay
 from ..serve import MetricsServer
 from . import poll
 from .api import Jira, JiraError
@@ -50,7 +53,6 @@ from .records import User
 from .translate import RANK, Seen, events, prefix
 
 SYSTEM = "jira"                       # the identity map's key for Jira accounts, on every site
-GAP_ROUNDS = 3
 
 
 def iso(t: float) -> str:
@@ -60,10 +62,13 @@ def iso(t: float) -> str:
 class Bridge:
     def __init__(self, config: JiraConfig, api: Jira, events: Events, store: MetricsStore, *,
                  people: People | None = None, clock: Callable[[], float] = time.time):
-        self.config, self.api, self.events, self.store, self.clock = config, api, events, store, clock
-        self.machine = self.instrument = f"bridges.{config.name}"
+        self.config, self.api, self.store, self.clock = config, api, store, clock
+        self.events = Relay(events)
+        self.name = self.instrument = f"bridges.{config.name}"     # its process, log and instrument; never a source
         self.people = people if people is not None else People.load(config.people)
-        self.announcer = Announcer(events, SYSTEM, self.people)
+        self.announcer = Announcer(self.events, SYSTEM, self.people)
+        self.jira = self.people.itself(SYSTEM, "Jira")              # the actor of a change with no author
+        self.gaps = Gaps(SYSTEM)
         self.site: poll.Site | None = None
         self.seen: set[str] = set()
         self.last_ok: float | None = None
@@ -75,7 +80,7 @@ class Bridge:
         self.server: MetricsServer | None = None
 
     def log(self, msg: str) -> None:
-        print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {self.machine}: {msg}", file=sys.stderr, flush=True)
+        print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {self.name}: {msg}", file=sys.stderr, flush=True)
 
     def _login(self, u: User) -> str | None:
         """The account the identity map knows: Data Center's user key when the map lists that, else
@@ -84,11 +89,11 @@ class Bridge:
             return u.key
         return u.login
 
-    def actor(self, u: User | None) -> Actor | None:
-        """The machine behind a Jira user, named from the map, else by Jira's display name; None for
-        Jira itself."""
+    def actor(self, u: User | None) -> Actor:
+        """The machine behind a Jira user, named from the map, else by Jira's display name; Jira
+        itself (``bot.jira``) for a change with no author."""
         if u is None or not u.login:
-            return None
+            return self.jira
         a = self.people.actor(SYSTEM, self._login(u), u.bot, namespaced=True)
         return a if a.name or not u.name else dataclasses.replace(a, name=u.name)
 
@@ -117,14 +122,8 @@ class Bridge:
         self.last_ok = last_poll or None
         last = max(latest, last_poll)
         self.since = last - self.config.overlap if last else self.clock() - self.config.lookback
+        self.gaps.resume(self.config.site, self.store, {"instrument": self.instrument}, self.log)
         self.log(f"resumed: {len(self.seen)} of its events on the bus; reading from {iso(self.since)}")
-
-    def announce(self) -> None:
-        self.events.publish("orchestra.machine.started", {
-            "mode": "continuous", "kind": "program", "package": "bridges", "listens_for": [],
-            "log": os.environ.get("ORCHESTRA_MACHINE_LOG"), "system": SYSTEM, "site": self.config.site,
-            "deployment": self.config.deployment, "projects": self.config.projects, "jql": bool(self.config.jql),
-            "every_s": self.config.every}, source=self.machine)
 
     def _say_if_owner_unlisted(self, me: User) -> None:
         if me.login and not self.people.listed(SYSTEM, me.login) and not (me.key and self.people.listed(SYSTEM, me.key)):
@@ -132,11 +131,11 @@ class Bridge:
             self.log(f"the token's owner is not in the identity map, so is {self.machine_of(me.login)}: "
                      f'list them as jira = "{me.login}" (their {what}) to name them')
 
-    def _window(self, now: float) -> tuple[float, dict | None]:
+    def _window(self, now: float) -> tuple[float, bool | None]:
+        """Where this poll reads from, and whether it closes a gap that it reads back whole (None:
+        no gap; counted only once the poll succeeds)."""
         floor = now - self.config.max_catchup
-        gap = None
-        if self.last_ok and now - self.last_ok > GAP_ROUNDS * self.config.every:
-            gap = {"site": self.config.site, "from": iso(self.last_ok), "to": iso(now), "recovered": self.since >= floor}
+        gap = (self.since >= floor) if Gaps.late(self.last_ok, now, self.config.every) else None
         return max(self.since, floor), gap
 
     def poll(self) -> int:
@@ -157,10 +156,10 @@ class Bridge:
         mine = poll.mine(self.api, scope)
         found = [s for i in issues for s in events(self.config.site, i, site.statuses, self.machine_of)
                  if s.id not in self.seen and s.ts >= start]
-        if gap:
-            self.events.publish("bridge.gap", gap, source=self.machine)
+        if gap is not None:
+            self.gaps.close(self.config.site, now - self.last_ok, gap)
             self.log(f"gap of {round(now - self.last_ok)} s since the last good poll"
-                     + ("" if gap["recovered"] else f"; only the last {round(self.config.max_catchup)} s were read"))
+                     + ("" if gap else f"; only the last {round(self.config.max_catchup)} s were read"))
         unique = {s.id: s for s in found}
         for s in sorted(unique.values(), key=lambda s: (s.ts, RANK[s.type], s.id)):
             self._publish(s)
@@ -168,6 +167,7 @@ class Bridge:
             self.done, self.done_at = done, now
         levels = measure(self.config.projects, open_, self.done, mine, site.me.login, self.is_bot,
                          self.config.bots_ask, now)
+        levels.update({name: {(): v} for name, v in self.gaps.values(self.config.site).items()})
         with self.lock:
             self.levels = levels
         self.last_ok = now
@@ -176,10 +176,8 @@ class Bridge:
 
     def _publish(self, s: Seen) -> None:
         actor = self.actor(s.actor)
-        if actor:
-            self.announcer.actor(actor, s.time)
-        self.events.publish(s.type, s.data, source=actor.source if actor else self.machine, subject=s.subject,
-                            time=s.time, id=s.id)
+        self.announcer.actor(actor, s.time)
+        self.events.publish(s.type, s.data, source=actor.source, subject=s.subject, time=s.time, id=s.id)
         self.seen.add(s.id)
 
     def render(self) -> str | None:
@@ -205,7 +203,6 @@ class Bridge:
             self.log(f"serving {server.url}")
         try:
             self.resume()
-            self.announce()
             self.announcer.reannounce(iso(self.clock()),
                                       lambda login: self.people.actor(SYSTEM, login, namespaced=True))
             while not stop.is_set():

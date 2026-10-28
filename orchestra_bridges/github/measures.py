@@ -1,53 +1,100 @@
-"""Writing the first-response counts (``responses.py``) to the project's metrics store.
+"""The first-response counts (``responses.py``) and the gap counts (``gaps.py``), served on
+``/metrics`` for the instrument the plugin declares (the scrape ``bridges.github``, ``plugin.py``),
+which stores them labelled ``instrument="bridges.github"``. The bridge never writes a metric itself.
 
-Each change is written at the time it happened on GitHub, so after a gap (the laptop slept) the
-history is filled in as it was; but never before the last point already written for the repository
-(its watermark), because a store reads a series as its last value at or before each instant, and a
-point slipped in behind a later one would rewrite what was already read. Polling a minute apart,
-a change is so stamped up to a poll late. Between changes the series are written again, unchanged,
-every poll, so a quiet repository is told from a bridge that stopped. The watermark of a restarted
-bridge is the latest point in the store. A store that cannot be reached loses the points, never an
-event."""
+Each change is served at the time it happened on GitHub (the sample's own timestamp, which the
+instrument keeps), so after a gap (the laptop slept) the history is filled in as it was; but never
+before the last point already served for the repository (its watermark), because a store reads a
+series as its last value at or before each instant, and a point slipped in behind a later one would
+rewrite what was already read. Between changes the series are served again, unchanged, every poll,
+so a quiet repository is told from a bridge that stopped.
+
+**Points wait in memory until a scrape takes them.** Each ``GET /metrics`` answers with every point
+waiting, several of one series at their own times, and they are then gone; at most ``WAITING``
+wait (the oldest go first). A scrape that fails once it has read them loses them, as a store that
+could not be reached did; the next carries whole totals, so only the shape between is lost.
+
+On start the watermark, and each counter's last value, are what the instrument stored last for the
+repository (read by ``instrument`` and ``repo``), so a restart continues from them."""
 
 from __future__ import annotations
 
 import sys
+import threading
+from collections import deque
 
-from orchestra.metrics import MetricsStore
+from orchestra.metrics import MetricsStore, Point
 
 from .responses import COUNTERS, Responses
 
+INSTRUMENT = "bridges.github"
 LEVEL = "github_issues_unanswered"
+WAITING = 50_000
+
+
+def _escape(v: str) -> str:
+    return v.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+
+
+def _num(v: float) -> str:
+    return str(int(v)) if v == int(v) else repr(v)
 
 
 class Measures:
-    def __init__(self, store: MetricsStore, machine: str):
-        self.store, self.machine = store, machine
+    def __init__(self, store: MetricsStore, instrument: str = INSTRUMENT):
+        self.store, self.instrument = store, instrument
         self.watermark: dict[str, float] = {}
-        self.written: dict[str, dict[str, float]] = {}      # repo -> each counter's last written value (COUNTERS keys)
+        self.written: dict[str, dict[str, float]] = {}      # repo -> each counter's last stored value (COUNTERS keys)
+        self.waiting: deque[Point] = deque(maxlen=WAITING)
+        self.ready = False                                   # resumed: /metrics answers
+        self.lock = threading.Lock()
 
     def labels(self, repo: str) -> dict[str, str]:
-        return {"machine": self.machine, "repo": repo}
+        """The labels a point is served with (the instrument adds ``instrument`` and ``project``)."""
+        return {"repo": repo}
+
+    def stored(self, repo: str) -> dict[str, str]:
+        """The labels that find the repository's points in the store."""
+        return {"instrument": self.instrument, "repo": repo}
 
     def resume(self, repo: str) -> None:
-        """The watermark, and each counter's last written value, so a restart continues from them."""
+        """The watermark, and each counter's last stored value, so a restart continues from them."""
         self.written[repo] = {}
         try:
-            last = self.store.latest(LEVEL, self.labels(repo))
+            last = self.store.latest(LEVEL, self.stored(repo))
             for key, (name, extra) in COUNTERS.items():
-                if got := self.store.latest(name, {**self.labels(repo), **extra}):
+                if got := self.store.latest(name, {**self.stored(repo), **extra}):
                     self.written[repo][key] = got[1]
         except Exception as e:  # noqa: BLE001 - measuring never stops the bridge
-            print(f"bridges.github: metrics store not read ({type(e).__name__}: {e})", file=sys.stderr)
+            print(f"{self.instrument}: metrics store not read ({type(e).__name__}: {e})", file=sys.stderr)
             last = None
         self.watermark[repo] = last[0] if last else 0.0
+        self.ready = True
 
-    def write(self, repo: str, responses: Responses, t: float) -> None:
-        """The counts after a change that happened at ``t`` (or now, re-asserted)."""
+    def write(self, repo: str, responses: Responses, t: float, also: dict[str, float] | None = None) -> None:
+        """Serve the counts after a change that happened at ``t`` (or now, re-asserted), and
+        ``also`` (the gap counts) beside them."""
         ts = max(t, self.watermark.get(repo, 0.0))
-        try:
-            self.store.write(responses.points(ts, self.labels(repo)))
-        except Exception as e:  # noqa: BLE001 - measuring never stops the bridge
-            print(f"bridges.github: metrics not written ({type(e).__name__}: {e})", file=sys.stderr)
-            return
+        labels = self.labels(repo)
+        pts = responses.points(ts, labels) + [Point(n, v, ts, labels) for n, v in (also or {}).items()]
+        with self.lock:
+            self.waiting.extend(pts)
         self.watermark[repo] = ts
+
+    def render(self) -> str | None:
+        """``/metrics``: every point waiting, with its time, which a scrape then has taken; None
+        (503) until the bridge has read its past back."""
+        if not self.ready:
+            return None
+        with self.lock:
+            pts, self.waiting = list(self.waiting), deque(maxlen=WAITING)
+        by_name: dict[str, list[Point]] = {}
+        for p in pts:
+            by_name.setdefault(p.series, []).append(p)
+        lines: list[str] = []
+        for name, group in by_name.items():
+            lines.append(f"# TYPE {name} {'counter' if name.endswith('_total') else 'gauge'}")
+            for p in group:
+                inner = ",".join(f'{k}="{_escape(v)}"' for k, v in sorted(p.labels.items()))
+                lines.append(f"{name}{{{inner}}} {_num(p.value)} {round(p.ts * 1000)}")
+        return "\n".join(lines) + "\n" if lines else ""

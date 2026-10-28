@@ -23,7 +23,13 @@ bot (GitHub's user type ``Bot``, or a login ending in ``[bot]``, which is droppe
 not the first to name people by bare login asks for its system's **namespace**
 (``person.<system>.<login>``; the Slack bridge does), so two strangers who share a login on two
 systems stay two machines. The GitHub bridge's sources keep the bare login, as they were first
-published. Sources are lowercased and keep only letters, digits and ``. _ -``; anything else
+published.
+
+What the other system does with no account behind it (a Jira change with no author: its own
+automation, a workflow post-function, an import) is the system's own act, and its actor is the
+system as a bot: ``bot.<system>`` (``bot.jira``), kind program, named for the system. It is a real
+actor in that system, never the bridge that relays it. A namespaced bridge's unlisted accounts are
+``bot.<system>.<login>`` and so never take that name. Sources are lowercased and keep only letters, digits and ``. _ -``; anything else
 becomes ``-``."""
 
 from __future__ import annotations
@@ -43,7 +49,7 @@ class IdentityError(Exception):
 @dataclass(frozen=True)
 class Actor:
     source: str                 # the machine: person.<key> or bot.<key>
-    login: str                  # the account on the system the event came from
+    login: str | None           # the account on the system the event came from; None: the system itself
     bot: bool = False
     name: str | None = None     # from the identity map only
     team: str | None = None
@@ -51,8 +57,9 @@ class Actor:
     def announcement(self, system: str) -> dict:
         """What the bridge announces for this actor (``orchestra.machine.started``): Orchestra reads
         ``kind``, ``mode`` and ``package``; the rest goes to the package's card unread."""
-        d = {"kind": "program" if self.bot else "person", "mode": "ad hoc", "package": "bridges",
-             system: self.login, "bot": self.bot}
+        d = {"kind": "program" if self.bot else "person", "mode": "ad hoc", "package": "bridges", "bot": self.bot}
+        if self.login is not None:
+            d[system] = self.login
         if self.name:
             d["name"] = self.name
         if self.team:
@@ -119,3 +126,8 @@ class People:
         key = login.removesuffix("[bot]") if bot else login
         space = f"{_safe(system)}." if namespaced else ""
         return Actor(f"{'bot' if bot else 'person'}.{space}{_safe(key)}", login, bot)
+
+    def itself(self, system: str, name: str) -> Actor:
+        """The other system as the actor of what it did with no account behind it: ``bot.<system>``,
+        named ``name`` (``Jira``)."""
+        return Actor(f"bot.{_safe(system)}", None, True, name)

@@ -18,7 +18,8 @@ timeline, its head's checks), so the levels are GitHub's state, not something re
 
 A reviewer's verdict is their latest review that approves, requests changes or was dismissed; a
 review that only comments gives none. Flows (opened, merged, reviews submitted) are the bridge's
-events, which Orchestra counts on its own; nothing here counts them twice."""
+events, which Orchestra counts on its own; nothing here counts them twice. Beside them the bridge
+serves its gap counts (``gaps.py``) and ``github_prs_bridge_last_poll_timestamp_seconds``."""
 
 from __future__ import annotations
 
@@ -107,9 +108,10 @@ def _escape(v: str) -> str:
 def render(by_repo: dict[str, tuple[dict[str, float], float]]) -> str:
     """The Prometheus text format: each repository's levels and when its last good poll began."""
     lines: list[str] = []
-    for name in (*SERIES, LAST_POLL):
-        lines.append(f"# TYPE {name} gauge")
+    extra = sorted({n for values, _ in by_repo.values() for n in values} - set(SERIES))
+    for name in (*SERIES, *extra, LAST_POLL):
+        lines.append(f"# TYPE {name} {'counter' if name.endswith('_total') else 'gauge'}")
         for repo, (values, last_poll) in sorted(by_repo.items()):
-            value = last_poll if name == LAST_POLL else values[name]
+            value = last_poll if name == LAST_POLL else values.get(name, 0.0)
             lines.append(f'{name}{{repo="{_escape(repo)}"}} {int(value) if value == int(value) else value!r}')
     return "\n".join(lines) + "\n"

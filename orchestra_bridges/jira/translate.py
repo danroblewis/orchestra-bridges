@@ -1,7 +1,7 @@
 """Records as events to publish: types, stable ids, metadata-only data.
 
 The subject is the issue's key (``ABC-12``), the time Jira's, the source whoever acted (the bridge
-maps the account, ``identity.py``; a change with no author is Jira's own, published as the bridge).
+maps the account, ``identity.py``; a change with no author is Jira's own, published as ``bot.jira``).
 
 | Type | When | Data besides the common fields |
 |---|---|---|

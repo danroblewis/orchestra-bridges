@@ -10,13 +10,15 @@ from pathlib import Path
 import fake_slack
 import pytest
 from fake_github import TOKEN, FakeGitHub
+from orchestra.collect.round import points_of
+from orchestra.collect.spec import Collector
 from orchestra.config import load_project
 from orchestra.events import Events
 from orchestra.metrics import ProjectStore, for_project
 
 from orchestra_bridges import config as cfg
 from orchestra_bridges.github.api import GitHub
-from orchestra_bridges.github.bridge import MACHINE, Bridge
+from orchestra_bridges.github.bridge import Bridge
 from orchestra_bridges.slack import bridge as slack_bridge
 from orchestra_bridges.slack.api import Slack
 
@@ -32,6 +34,7 @@ every = "60s"
 lookback = "1h"
 max_catchup = "6h"
 overlap = "10m"
+port = 0
 api = "{api}"
 """
 
@@ -136,7 +139,7 @@ def make_bridge(project, github, clock):
     """A new bridge over the project's bus and store, not yet resumed (call it again for a restart)."""
     def make():
         conf = cfg.github(project.config.raw, project.repo_root)
-        events = Events.for_project(project, source=MACHINE)
+        events = Events.for_project(project)
         store = ProjectStore(for_project(project), project.key)
         b = Bridge(conf, GitHub(TOKEN, github.base, sleep=lambda s: None, clock=clock), events, store, clock=clock)
         return b
@@ -154,3 +157,15 @@ def published(project, type_=None) -> list[dict]:
 def run_once(bridge) -> None:
     stop = threading.Event()
     bridge.run(stop, once=True)
+
+
+def scrape(bridge, project, name: str, now: float) -> int:
+    """What the instrument ``name`` (the plugin's scrape) does once: read the bridge's ``/metrics``
+    and store the points, as Orchestra labels them; how many points."""
+    text = bridge.render()
+    if not text:
+        return 0
+    r = points_of(Collector.scrape(name, "http://127.0.0.1:1/metrics"), text, project.key, now)
+    assert not r.bad and not r.error, r
+    for_project(project).write(r.points)
+    return len(r.points)

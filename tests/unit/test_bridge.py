@@ -1,11 +1,13 @@
 import json
 from itertools import pairwise
 
-from conftest import T0, bus, published, run_once
+from conftest import T0, bus, published, run_once, scrape
 from fake_github import CANARY, TOKEN
 from orchestra.metrics import for_project
+from relayed import only_actors
 
 R = "microsoft/vscode"
+INSTRUMENT = "bridges.github"
 
 
 def busy(g):
@@ -21,8 +23,17 @@ def busy(g):
 
 
 def level(project, series, **labels):
-    last = for_project(project).latest(series, {"machine": "bridges.github", "repo": R, **labels})
+    last = for_project(project).latest(series, {"instrument": INSTRUMENT, "repo": R, **labels})
     return last[1] if last else None
+
+
+def stored(project, series):
+    return for_project(project).raw(series, {"instrument": INSTRUMENT, "repo": R})
+
+
+def gaps(b):
+    """The gap counters the bridge serves for R: (gaps, recovered, seconds)."""
+    return tuple(b.gaps.values(R).values())
 
 
 def test_a_poll_publishes_what_people_did_as_them(project, github, make_bridge):
@@ -36,16 +47,17 @@ def test_a_poll_publishes_what_people_did_as_them(project, github, make_bridge):
     assert evs[0]["id"] == f"github:{R}:opened:1"
     assert evs[0]["time"] == "2026-10-26T07:03:20+00:00"           # GitHub's time, not the poll's
     assert evs[0]["data"] == {"repository": R, "issue": 1, "login": "alice", "association": "NONE"}
+    machines = only_actors(bus(project))
+    assert {m["id"] for m in machines} == {"person.alice", "bot.vscode-triage-bot", "person.bob", "person.carol"}
 
 
 def test_each_actor_is_announced_once_before_their_first_event(project, github, make_bridge):
     busy(github)
     run_once(make_bridge())
     announced = [e for e in bus(project) if e["type"] == "orchestra.machine.started"]
-    assert [e["source"] for e in announced] == ["bridges.github", "person.alice", "bot.vscode-triage-bot",
-                                                "person.bob", "person.carol"]
-    assert announced[0]["data"]["package"] == "bridges" and announced[0]["data"]["mode"] == "continuous"
-    assert announced[2]["data"]["kind"] == "program" and announced[1]["data"]["kind"] == "person"
+    assert [e["source"] for e in announced] == ["person.alice", "bot.vscode-triage-bot", "person.bob", "person.carol"]
+    assert announced[0]["data"]["package"] == "bridges" and announced[0]["data"]["mode"] == "ad hoc"
+    assert announced[1]["data"]["kind"] == "program" and announced[0]["data"]["kind"] == "person"
     order = [e["source"] for e in bus(project)]
     assert order.index("person.bob") < next(i for i, e in enumerate(bus(project)) if e["type"] == "github.issue.commented")
 
@@ -70,8 +82,9 @@ def test_overlapping_polls_and_restarts_publish_nothing_twice(project, github, c
     clock.t += 600                                     # past overlap: everything read is counted
     run_once(b2)
     again = bus(project)
-    assert [e for e in again if e["source"] != "bridges.github"] == [e for e in first if e["source"] != "bridges.github"]
+    assert again == first
     assert len({e["id"] for e in again}) == len(again)
+    only_actors(again)
     assert b2.responses[R].waiting.keys() == {f"{R}#2"}   # rebuilt from the bus
 
 
@@ -79,10 +92,12 @@ def test_first_response_counts(project, github, clock, make_bridge):
     busy(github)
     b = make_bridge()
     run_once(b)
+    scrape(b, project, INSTRUMENT, clock.t)
     assert level(project, "github_issues_unanswered") == 0     # carol's issue, opened 5 minutes ago, is not counted yet
     for _ in range(5):                                         # five minutes on, it is older than overlap (10 minutes)
         clock.t += 60
         b.round()
+    scrape(b, project, INSTRUMENT, clock.t)
     assert level(project, "github_issues_unanswered") == 1
     assert level(project, "github_issues_opened_total") == 2
     assert level(project, "github_issues_answered_total", within="15m") == 1
@@ -91,10 +106,12 @@ def test_first_response_counts(project, github, clock, make_bridge):
     github.comment(2, "erin", T0 + 330)
     clock.t += 60
     b.round()
+    scrape(b, project, INSTRUMENT, clock.t)
     assert level(project, "github_issues_unanswered") == 1     # read and published, counted only past overlap
     for _ in range(10):
         clock.t += 60
         b.round()
+    scrape(b, project, INSTRUMENT, clock.t)
     assert level(project, "github_issues_unanswered") == 0
     assert level(project, "github_issues_answered_total", within="15m") == 2
 
@@ -106,7 +123,8 @@ def test_points_are_never_written_behind_ones_already_written(project, github, c
     github.comment(2, "erin", T0 - 20)                 # happened before the last poll, seen only now
     clock.t += 60
     b.round()
-    pts = for_project(project).raw("github_issues_unanswered", {"machine": "bridges.github", "repo": R})
+    scrape(b, project, INSTRUMENT, clock.t)
+    pts = stored(project, "github_issues_unanswered")
     assert [t for t, _ in pts] == sorted(t for t, _ in pts)
     assert pts[-2] == (T0, 0.0) and pts[-1] == (T0 + 60, 0.0)
 
@@ -118,12 +136,15 @@ def test_after_a_gap_it_catches_up_with_the_events_own_times(project, github, cl
     github.comment(5, "gina", T0 + 3600)
     clock.t += 7200
     b.round()
-    [gap] = published(project, "bridge.gap")
-    assert gap["data"]["recovered"] is True and gap["data"]["from"] == "2026-10-26T07:33:20Z"
+    assert gaps(b) == (1, 1, 7200.0)                   # counted, never published
+    assert published(project, "bridge.gap") == []
     assert [e["time"] for e in published(project) if e["type"].startswith("github.issue.")] == [
         "2026-10-26T08:03:20+00:00", "2026-10-26T08:33:20+00:00"]
-    pts = for_project(project).raw("github_issues_unanswered", {"machine": "bridges.github", "repo": R})
+    scrape(b, project, INSTRUMENT, clock.t)            # one scrape stores each change at its own time
+    pts = stored(project, "github_issues_unanswered")
     assert (T0 + 1800, 1.0) in pts and (T0 + 3600, 0.0) in pts
+    assert level(project, "github_issues_bridge_gaps_total") == 1
+    assert level(project, "github_issues_bridge_gap_seconds_total") == 7200
 
 
 def test_a_gap_longer_than_max_catchup_is_recorded_as_not_recovered(project, github, clock, make_bridge):
@@ -133,16 +154,24 @@ def test_a_gap_longer_than_max_catchup_is_recorded_as_not_recovered(project, git
     github.open(7, "new", T0 + 9 * 3600)
     clock.t += 10 * 3600
     b.round()
-    assert published(project, "bridge.gap")[0]["data"]["recovered"] is False
+    assert gaps(b) == (1, 0, 36000.0)                  # a gap, not read back whole
     assert [e["subject"] for e in published(project, "github.issue.opened")] == [f"{R}#7"]
 
 
 def test_a_restart_after_a_gap_records_it_and_catches_up(project, github, clock, make_bridge):
-    run_once(make_bridge())
+    b = make_bridge()
+    run_once(b)
+    scrape(b, project, INSTRUMENT, clock.t)            # the instrument stored the last good poll
     github.open(8, "hal", T0 + 1200)
     clock.t += 3600
-    run_once(make_bridge())
-    assert published(project, "bridge.gap")[0]["data"]["recovered"] is True
+    b2 = make_bridge()
+    run_once(b2)
+    assert gaps(b2) == (1, 1, 3600.0)
+    scrape(b2, project, INSTRUMENT, clock.t)
+    clock.t += 3600
+    b3 = make_bridge()                                 # a second restart continues the counters
+    run_once(b3)
+    assert gaps(b3) == (2, 2, 7200.0)
     assert [e["subject"] for e in published(project, "github.issue.opened")] == [f"{R}#8"]
 
 
@@ -152,6 +181,7 @@ def test_no_text_and_no_token_reach_the_bus_the_store_or_the_log(project, github
     run_once(b)
     clock.t += 60
     b.round()
+    assert scrape(b, project, INSTRUMENT, clock.t)     # what it served, now in the store
     metrics = (project.state_dir / "metrics.jsonl").read_text()
     out = capsys.readouterr()
     for where in (json.dumps(bus(project)), metrics, out.out + out.err):
@@ -177,21 +207,19 @@ def test_an_outage_publishes_one_gap_once_it_is_over(project, github, clock, mak
         clock.t += 240
         github.fail_next = [(502, {})]
         b.round()
-    assert published(project, "bridge.gap") == []
+    assert gaps(b) == (0, 0, 0)
     clock.t += 240
-    b.round()                                          # it answers again
+    b.round()                                          # it answers again: one gap, from T0 to now
     clock.t += 60
     b.round()
-    [gap] = published(project, "bridge.gap")
-    assert (gap["data"]["from"], gap["data"]["to"]) == ("2026-10-26T07:33:20Z", "2026-10-26T07:57:20Z")
-    assert gap["data"]["recovered"] is True
+    assert gaps(b) == (1, 1, 1440.0)
 
 
 def counters_never_fall(project):
     from orchestra_bridges.github.responses import COUNTERS
     store = for_project(project)
     for name, extra in COUNTERS.values():
-        pts = store.raw(name, {"machine": "bridges.github", "repo": R, **extra})
+        pts = store.raw(name, {"instrument": INSTRUMENT, "repo": R, **extra})
         assert all(b >= a for (_, a), (_, b) in pairwise(pts)), (name, extra, pts)
 
 
@@ -204,12 +232,14 @@ def test_a_comment_github_shows_late_is_counted_in_time_order_and_a_restart_agre
     for _ in range(12):
         clock.t += 60
         b.round()
+    scrape(b, project, INSTRUMENT, clock.t)
     assert level(project, "github_issues_answered_total", within="1h") == 1
     assert level(project, "github_issues_closed_unanswered_total") == 0
-    clock.t += 60
-    run_once(make_bridge())                            # a restart rebuilds the same counts
-    clock.t += 60
-    run_once(make_bridge())
+    for _ in range(2):                                 # restarts rebuild the same counts
+        clock.t += 60
+        b = make_bridge()
+        run_once(b)
+        scrape(b, project, INSTRUMENT, clock.t)
     assert level(project, "github_issues_answered_total", within="1h") == 1
     assert level(project, "github_issues_closed_unanswered_total") == 0
     counters_never_fall(project)
@@ -221,18 +251,21 @@ def test_a_restart_continues_every_counter_from_what_was_written(project, github
     run_once(b)
     clock.t += 600
     b.round()
+    scrape(b, project, INSTRUMENT, clock.t)
     from orchestra.metrics import Point
-    labels = {"machine": "bridges.github", "repo": R, "project": project.key}
+    labels = {"instrument": INSTRUMENT, "repo": R, "project": project.key}
     store = for_project(project)                       # what an earlier bridge wrote, from events the bus no longer holds
     store.write([Point("github_issues_opened_total", 40.0, clock.t + 1, labels),
                  Point("github_issues_closed_unanswered_total", 7.0, clock.t + 1, labels)])
     clock.t += 60
     b2 = make_bridge()
     run_once(b2)
+    scrape(b2, project, INSTRUMENT, clock.t)
     assert level(project, "github_issues_opened_total") == 40.0
     github.open(9, "zoe", clock.t + 10)
     clock.t += 700
     b2.round()
+    scrape(b2, project, INSTRUMENT, clock.t)
     assert level(project, "github_issues_opened_total") == 41.0
     assert level(project, "github_issues_closed_unanswered_total") == 7.0
     counters_never_fall(project)
@@ -266,7 +299,9 @@ def test_a_restart_reads_events_published_under_the_old_types(project, github, c
     for type_, src, t, n in (("issue.opened", "person.alice", T0 - 3000, "opened:1"),
                              ("issue.commented", "person.bob", T0 - 2900, f"comment:{c['id']}")):
         events.publish(type_, {}, source=src, subject=f"{R}#1", time=iso(t), id=f"github:{R}:{n}")
-    run_once(make_bridge())
+    b = make_bridge()
+    run_once(b)
+    scrape(b, project, INSTRUMENT, clock.t)
     assert [e["type"] for e in published(project)] == ["issue.opened", "issue.commented"]     # nothing published twice
     assert level(project, "github_issues_answered_total", within="15m") == 1
     assert level(project, "github_issues_opened_total") == 1

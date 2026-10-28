@@ -13,10 +13,11 @@ from fake_github_prs import FakePRs
 from orchestra.config import load_project
 from orchestra.events import Events
 from orchestra.metrics import Point, ProjectStore, for_project
+from relayed import only_actors
 
 from orchestra_bridges import config as cfg
 from orchestra_bridges.github.api import GitHub
-from orchestra_bridges.github_prs.bridge import INSTRUMENT, MACHINE, Bridge
+from orchestra_bridges.github_prs.bridge import INSTRUMENT, Bridge
 from orchestra_bridges.github_prs.levels import LAST_POLL
 
 R = "acme/service"
@@ -67,7 +68,7 @@ def make(project, gh, clock):
     def new():
         conf = cfg.github_prs(project.config.raw, project.repo_root)
         return Bridge(conf, GitHub(TOKEN, gh.base, sleep=lambda s: None, clock=clock),
-                      Events.for_project(project, source=MACHINE), ProjectStore(for_project(project), project.key),
+                      Events.for_project(project), ProjectStore(for_project(project), project.key),
                       clock=clock)
     return new
 
@@ -82,6 +83,11 @@ def pr_events(project):
 
 def once(b):
     b.run(threading.Event(), once=True)
+
+
+def gaps(b):
+    """The gap counters the bridge serves for R: (gaps, recovered, seconds)."""
+    return tuple(b.gaps.values(R).values())
 
 
 def lifecycle(g):
@@ -125,6 +131,9 @@ def test_a_pull_request_to_merge_is_published_as_the_people_who_acted(project, g
     assert by["github.pr.pushed"]["data"]["head"] == gh.head(7) and by["github.pr.pushed"]["data"]["pusher_from"] == "committer"
     assert by["github.pr.merged"]["id"] == f"github:{R}:pr:7:event:{gh.timelines[7][-2]['id']}"
     assert "github.pr.closed" not in by                             # the merge's own close is not a close
+    machines = only_actors(bus(project))
+    assert {m["id"] for m in machines} == {"person.alice", "person.bob", "person.carol", "person.sail-bot",
+                                           "bot.github-actions"}
 
 
 def test_every_event_carries_what_reengaging_a_worker_needs(project, gh, make, clock):
@@ -197,8 +206,9 @@ def test_overlapping_polls_and_restarts_publish_nothing_twice(project, gh, make,
     clock.t += 60
     once(make())                                                      # a restart resumes from the bus
     again = bus(project)
-    assert [e for e in again if e["source"] != MACHINE] == [e for e in first if e["source"] != MACHINE]
+    assert again == first
     assert len({e["id"] for e in again}) == len(again)
+    only_actors(again)
 
 
 def test_a_new_head_after_a_restart_is_a_push_and_the_old_one_is_not(project, gh, make, clock):
@@ -226,8 +236,11 @@ def test_after_a_gap_it_catches_up_once_with_the_events_own_times(project, gh, m
     gh.label(6, "SAIL", "alice", T0 + 3600)
     clock.t += 7200
     b.round()
-    [gap] = [e for e in bus(project) if e["type"] == "bridge.gap"]
-    assert gap["source"] == MACHINE and gap["data"]["recovered"] is True and gap["data"]["repository"] == R
+    assert not [e for e in bus(project) if e["type"] == "bridge.gap"]       # a gap is counted, never published
+    assert gaps(b) == (1, 1, 7200.0)
+    text = b.render()
+    assert f'github_prs_bridge_gaps_total{{repo="{R}"}} 1\n' in text
+    assert f'github_prs_bridge_gap_seconds_total{{repo="{R}"}} 7200\n' in text
     late = [e for e in pr_events(project) if e["type"] != "github.pr.opened"]
     assert [(e["type"], e["time"]) for e in late] == [
         ("github.pr.review_submitted", "2026-10-26T08:03:20+00:00"), ("github.pr.review_commented", "2026-10-26T08:03:20+00:00"),
@@ -246,7 +259,7 @@ def test_a_gap_longer_than_max_catchup_is_not_recovered(project, gh, make, clock
     gh.label(6, "in-time", "alice", T0 + 9 * 3600)
     clock.t += 10 * 3600
     b.round()
-    assert next(e for e in bus(project) if e["type"] == "bridge.gap")["data"]["recovered"] is False
+    assert gaps(b) == (1, 0, 36000.0)
     assert [e["data"]["label"] for e in pr_events(project) if e["type"] == "github.pr.labelled"] == ["in-time"]
 
 
@@ -254,11 +267,14 @@ def test_a_restart_finds_its_last_good_poll_in_the_store_and_records_the_gap(pro
     gh.open(6, "alice", T0 - 300, branch="agent/six")
     once(make())
     store = ProjectStore(for_project(project), project.key)        # what the instrument stored while it ran
-    store.write([Point(LAST_POLL, T0, T0, {"instrument": INSTRUMENT, "repo": R})])
+    labels = {"instrument": INSTRUMENT, "repo": R}
+    store.write([Point(LAST_POLL, T0, T0, labels), Point("github_prs_bridge_gaps_total", 4, T0, labels),
+                 Point("github_prs_bridge_gaps_recovered_total", 3, T0, labels),
+                 Point("github_prs_bridge_gap_seconds_total", 900, T0, labels)])
     clock.t += 3 * 3600
-    once(make())
-    [gap] = [e for e in bus(project) if e["type"] == "bridge.gap"]
-    assert gap["data"]["from"] == "2026-10-26T07:33:20Z"
+    b = make()
+    once(b)
+    assert gaps(b) == (5, 4, 900 + 3 * 3600.0)                     # counted on from what was stored
 
 
 def test_a_poll_that_fails_part_way_publishes_nothing(project, gh, make, clock):
@@ -284,8 +300,8 @@ def test_people_are_announced_once_and_the_map_names_them(project, gh, make):
     gh.check(6, "build", "success", T0 - 100)
     once(make())
     started = [e for e in bus(project) if e["type"] == "orchestra.machine.started"]
-    assert [e["source"] for e in started] == [MACHINE, "person.al", "bot.github-actions"]
-    assert started[1]["data"]["team"] == "web" and started[2]["data"]["kind"] == "program"
+    assert [e["source"] for e in started] == ["person.al", "bot.github-actions"]
+    assert started[0]["data"]["team"] == "web" and started[1]["data"]["kind"] == "program"
     assert pr_events(project)[0]["source"] == "person.al"
 
 
@@ -307,7 +323,8 @@ def test_the_levels_say_what_waits_on_whom(project, gh, make, clock):
     lv = b.measured[R][0]
     assert lv == {"github_prs_open": 5, "github_prs_awaiting_review": 1, "github_prs_awaiting_changes": 1,
                   "github_prs_approved": 1, "github_prs_awaiting_label_result": 1, "github_prs_checks_failing": 1,
-                  "github_prs_review_request_oldest_seconds": 1800.0}
+                  "github_prs_review_request_oldest_seconds": 1800.0, "github_prs_bridge_gaps_total": 0,
+                  "github_prs_bridge_gaps_recovered_total": 0, "github_prs_bridge_gap_seconds_total": 0}
     text = b.render()
     assert 'github_prs_awaiting_changes{repo="acme/service"} 1\n' in text
     assert f'github_prs_bridge_last_poll_timestamp_seconds{{repo="acme/service"}} {int(T0)}\n' in text

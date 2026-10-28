@@ -1,6 +1,7 @@
 """``python -m orchestra_bridges github|github_prs|slack|jira[_<name>] [--once]``: run a bridge for the
 project at ORCHESTRA_REPO (the launcher sets it), else the working directory, until SIGTERM or
-SIGINT."""
+SIGINT. A bridge publishes only as the people and bots who acted (``relay.py``), so its bus has no
+source of its own."""
 
 from __future__ import annotations
 
@@ -30,14 +31,14 @@ from .slack.api import Slack
 def _github(project, stop: threading.Event):
     conf = cfg.github(project.config.raw, project.repo_root)
     api = GitHub(gh_token(conf.api), conf.api)
-    return github.Bridge(conf, api, Events.for_project(project, source=github.MACHINE),
+    return github.Bridge(conf, api, Events.for_project(project),
                          ProjectStore(for_project(project), project.key))
 
 
 def _github_prs(project, stop: threading.Event):
     conf = cfg.github_prs(project.config.raw, project.repo_root)
     api = GitHub(gh_token(conf.api), conf.api)
-    return github_prs.Bridge(conf, api, Events.for_project(project, source=github_prs.MACHINE),
+    return github_prs.Bridge(conf, api, Events.for_project(project),
                              ProjectStore(for_project(project), project.key))
 
 
@@ -46,8 +47,7 @@ def _jira(project, name: str, stop: threading.Event):
     token = read_token(f"{conf.env}_API_TOKEN", f"{conf.name}-token", project.repo_root, conf.token_file)
     email = os.environ.get(f"{conf.env}_EMAIL") or conf.email
     api = Jira(conf.api, token, deployment=conf.deployment, email=email, sleep=stop.wait)
-    machine = f"bridges.{name}"
-    return jira.Bridge(conf, api, Events.for_project(project, source=machine),
+    return jira.Bridge(conf, api, Events.for_project(project),
                        ProjectStore(for_project(project), project.key))
 
 

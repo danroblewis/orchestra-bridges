@@ -166,7 +166,7 @@ def test_the_plugin_runs_the_slack_bridge_where_it_is_configured():
     assert [(p.name, p.argv()) for p in on.processes] == [
         ("github", [sys.executable, "-m", "orchestra_bridges", "github"]),
         ("slack", [sys.executable, "-m", "orchestra_bridges", "slack"])]
-    assert [m.id for m in on.machines] == ["bridges.github", "bridges.slack"]
+    assert on.machines == []                            # relays, not machines
     only = plugin(proj("[bridges.slack]\n"))
     assert [p.name for p in only.processes] == ["slack"]
 
@@ -183,7 +183,7 @@ def test_the_plugin_declares_the_scrape_that_stores_the_slack_bridges_counts():
         found, errors = from_toml(proj(toml).config.raw, [replace(c, owner=p.name) for c in p.collectors])
         return {c.name: (c.target, c.owner) for c in found}, errors
 
-    assert plugin(proj("[bridges.github]\n")).collectors == []
+    assert [c.name for c in plugin(proj("[bridges.github]\n")).collectors] == ["github"]
     got, errors = instruments("[bridges.slack]\n")
     assert got == {INSTRUMENT: ("http://127.0.0.1:9465/metrics", "bridges")} and not errors   # the name it reads back by
     assert instruments('[bridges.slack]\nhost = "0.0.0.0"\nport = 9500\n')[0] == {

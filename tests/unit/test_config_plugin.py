@@ -14,26 +14,30 @@ def proj(toml: str) -> Project:
 
 def test_defaults_and_durations():
     c = cfg.github(proj("[bridges.github]\n").config.raw, Path("/repo"))
-    assert (c.repos, c.every, c.lookback, c.max_catchup, c.bots_answer, c.people) == (
-        ["microsoft/vscode"], 60.0, 3600.0, 172800.0, False, None)
+    assert (c.repos, c.every, c.lookback, c.max_catchup, c.bots_answer, c.people, c.port) == (
+        ["microsoft/vscode"], 60.0, 3600.0, 172800.0, False, None, 9464)
     c = cfg.github(proj('[bridges]\npeople = "p.toml"\n[bridges.github]\nrepos = "a/b"\nevery = "2m"\n').config.raw,
                    Path("/repo"))
     assert (c.repos, c.every, c.people) == (["a/b"], 120.0, Path("/repo/p.toml"))
 
 
-@pytest.mark.parametrize("toml", ['[bridges.github]\nrepos = ["vscode"]\n', '[bridges.github]\nevery = "1s"\n', ""])
+@pytest.mark.parametrize("toml", ['[bridges.github]\nrepos = ["vscode"]\n', '[bridges.github]\nevery = "1s"\n', "",
+                                  '[bridges.github]\nport = "x"\n'])
 def test_bad_settings_are_refused(toml):
     with pytest.raises(ConfigError):
         cfg.github(proj(toml).config.raw, Path("/repo"))
 
 
-def test_the_plugin_runs_the_bridge_only_where_it_is_configured():
+def test_the_plugin_runs_the_bridge_only_where_it_is_configured_and_declares_no_machine():
     off = plugin(proj("[events]\nurl = 'file'\n"))
-    assert (off.name, off.processes, off.machines, off.pages) == ("bridges", [], [], [])
+    assert (off.name, off.processes, off.machines, off.pages, off.collectors) == ("bridges", [], [], [], [])
     on = plugin(proj("[bridges.github]\n"))
     [p] = on.processes
     assert (p.name, p.argv()) == ("github", [sys.executable, "-m", "orchestra_bridges", "github"])
-    assert [(m.id, m.kind, m.mode) for m in on.machines] == [("bridges.github", "program", "continuous")]
+    assert on.machines == []                            # a bridge is a relay: its actors are the machines
+    [c] = on.collectors
+    assert (c.name, c.kind, c.target) == ("github", "scrape", "http://127.0.0.1:9464/metrics")
+    assert plugin(proj("[bridges.github]\nport = 0\n")).collectors == []
 
 
 def test_orchestra_finds_the_installed_plugin():
@@ -66,11 +70,10 @@ def test_bad_pull_request_bridge_settings_are_refused(toml):
 def test_the_plugin_runs_the_pull_request_bridge_and_declares_its_instrument():
     on = plugin(proj('[bridges.github_prs]\nrepos = ["a/b"]\nhost = "0.0.0.0"\n'))
     assert [(p.name, p.argv()[-1]) for p in on.processes] == [("github_prs", "github_prs")]
-    assert [m.id for m in on.machines] == ["bridges.github_prs"]
+    assert on.machines == []
     [c] = on.collectors
     assert (c.name, c.kind, c.target) == ("github_prs", "scrape", "http://127.0.0.1:9466/metrics")
     assert plugin(proj('[bridges.github_prs]\nrepos = ["a/b"]\nport = 0\n')).collectors == []
-    assert plugin(proj("[bridges.github]\n")).collectors == []
 
 
 def test_the_jira_bridge_settings():
@@ -106,7 +109,7 @@ def test_the_plugin_runs_each_jira_site_and_declares_its_instrument():
     on = plugin(proj('[bridges.jira]\napi = "https://j.acme.com"\nprojects = ["ABC"]\n'
                      '[bridges.jira_fedramp]\napi = "https://f.acme.com"\nprojects = ["CUST"]\nport = 9468\n'))
     assert [(p.name, p.argv()[-1]) for p in on.processes] == [("jira", "jira"), ("jira_fedramp", "jira_fedramp")]
-    assert [m.id for m in on.machines] == ["bridges.jira", "bridges.jira_fedramp"]
+    assert on.machines == []
     assert [(c.name, c.target) for c in on.collectors] == [("jira", "http://127.0.0.1:9467/metrics"),
                                                            ("jira_fedramp", "http://127.0.0.1:9468/metrics")]
     assert plugin(proj('[bridges.jira]\napi = "https://j.acme.com"\nprojects = ["ABC"]\nport = 0\n')).collectors == []

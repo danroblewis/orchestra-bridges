@@ -22,17 +22,19 @@ are followed still, and the heads it published (in ``opened`` and ``pushed``) sa
 new. It reads GitHub again from the later of its last event and its last good poll (the value of
 ``github_prs_bridge_last_poll_timestamp_seconds`` that the instrument stored), less ``overlap``;
 never further back than ``max_catchup``; with neither, from ``lookback`` ago. A poll that succeeds
-more than three rounds after the last good one records the gap once, as ``bridge.gap``
-{repository, from, to, recovered}, and the events missed are published with their own times.
+more than three rounds after the last good one closes a **gap**: the events missed are published
+with their own times, and the gap is counted (``gaps.py``: ``github_prs_bridge_gaps_total{repo}``
+and the rest), never published.
 
 **What waits on whom** (``levels.py``) is read from GitHub each round, not rebuilt from events, and
-served on ``/metrics``; the plugin declares the scrape that stores it (the instrument
-``bridges.github_prs``). The bridge itself is the machine ``bridges.github_prs``: it announces
-itself on start and publishes ``bridge.gap`` under that source."""
+served on ``/metrics`` with the gap counts; the plugin declares the scrape that stores them (the
+instrument ``bridges.github_prs``).
+
+**The bridge is no machine** (``relay.py``): it never announces itself and publishes only as the
+people and apps who acted. ``bridges.github_prs`` names its process, its log and its instrument."""
 
 from __future__ import annotations
 
-import os
 import sys
 import threading
 import time
@@ -44,8 +46,10 @@ from orchestra.metrics import MetricsStore
 
 from ..announce import Announcer
 from ..config import GitHubPRsConfig
+from ..gaps import Gaps
 from ..github.api import GitHub, GitHubError
 from ..identity import People
+from ..relay import Relay
 from ..serve import MetricsServer
 from . import poll
 from .levels import LAST_POLL, PullState, levels, render
@@ -67,23 +71,24 @@ from .translate import (
     who,
 )
 
-MACHINE = "bridges.github_prs"
+NAME = "bridges.github_prs"              # its process and log; never a source
 INSTRUMENT = "bridges.github_prs"        # the scrape the plugin declares (plugin.py)
 SYSTEM = "github"
-GAP_ROUNDS = 3
 MERGE_CLOSE_S = 5.0                      # a close this near a merge is the merge's own
 
 
 def log(msg: str) -> None:
-    print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {MACHINE}: {msg}", file=sys.stderr, flush=True)
+    print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {NAME}: {msg}", file=sys.stderr, flush=True)
 
 
 class Bridge:
     def __init__(self, config: GitHubPRsConfig, api: GitHub, events: Events, store: MetricsStore, *,
                  people: People | None = None, clock: Callable[[], float] = time.time):
-        self.config, self.api, self.events, self.store, self.clock = config, api, events, store, clock
+        self.config, self.api, self.store, self.clock = config, api, store, clock
+        self.events = Relay(events)
         self.people = people if people is not None else People.load(config.people)
-        self.announcer = Announcer(events, SYSTEM, self.people)
+        self.announcer = Announcer(self.events, SYSTEM, self.people)
+        self.gaps = Gaps("github_prs")
         self.seen: set[str] = set()
         self.followed: dict[str, set[int]] = {r: set() for r in config.repos}
         self.heads: dict[str, dict[int, list[str]]] = {r: defaultdict(list) for r in config.repos}
@@ -122,22 +127,16 @@ class Bridge:
                 self.last_ok[repo] = last_poll
             last = max(latest, last_poll)
             self.since[repo] = last - self.config.overlap if last else now - self.config.lookback
+            self.gaps.resume(repo, self.store, {"instrument": INSTRUMENT, "repo": repo}, log)
         log(f"resumed: {len(self.seen)} of its events on the bus; reading "
             + ", ".join(f"{r} from {poll.iso(self.since[r])}" for r in self.config.repos))
 
-    def announce(self) -> None:
-        self.events.publish("orchestra.machine.started", {
-            "mode": "continuous", "kind": "program", "package": "bridges", "listens_for": [],
-            "log": os.environ.get("ORCHESTRA_MACHINE_LOG"), "system": SYSTEM, "repos": self.config.repos,
-            "every_s": self.config.every}, source=MACHINE)
-
-    def _window(self, repo: str, now: float) -> tuple[float, dict | None]:
+    def _window(self, repo: str, now: float) -> tuple[float, bool | None]:
+        """Where this poll reads from, and whether it closes a gap that it reads back whole (None:
+        no gap; counted only once the poll succeeds)."""
         start = self.since[repo]
-        last = self.last_ok.get(repo)
         floor = now - self.config.max_catchup
-        gap = None
-        if last and now - last > GAP_ROUNDS * self.config.every:
-            gap = {"repository": repo, "from": poll.iso(last), "to": poll.iso(now), "recovered": start >= floor}
+        gap = (start >= floor) if Gaps.late(self.last_ok.get(repo), now, self.config.every) else None
         return max(start, floor), gap
 
     def _to_follow(self, repo: str, start: float) -> list[Pull]:
@@ -219,10 +218,10 @@ class Bridge:
             found += self._read(p, tl, runs, sts, start, now)
             if p.state == "open":
                 states.append(PullState.read(p, tl, runs, sts))
-        if gap:
-            self.events.publish("bridge.gap", gap, source=MACHINE)
+        if gap is not None:
+            self.gaps.close(repo, now - self.last_ok[repo], gap)
             log(f"{repo}: gap of {round(now - self.last_ok[repo])} s since the last good poll"
-                + ("" if gap["recovered"] else f"; only the last {round(self.config.max_catchup)} s were read"))
+                + ("" if gap else f"; only the last {round(self.config.max_catchup)} s were read"))
         unique = {s.id: s for s in found}
         for s in sorted(unique.values(), key=lambda s: (s.ts, RANK[s.type], s.id)):
             actor = self.people.actor(SYSTEM, s.login, s.bot)
@@ -236,7 +235,7 @@ class Bridge:
             if not self.heads[repo][p.number]:               # its opened event is no longer on the bus
                 self.heads[repo][p.number].append(p.head)
         with self.lock:
-            self.measured[repo] = (levels(states, self.config.label_results, now), now)
+            self.measured[repo] = ({**levels(states, self.config.label_results, now), **self.gaps.values(repo)}, now)
         self.last_ok[repo] = now
         self.since[repo] = now - self.config.overlap
         return len(unique)
@@ -260,7 +259,6 @@ class Bridge:
 
     def run(self, stop: threading.Event, *, once: bool = False) -> None:
         self.resume()
-        self.announce()
         self.announcer.reannounce(poll.iso(self.clock()))
         self.server = server = None if once else MetricsServer(self.render, self.config.host, self.config.port).start()
         if server:

@@ -12,6 +12,8 @@
     max_catchup = "48h"               # after a gap, how far back it will catch up at most
     overlap = "10m"                   # each poll re-reads this much before the last one
     bots_answer = false               # whether a bot's comment or close counts as an issue's first response
+    host = "127.0.0.1"                # where /metrics listens: local only unless you change it
+    port = 9464                       # where /metrics is served; the plugin scrapes it (0: any port, no scrape)
     api = "https://api.github.com"    # GitHub Enterprise, or a fake in tests
 
     [bridges.github_prs]
@@ -82,6 +84,7 @@ from typing import Any
 from orchestra.config import ConfigError, parse_duration
 
 REPO = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+GITHUB_PORT = 9464
 
 
 @dataclass
@@ -92,6 +95,8 @@ class GitHubConfig:
     max_catchup: float = 2 * 86400.0
     overlap: float = 600.0
     bots_answer: bool = False
+    host: str = "127.0.0.1"
+    port: int = GITHUB_PORT
     api: str = "https://api.github.com"
     people: Path | None = None
 
@@ -136,6 +141,9 @@ def github(raw: dict[str, Any], repo_root: Path) -> GitHubConfig:
     bad = [r for r in repos if not isinstance(r, str) or not REPO.match(r)]
     if bad or not repos:
         raise ConfigError(f"[bridges.github] repos must be owner/name strings, not {bad or repos!r}")
+    port = s.get("port", GITHUB_PORT)
+    if isinstance(port, bool) or not isinstance(port, int) or not 0 <= port < 65536:
+        raise ConfigError(f"[bridges.github] port must be a port number (0: any free one), not {port!r}")
     c = GitHubConfig(
         repos=list(repos),
         every=parse_duration(s.get("every"), 60.0),
@@ -143,6 +151,8 @@ def github(raw: dict[str, Any], repo_root: Path) -> GitHubConfig:
         max_catchup=parse_duration(s.get("max_catchup"), 2 * 86400.0),
         overlap=parse_duration(s.get("overlap"), 600.0),
         bots_answer=bool(s.get("bots_answer", False)),
+        host=str(s.get("host") or "127.0.0.1"),
+        port=port,
         api=str(s.get("api") or "https://api.github.com").rstrip("/"),
         people=people_file(raw, repo_root),
     )

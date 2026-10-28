@@ -8,7 +8,7 @@ reviews it with a line comment (requesting changes when GitHub allows it: it ref
 own pull request, and then the review only comments), adds and removes a label standing in for SAIL,
 reports a commit status standing in for the pipeline's result, pushes a new commit and merges. The
 bridge, polling the real API, must publish each of these once, as the owner, on the pull request.
-Then a restart after a simulated gap (the instrument's last good poll set back) must record the gap
+Then a restart after a simulated gap (the instrument's last good poll set back) must count the gap
 and publish nothing twice.
 
 The bridge only reads; everything written to GitHub here is the test's own doing."""
@@ -28,7 +28,7 @@ from orchestra.metrics import Point, ProjectStore, for_project
 
 from orchestra_bridges import config as cfg
 from orchestra_bridges.github.api import GitHub, gh_token
-from orchestra_bridges.github_prs.bridge import INSTRUMENT, MACHINE, Bridge
+from orchestra_bridges.github_prs.bridge import INSTRUMENT, Bridge
 from orchestra_bridges.github_prs.levels import LAST_POLL
 
 pytestmark = pytest.mark.skipif(os.environ.get("ORCHESTRA_BRIDGES_SANDBOX") != "1" or not shutil.which("gh"),
@@ -62,7 +62,7 @@ def project(tmp_path, monkeypatch):
 
 def make(project) -> Bridge:
     conf = cfg.github_prs(project.config.raw, project.repo_root)
-    return Bridge(conf, GitHub(gh_token(conf.api), conf.api), Events.for_project(project, source=MACHINE),
+    return Bridge(conf, GitHub(gh_token(conf.api), conf.api), Events.for_project(project),
                   ProjectStore(for_project(project), project.key))
 
 
@@ -102,7 +102,6 @@ def test_a_pull_request_from_opening_to_merge(project, tmp_path):
 
     bridge = make(project)
     bridge.resume()
-    bridge.announce()
     first_poll = time.time()
     bridge.round()                                                   # nothing of this run yet
     assert pr_events(project) == []
@@ -163,6 +162,5 @@ def test_a_pull_request_from_opening_to_merge(project, tmp_path):
         [Point(LAST_POLL, first_poll, first_poll, {"instrument": INSTRUMENT, "repo": REPO})])
     again = make(project)
     again.run(threading.Event(), once=True)
-    gaps = [e for e in Events.for_project(project).after(0)[0] if e["type"] == "bridge.gap"]
-    assert len(gaps) == 1 and gaps[0]["data"]["recovered"] is True
+    assert tuple(again.gaps.values(REPO).values())[:2] == (1, 1)     # one gap, read back whole: counted, not published
     assert [e["id"] for e in pr_events(project)] == [e["id"] for e in evs]

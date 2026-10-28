@@ -10,7 +10,8 @@ rebuilt from events):
   since the owner last did;
 - ``jira_comment_unanswered_oldest_seconds{jira_project}``: how long the oldest of those comments has
   waited (0 when none waits);
-- ``jira_bridge_last_poll_timestamp_seconds``: when the last good poll began (for resume).
+- ``jira_bridge_last_poll_timestamp_seconds``: when the last good poll began (for resume);
+- the gap counts (``gaps.py``), added by the bridge: ``jira_bridge_gaps_total`` and the rest.
 
 The Jira project is the label ``jira_project``: ``project`` is Orchestra's own (the scrape keeps a
 bridge's ``project`` only as ``exported_project``).
@@ -75,9 +76,9 @@ def render(levels: dict, last_poll: float) -> str:
     """The Prometheus text format."""
     lines: list[str] = []
     for name, by_labels in levels.items():
-        lines.append(f"# TYPE {name} gauge")
+        lines.append(f"# TYPE {name} {'counter' if name.endswith('_total') else 'gauge'}")
         for labels, value in sorted(by_labels.items()):
             inner = ",".join(f'{k}="{_escape(v)}"' for k, v in labels)
-            lines.append(f"{name}{{{inner}}} {_num(value)}")
+            lines.append(f"{name}{{{inner}}} {_num(value)}" if inner else f"{name} {_num(value)}")
     lines += [f"# TYPE {LAST_POLL} gauge", f"{LAST_POLL} {_num(last_poll)}"]
     return "\n".join(lines) + "\n"
