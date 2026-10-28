@@ -7,10 +7,12 @@ name = "orchestra-bridges"
 version = "0.1.0"
 description = "Bridges for Orchestra: machines that poll systems which are buses in all but name (GitHub issues and pull requests, Jira, Slack pings) and publish what people did there as metadata-only events on a project's Orchestra bus."
 requires-python = ">=3.12"
-dependencies = ["orchestra @ git+https://github.com/danroblewis/orchestra@main"]
+# orchestra: ours is 1.0.0a1; <1.0.0 keeps out the unrelated `orchestra` on PyPI (1.0.0 and up)
+dependencies = ["orchestra>=1.0.0a1,<1.0.0"]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "ruff>=0.6"]
+# orchestra[sd]: the RabbitMQ contract test aligns series with discovery's own reader (orchestra.sd.rediscover).
+dev = ["pytest>=8.0", "ruff>=0.6", "orchestra[sd]"]
 
 [project.entry-points."orchestra.plugins"]
 bridges = "orchestra_bridges.plugin:plugin"
@@ -18,8 +20,10 @@ bridges = "orchestra_bridges.plugin:plugin"
 [project.entry-points."orchestra.commands"]
 bridges = "orchestra_bridges.__main__:main"
 
-[tool.hatch.metadata]
-allow-direct-references = true   # Orchestra comes from GitHub (see README, "Developing against a local Orchestra")
+[tool.uv.sources]
+# This repository's own environment takes Orchestra from GitHub (README, "Developing against a local Orchestra");
+# ignored when the plugin is installed as a dependency.
+orchestra = { git = "https://github.com/danroblewis/orchestra", branch = "main" }
 
 [tool.hatch.build.targets.wheel]
 packages = ["orchestra_bridges"]
