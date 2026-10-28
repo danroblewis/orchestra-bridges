@@ -198,14 +198,16 @@ class Bridge:
             self.log(f"poll failed, tried again next round: {e}")
 
     def run(self, stop: threading.Event, *, once: bool = False) -> None:
-        self.resume()
-        self.announce()
-        self.announcer.reannounce(iso(self.clock()),
-                                  lambda login: self.people.actor(SYSTEM, login, namespaced=True))
+        # Serve first (503 until the first poll), so the scrape finds the port as soon as the
+        # process can answer: reading the bus back may take a while on a long one.
         self.server = server = None if once else MetricsServer(self.render, self.config.host, self.config.port).start()
         if server:
             self.log(f"serving {server.url}")
         try:
+            self.resume()
+            self.announce()
+            self.announcer.reannounce(iso(self.clock()),
+                                      lambda login: self.people.actor(SYSTEM, login, namespaced=True))
             while not stop.is_set():
                 self.round()
                 if once:
