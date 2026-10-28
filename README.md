@@ -642,5 +642,33 @@ send you a direct message and a mention whose text includes the value of `SLACK_
 (`CANARY-$(uuidgen)`, say), within the last 48 hours. Set `SLACK_GROUP` to a user group id mentioned
 the same way to check the group search too.
 
-Orchestra comes from `../orchestra_2` (editable). Read `SPEC.md` for the design and `AGENTS.md`
-for the rules.
+Read `SPEC.md` for the design and `AGENTS.md` for the rules.
+
+## Developing against a local Orchestra
+
+`pyproject.toml` takes Orchestra from GitHub (`orchestra @ git+https://github.com/danroblewis/orchestra@main`),
+and `uv.lock` pins the commit it resolved to, so nothing needs cloning beside this repository.
+`uv lock --upgrade-package orchestra` moves the pin to the newest `main` (then `uv sync --extra dev`).
+
+To run against an Orchestra checkout instead, with its uncommitted changes, lay it over this
+environment for one command:
+
+```bash
+uv run --with-editable ~/orchestra_2 python -m pytest -q      # the path to your Orchestra checkout
+uv run --with-editable ~/orchestra_2 orchestra web
+```
+
+Nothing is written: `.venv`, `pyproject.toml` and `uv.lock` keep GitHub's Orchestra, and a plain
+`uv run` uses it again. Inside the command, `sys.executable` and the `orchestra` beside it import
+the checkout, so the processes the tests and the host start do too.
+
+For something that runs `.venv/bin/orchestra` directly, install the checkout into `.venv` and keep
+uv from syncing it away:
+
+```bash
+uv pip install -e ~/orchestra_2
+uv run --no-sync python -m pytest -q          # or export UV_NO_SYNC=1
+uv sync --extra dev                            # back to the locked Orchestra from GitHub
+```
+
+A plain `uv run` or `uv sync` also puts the locked Orchestra back.

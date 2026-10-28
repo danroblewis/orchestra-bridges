@@ -7,7 +7,7 @@ name = "orchestra-bridges"
 version = "0.1.0"
 description = "Bridges for Orchestra: machines that poll systems which are buses in all but name (GitHub issues and pull requests, Jira, Slack pings) and publish what people did there as metadata-only events on a project's Orchestra bus."
 requires-python = ">=3.12"
-dependencies = ["orchestra"]
+dependencies = ["orchestra @ git+https://github.com/danroblewis/orchestra@main"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "ruff>=0.6"]
@@ -15,8 +15,8 @@ dev = ["pytest>=8.0", "ruff>=0.6"]
 [project.entry-points."orchestra.plugins"]
 bridges = "orchestra_bridges.plugin:plugin"
 
-[tool.uv.sources]
-orchestra = { path = "../orchestra_2", editable = true }
+[tool.hatch.metadata]
+allow-direct-references = true   # Orchestra comes from GitHub (see README, "Developing against a local Orchestra")
 
 [tool.hatch.build.targets.wheel]
 packages = ["orchestra_bridges"]

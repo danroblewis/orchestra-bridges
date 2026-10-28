@@ -42,4 +42,5 @@ broken without updating the spec and saying so in the commit.
   contract test against the real API that compares shapes only.
 - Keep modules small and single-purpose. If a file needs a section divider comment, split it into
   two files. Comments and docs use plain language and are honest about limits.
-- Orchestra comes from `../orchestra_2` (editable, `[tool.uv.sources]`).
+- Orchestra comes from GitHub (`orchestra @ git+https://github.com/danroblewis/orchestra@main`), at the
+  commit `uv.lock` pins; README, "Developing against a local Orchestra".
