@@ -220,7 +220,10 @@ The launcher (`orchestra/launcher.py`) names a plugin's processes `<plugin>.<nam
   repeated quick failures (`orchestra.process.gave_up`);
 - stops it with SIGTERM, then SIGKILL after `stop_grace_s = 10`;
 - reads `orchestra.toml` again when it changes and asks the plugin for its processes again. Adding
-  `[bridges.github]` starts the bridge without restarting the host; removing it stops the bridge.
+  `[bridges.github]` starts the bridge without restarting the host; removing it stops the bridge;
+- restarts it when its section or `[bridges] people` changes (`Process.config_keys`): the bridge
+  reads its settings once, when it starts, and its command never changes. A bridge given up on is
+  tried again then too, so fixing its settings is enough.
 
 `__main__.py` loads the project from `ORCHESTRA_REPO`, builds the bridge, and runs it until
 SIGTERM or SIGINT. A configuration, identity or credential error prints one line and exits 2. To
@@ -984,7 +987,7 @@ only when its section exists.
 | Key | Default | Notes |
 |---|---|---|
 | `[bridges] people` | none | Path to the identity map, relative to the repository. Shared by every bridge |
-| `[bridges.github] repos` | `["microsoft/vscode"]` | `owner/name` strings; a single string is accepted |
+| `[bridges.github] repos` | none: required | `owner/name` strings; a single string is accepted |
 | `every` | `60s` | Pause between rounds; at least 5 s |
 | `lookback` | `1h` | First start only: how far back to read |
 | `max_catchup` | `48h` | After a gap, how far back to read at most |

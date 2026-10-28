@@ -68,7 +68,7 @@ In the project's `orchestra.toml`:
 people = "people.toml"            # optional: the identity map, relative to the repository
 
 [bridges.github]
-repos = ["microsoft/vscode"]      # the default
+repos = ["microsoft/vscode"]      # required: owner/name; a section without it is refused
 every = "60s"
 lookback = "1h"                   # on the very first start, how far back to read
 max_catchup = "48h"               # after a gap, how far back it reads at most
@@ -91,6 +91,8 @@ Its command line comes with it as `orchestra bridges` (`orchestra bridges --help
 bridge is not on the Machines page; the people it publishes as are, once seen. Without a
 `[bridges.github]` section, nothing runs. A project's own `[[scrape]]` named `bridges.github`
 replaces the plugin's; it must keep that name, by which a restarted bridge finds its counts.
+A change to the bridge's section (or to `[bridges] people`) restarts it with the new settings, and
+starts again one Orchestra had given up on.
 
 To try one poll by hand: `uv run orchestra --repo /path/to/project bridges github --once`.
 

@@ -13,16 +13,16 @@ def proj(toml: str) -> Project:
 
 
 def test_defaults_and_durations():
-    c = cfg.github(proj("[bridges.github]\n").config.raw, Path("/repo"))
+    c = cfg.github(proj('[bridges.github]\nrepos = ["acme/service"]\n').config.raw, Path("/repo"))
     assert (c.repos, c.every, c.lookback, c.max_catchup, c.bots_answer, c.people, c.port) == (
-        ["microsoft/vscode"], 60.0, 3600.0, 172800.0, False, None, 9464)
+        ["acme/service"], 60.0, 3600.0, 172800.0, False, None, 9464)
     c = cfg.github(proj('[bridges]\npeople = "p.toml"\n[bridges.github]\nrepos = "a/b"\nevery = "2m"\n').config.raw,
                    Path("/repo"))
     assert (c.repos, c.every, c.people) == (["a/b"], 120.0, Path("/repo/p.toml"))
 
 
 @pytest.mark.parametrize("toml", ['[bridges.github]\nrepos = ["vscode"]\n', '[bridges.github]\nevery = "1s"\n', "",
-                                  '[bridges.github]\nport = "x"\n'])
+                                  '[bridges.github]\nport = "x"\n', "[bridges.github]\n", '[bridges.github]\nrepos = []\n'])
 def test_bad_settings_are_refused(toml):
     with pytest.raises(ConfigError):
         cfg.github(proj(toml).config.raw, Path("/repo"))
@@ -35,6 +35,7 @@ def test_the_plugin_runs_the_bridge_only_where_it_is_configured_and_declares_no_
     on = plugin(proj("[bridges.github]\n"))
     [p] = on.processes
     assert (p.name, p.argv()) == ("github", [sys.executable, "-m", "orchestra_bridges", "github"])
+    assert p.config_keys == ["bridges.github", "bridges.people"]      # a changed setting restarts it
     assert on.machines == []                            # a bridge is a relay: its actors are the machines
     [c] = on.collectors
     assert (c.name, c.kind, c.target) == ("github", "scrape", "http://127.0.0.1:9464/metrics")
@@ -114,3 +115,34 @@ def test_the_plugin_runs_each_jira_site_and_declares_its_instrument():
     assert [(c.name, c.target) for c in on.collectors] == [("jira", "http://127.0.0.1:9467/metrics"),
                                                            ("jira_fedramp", "http://127.0.0.1:9468/metrics")]
     assert plugin(proj('[bridges.jira]\napi = "https://j.acme.com"\nprojects = ["ABC"]\nport = 0\n')).collectors == []
+
+
+def test_an_empty_github_section_follows_nothing():
+    """No default repository: a section without repos is refused, with what to write."""
+    with pytest.raises(ConfigError, match=r"repos is required.*owner/name"):
+        cfg.github(proj("[bridges.github]\n").config.raw, Path("/repo"))
+
+
+def test_config_edit_runs_the_bridges_check(tmp_path, monkeypatch):
+    """Plugin.check: Orchestra's config_edit refuses what the bridges' check newly says, by name."""
+    import subprocess
+
+    from orchestra import config_edit
+    from orchestra.config import OVERLAY_ENV, init_project
+
+    monkeypatch.setenv("ORCHESTRATOR_HOME", str(tmp_path / "home"))
+    monkeypatch.delenv(OVERLAY_ENV, raising=False)
+    monkeypatch.setattr(config_edit, "_LOADED", {})
+    r = tmp_path / "repo"
+    r.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=r, check=True)
+    (r / "orchestra.toml").write_text('[metrics]\nurl = "file"\n')
+    project = init_project(r)
+    with pytest.raises(ConfigError, match=r"bridges: \[bridges.github\] repos is required"):
+        project.config_edit.set("bridges.github.every", "2m")
+    c = project.config_edit.set_many({"bridges.github.repos": ["acme/service"], "bridges.github.every": "2m"})
+    assert c.changed and not c.warnings
+    with pytest.raises(ConfigError, match=r"bridges: \[bridges.github\] has no setting interval"):
+        project.config_edit.set("bridges.github.interval", "1m")
+    project.config_edit.unset("bridges")                                   # removing the section: allowed
+    assert "bridges" not in project.config.raw

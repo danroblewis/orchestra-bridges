@@ -53,6 +53,18 @@ def plugin(project) -> Plugin:
     scrapes = [(s, url) for s in configured if (url := metrics_url(section(raw, s), PORTS.get(s)))]
     return Plugin(
         "bridges",
-        processes=[Process(s, [sys.executable, "-m", "orchestra_bridges", s], stop_grace_s=10) for s in configured],
+        # a bridge reads its section and the identity map's path once, when it starts: a change to
+        # either restarts it (and tries again one the launcher gave up on)
+        processes=[Process(s, [sys.executable, "-m", "orchestra_bridges", s], stop_grace_s=10,
+                           config_keys=[f"bridges.{s}", "bridges.people"]) for s in configured],
         collectors=[Collector.scrape(s, url, every_s=SCRAPE_EVERY_S) for s, url in scrapes],
-        guide=Path(__file__).parent / "guide.md")   # how to configure it, for an AI operator (/api/guides)
+        guide=Path(__file__).parent / "guide.md",   # how to configure it, for an AI operator (/api/guides)
+        check=_check)                                # what project.config_edit refuses in [bridges]
+
+
+def _check(raw: dict, repo_root: Path | None) -> list[str]:
+    """``Plugin.check``: the bridges' own check (``check.py``). Paths it resolves are not
+    checked against the repository here (``repo_root=None``): only shapes."""
+    from .check import check  # check.py imports this module
+
+    return check(raw, repo_root=None)

@@ -6,7 +6,7 @@
     people = "people.toml"            # the identity map (identity.py), relative to the repository
 
     [bridges.github]
-    repos = ["microsoft/vscode"]      # owner/name; the default when the section names none
+    repos = ["acme/service"]          # owner/name; required
     every = "60s"                     # how often to poll
     lookback = "1h"                   # on the very first start, how far back to read
     max_catchup = "48h"               # after a gap, how far back it will catch up at most
@@ -89,7 +89,7 @@ GITHUB_PORT = 9464
 
 @dataclass
 class GitHubConfig:
-    repos: list[str] = field(default_factory=lambda: ["microsoft/vscode"])
+    repos: list[str]
     every: float = 60.0
     lookback: float = 3600.0
     max_catchup: float = 2 * 86400.0
@@ -135,9 +135,14 @@ def github(raw: dict[str, Any], repo_root: Path) -> GitHubConfig:
     s = section(raw, "github")
     if s is None:
         raise ConfigError("orchestra.toml has no [bridges.github] section")
-    repos = s.get("repos", ["microsoft/vscode"])
+    if "repos" not in s:
+        raise ConfigError('[bridges.github] repos is required: the repositories whose issues to follow, as owner/name '
+                          '(repos = ["acme/service"])')
+    repos = s["repos"]
     if isinstance(repos, str):
         repos = [repos]
+    if not isinstance(repos, list):
+        raise ConfigError(f"[bridges.github] repos must be a list of owner/name strings, not {repos!r}")
     bad = [r for r in repos if not isinstance(r, str) or not REPO.match(r)]
     if bad or not repos:
         raise ConfigError(f"[bridges.github] repos must be owner/name strings, not {bad or repos!r}")

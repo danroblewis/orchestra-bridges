@@ -61,6 +61,7 @@ def test_every_toml_example_is_accepted(n, tmp_path):
     ('[bridges.jira]\napi = "https://jira.acme.com"\n', "needs either projects or jql"),
     ('[bridges.jira_two]\napi = "https://jira.acme.com"\nprojects = ["AB"]\n', "port is required"),
     ('[bridges]\npeople = 3\n', "people must be"),
+    ('[bridges.github]\n', "repos is required"),
 ])
 def test_the_check_says_what_would_break_a_bridge(toml, says):
     said = check(tomllib.loads(toml))

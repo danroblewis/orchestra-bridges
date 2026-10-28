@@ -24,22 +24,23 @@ relays are, and they appear on the Machines page only once they act.
 
 ## How a change takes effect
 
-- Change settings only through `project.config_edit`, passing the plugin's check,
-  `orchestra_bridges.check.check` (merged config in, list of problems out). It runs every
-  configured section through the bridge's own reader, and also reports a key no bridge reads (a
-  misspelt key is otherwise silently ignored), a `[bridges.<x>]` that is no bridge, and two bridges
-  on one `/metrics` port. config_edit refuses a change that makes it say something new.
+- Change settings only through `project.config_edit`. It runs the plugin's check
+  (`Plugin.check`, `orchestra_bridges.check.check`) by itself; pass no `check=`. The check runs
+  every configured section through the bridge's own reader, and also reports a key no bridge reads
+  (a misspelt key is otherwise silently ignored), a `[bridges.<x>]` that is no bridge, and two
+  bridges on one `/metrics` port. config_edit refuses a change that makes it say something new,
+  with `bridges:` before what it said.
 - Set a new section's required keys in **one** change (`set_many`): `[bridges.jira]` without
-  `api` and one of `projects`/`jql`, or `[bridges.github_prs]` without `repos`, is refused.
-- Adding a section starts its bridge at once; removing it stops it. **Changing a setting in an
-  existing section does not restart the running bridge**: the launcher restarts a process only when
-  its command changes, and the command (`python -m orchestra_bridges <section>`) never does. The new
-  value applies when the bridge next starts, which today means the human restarting `orchestra run`.
-  Say so when you change one.
+  `api` and one of `projects`/`jql`, or `[bridges.github]` or `[bridges.github_prs]` without `repos`, is refused.
+- Adding a section starts its bridge at once; removing it stops it; changing a setting in it (or
+  `[bridges] people`) restarts it with the new value within seconds. A changed identity map file
+  (`people.toml` itself) is read only when the bridge next starts.
 - What the check cannot see (tokens, network, a repository the token cannot read) shows only when
   the bridge runs. One that cannot start (no token, port taken) exits with code 2 and is retried
   with backoff; after 5 failures in a row, each within 60 s of starting, the launcher gives up until
-  `orchestra run` restarts. Its log: `<state>/logs/machines/bridges.<section>.log`.
+  its section changes (fixing the setting is enough) or `orchestra run` restarts. A token fixed
+  outside the configuration needs a change to the section or that restart. Its log:
+  `<state>/logs/machines/bridges.<section>.log`.
 
 ## Where each setting goes
 
@@ -119,7 +120,8 @@ bots_answer = false                    # true: a bot's comment or close counts a
 api = "https://api.github.com"         # GitHub Enterprise: https://<host>/api/v3
 ```
 
-- **Always set `repos`.** Its default is `microsoft/vscode`: an empty section follows VS Code.
+- **`repos` is required.** There is no default: a section without it is refused
+  (`[bridges.github] repos is required`), so set it in the same change that adds the section.
 - Infer `repos` from `git remote -v` (`git@github.com:acme/service.git` → `acme/service`). A remote
   on another host is GitHub Enterprise: `api = "https://<host>/api/v3"`, and the owner needs
   `gh auth login --hostname <host>`.
