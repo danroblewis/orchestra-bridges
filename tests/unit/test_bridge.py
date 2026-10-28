@@ -1,6 +1,7 @@
 import json
 from itertools import pairwise
 
+import pytest
 from conftest import T0, bus, published, run_once, scrape
 from fake_github import CANARY, TOKEN
 from orchestra.metrics import for_project
@@ -245,7 +246,9 @@ def test_a_comment_github_shows_late_is_counted_in_time_order_and_a_restart_agre
     counters_never_fall(project)
 
 
-def test_a_restart_continues_every_counter_from_what_was_written(project, github, clock, make_bridge):
+@pytest.mark.parametrize("by", [{"instrument": INSTRUMENT},
+                                {"machine": "bridges.github"}])     # written by the bridge itself before 2026-10-27
+def test_a_restart_continues_every_counter_from_what_was_stored(project, github, clock, make_bridge, by):
     busy(github)
     b = make_bridge()
     run_once(b)
@@ -253,7 +256,7 @@ def test_a_restart_continues_every_counter_from_what_was_written(project, github
     b.round()
     scrape(b, project, INSTRUMENT, clock.t)
     from orchestra.metrics import Point
-    labels = {"instrument": INSTRUMENT, "repo": R, "project": project.key}
+    labels = {**by, "repo": R, "project": project.key}
     store = for_project(project)                       # what an earlier bridge wrote, from events the bus no longer holds
     store.write([Point("github_issues_opened_total", 40.0, clock.t + 1, labels),
                  Point("github_issues_closed_unanswered_total", 7.0, clock.t + 1, labels)])

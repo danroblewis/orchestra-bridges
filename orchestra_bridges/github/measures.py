@@ -15,7 +15,9 @@ wait (the oldest go first). A scrape that fails once it has read them loses them
 could not be reached did; the next carries whole totals, so only the shape between is lost.
 
 On start the watermark, and each counter's last value, are what the instrument stored last for the
-repository (read by ``instrument`` and ``repo``), so a restart continues from them."""
+repository (read by ``instrument`` and ``repo``), so a restart continues from them. Points the
+bridge wrote itself before 2026-10-27 are labelled ``machine="bridges.github"`` instead (``LEGACY``):
+read too, never written, and the higher value taken, so the upgrade loses no count."""
 
 from __future__ import annotations
 
@@ -28,6 +30,7 @@ from orchestra.metrics import MetricsStore, Point
 from .responses import COUNTERS, Responses
 
 INSTRUMENT = "bridges.github"
+LEGACY = {"machine": "bridges.github"}       # how the bridge labelled the points it wrote before 2026-10-27
 LEVEL = "github_issues_unanswered"
 WAITING = 50_000
 
@@ -57,13 +60,19 @@ class Measures:
         """The labels that find the repository's points in the store."""
         return {"instrument": self.instrument, "repo": repo}
 
+    def _latest(self, name: str, labels: dict[str, str]) -> tuple[float, float] | None:
+        """The latest stored point of a series of this instrument, or of the bridge's own writes
+        before it (``LEGACY``): the later one's time, and the higher value."""
+        got = [p for by in ({"instrument": self.instrument}, LEGACY) if (p := self.store.latest(name, {**by, **labels}))]
+        return (max(p[0] for p in got), max(p[1] for p in got)) if got else None
+
     def resume(self, repo: str) -> None:
         """The watermark, and each counter's last stored value, so a restart continues from them."""
         self.written[repo] = {}
         try:
-            last = self.store.latest(LEVEL, self.stored(repo))
+            last = self._latest(LEVEL, self.labels(repo))
             for key, (name, extra) in COUNTERS.items():
-                if got := self.store.latest(name, {**self.stored(repo), **extra}):
+                if got := self._latest(name, {**self.labels(repo), **extra}):
                     self.written[repo][key] = got[1]
         except Exception as e:  # noqa: BLE001 - measuring never stops the bridge
             print(f"{self.instrument}: metrics store not read ({type(e).__name__}: {e})", file=sys.stderr)
