@@ -12,7 +12,14 @@ username wherever the issue's JSON shows both. On Cloud a user is their ``accoun
 the person's announcement (the owner chose people by name), never for an event.
 
 Of an issue's changes, only those the bridge publishes are kept: status, assignee, and the fields of
-``jira.issue.updated`` (sprint, priority, labels, links, due date)."""
+``jira.issue.updated`` (sprint, priority, labels, links, due date).
+
+A status is its id. A status item whose ``from`` and ``to`` are the same id is no change and is
+dropped: Jira Cloud writes one, by the issue's creator, within a second of creating an issue (seen
+on a team-managed project, 2026-10: ``status`` 10000 "To Do" to 10000 "To Do"). Two different ids
+with the same name (a workflow migration, or a move to a project whose "To Do" is another status)
+are kept: the issue did move between statuses, and the event's ``from_id`` and ``to_id`` (and
+perhaps the categories) say so."""
 
 from __future__ import annotations
 
@@ -123,7 +130,11 @@ def _change(item: dict, sprint_field: str | None, names: dict[str, str]) -> Chan
     if field == "assignee":
         old, new = item.get("from"), item.get("to")                         # Data Center may give user keys
         return Change("assignee", names.get(old, old) if old else None, names.get(new, new) if new else None)
-    if field in ("status", "priority", "link", "duedate"):
+    if field == "status":
+        if str(item.get("from")) == str(item.get("to")):
+            return None       # Cloud records the status an issue is created in again, by id (10000 to 10000)
+        return Change("status", item.get("from"), item.get("to"))
+    if field in ("priority", "link", "duedate"):
         return Change(field, item.get("from"), item.get("to"))               # ids, or a linked issue's key
     return None
 

@@ -298,6 +298,17 @@ def test_people_map_through_the_identity_map_with_their_teams(project, jira, mak
     assert started[MACHINE]["system"] == "jira" and started[MACHINE]["deployment"] == "datacenter"
 
 
+@pytest.mark.parametrize("deployment", ["datacenter", "cloud"], indirect=True)
+def test_a_status_restated_at_creation_is_no_transition(project, jira, make):
+    key = jira.create("ABC", "alice", T0 - 300)
+    jira.restate(key, "alice", T0 - 299.4)                               # Cloud: To Do to To Do, by id
+    jira.transition(key, "bob", T0 - 200, "3")
+    once(make())
+    got = [(e["type"], e["data"].get("from_id"), e["data"].get("to_id")) for e in jira_events(project)]
+    assert got == [("jira.issue.created", None, None), ("jira.issue.transitioned", "1", "3")]
+    assert jira_events(project)[0]["data"]["status_id"] == "1"
+
+
 @pytest.mark.parametrize("deployment", ["cloud"], indirect=True)
 def test_a_cloud_app_account_is_a_bot(project, jira, make):
     jira.apps.add("automation")

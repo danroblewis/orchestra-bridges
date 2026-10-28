@@ -7,7 +7,7 @@ maps the account, ``identity.py``; a change with no author is Jira's own, publis
 |---|---|---|
 | ``jira.issue.created`` | the issue's creation, by its creator | ``status``, ``status_id``, ``category`` it started in |
 | ``jira.issue.assigned`` | a change of assignee, or an assignee set at creation | ``assignee`` and ``previous`` (accounts), ``assignee_machine`` |
-| ``jira.issue.transitioned`` | a change of status | ``from``, ``to`` (status names), ``from_id``, ``to_id``, ``from_category``, ``to_category`` |
+| ``jira.issue.transitioned`` | a change of status (to another status id: never from a status to itself) | ``from``, ``to`` (status names), ``from_id``, ``to_id``, ``from_category``, ``to_category`` |
 | ``jira.issue.updated`` | a change of sprint, priority, labels, links or due date | ``fields`` (names) and ``changes``: ids, label names, keys, dates |
 | ``jira.comment.added`` | a comment | ``comment`` (id), ``comments`` (its place among the issue's comments), ``author``, ``restricted`` |
 

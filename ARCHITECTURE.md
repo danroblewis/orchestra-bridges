@@ -1380,7 +1380,7 @@ the time and id Jira's.
 | `jira.issue.created` | the issue's `created` and `creator` (else `reporter`) | `created` | `status`, `status_id`, `category`: where it started (the first status change's `from`, else its status now) |
 | `jira.issue.assigned` | an assignee at creation (the first assignee change's `from`, else the assignee now) | `created:assignee` | `assignee`, `previous` (`null`), `assignee_machine` |
 | `jira.issue.assigned` | a changelog item `assignee` | `history:<id>:assignee` | `assignee`, `previous`, `assignee_machine` |
-| `jira.issue.transitioned` | a changelog item `status` | `history:<id>:status` | `from`, `to` (names), `from_id`, `to_id`, `from_category`, `to_category` (from `/status`) |
+| `jira.issue.transitioned` | a changelog item `status` whose `from` and `to` ids differ | `history:<id>:status` | `from`, `to` (names), `from_id`, `to_id`, `from_category`, `to_category` (from `/status`) |
 | `jira.issue.updated` | changelog items `Sprint` (or the sprint field's id), `priority`, `labels`, `Link`, `duedate` in one history | `history:<id>:updated` | `fields`, `changes`: `{field, from, to}` (priority ids, dates, issue keys, sprint id lists) or `{field: labels, added, removed}` |
 | `jira.comment.added` | a comment | `comment:<id>` | `comment`, `comments` (its ordinal), `author`, `restricted` |
 

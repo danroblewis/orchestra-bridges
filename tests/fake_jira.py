@@ -179,6 +179,15 @@ class FakeJira:
             *([{"field": "resolution", "fieldtype": "jira", "fieldId": "resolution", "from": None, "fromString": None,
                 "to": "10000", "toString": "Done"}] if STATUSES[to][2] == "done" else [])])
 
+    def restate(self, key: str, login: str, at: float) -> str:
+        """What Jira Cloud writes within a second of creating an issue (a team-managed project,
+        2026-10), by its creator: a status item from the status it is in to the same status."""
+        sid = self.issues[key]["status"]
+        name = STATUSES[sid][0]
+        return self._history(key, login, at, [
+            {"field": "status", "fieldtype": "jira", "fieldId": "status", "from": sid, "fromString": name,
+             "to": sid, "toString": name}])
+
     def assign(self, key: str, login: str, at: float, to: str | None) -> str:
         i = self.issues[key]
         old, i["assignee"] = i["assignee"], to

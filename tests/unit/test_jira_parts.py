@@ -82,3 +82,15 @@ def test_a_record_holds_no_text():
     rec = issue(raw, False, "customfield_10100", raw["changelog"]["histories"], raw["fields"]["comment"]["comments"])
     assert CANARY in repr(raw) and CANARY not in repr(rec)
     assert [c.field for h in rec.histories for c in h.changes] == ["link"]       # the text change is dropped
+
+
+def test_a_status_change_is_one_between_two_ids():
+    def status(old, new, old_name, new_name):
+        h = {"id": "10001", "created": "2026-10-27T16:42:19.020-0700",
+             "items": [{"field": "status", "fieldtype": "jira", "fieldId": "status", "from": old,
+                        "fromString": old_name, "to": new, "toString": new_name}]}
+        return issue({"id": "1", "key": "SCRUM-1", "fields": {}}, True, histories=[h]).histories
+
+    assert status("10000", "10000", "To Do", "To Do") == ()               # Cloud, just after creation
+    assert [c.new for h in status("10000", "10003", "To Do", "To Do") for c in h.changes] == ["10003"]
+    assert [c.new for h in status("10000", "10001", "To Do", "In Progress") for c in h.changes] == ["10001"]

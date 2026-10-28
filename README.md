@@ -232,7 +232,7 @@ account's email), because the difference is only the search's paging and the way
 |---|---|---|
 | `jira.issue.created` | the creator | `status`, `status_id`, `category`: the status it started in |
 | `jira.issue.assigned` | who assigned it (the creator, for an assignee set at creation) | `assignee`, `previous` (accounts), `assignee_machine` (the new assignee as a machine) |
-| `jira.issue.transitioned` | who moved it | `from`, `to` (status names), `from_id`, `to_id`, `from_category`, `to_category` (`new`, `indeterminate`, `done`) |
+| `jira.issue.transitioned` | who moved it (to another status: never a status to itself) | `from`, `to` (status names), `from_id`, `to_id`, `from_category`, `to_category` (`new`, `indeterminate`, `done`) |
 | `jira.issue.updated` | who changed it | `fields` (names) and `changes`: `priority` and `duedate` from and to (ids, dates), `labels` added and removed (names), `sprint` from and to (ids), `link` from and to (issue keys) |
 | `jira.comment.added` | the commenter | `comment` (id), `comments` (its place among the issue's comments: 1 for the first), `author`, `restricted` (visible to a role or group only) |
 
@@ -356,8 +356,13 @@ or 503 is waited out for its `Retry-After` (at most 15 minutes) and tried again.
   username when the issue's JSON shows that user anywhere, and otherwise publishes the key.
 - Searches use JQL's relative minutes (`updated >= "-90m"`), measured by Jira's clock, so a skew
   between the two clocks larger than `overlap` could miss a change.
-- Not yet run against a real Jira: the fake (`tests/fake_jira.py`) follows Atlassian's documented
-  shapes, and the contract test (below) is ready for the first account.
+- Run against a real Jira Cloud site (a team-managed project, 2026-10); not yet against a real Data
+  Center. The fake (`tests/fake_jira.py`) follows Atlassian's documented shapes and what the Cloud
+  site showed, and the contract test (below) compares them.
+- A status change from a status to itself (Jira Cloud writes one just after creating an issue) is
+  no transition and is not published. A change between two statuses with the same name but
+  different ids (a workflow migration, a move to another project) is published: `from_id` and
+  `to_id` differ.
 
 ## RabbitMQ: a preset and a test rig (counted traffic, not a bridge)
 
