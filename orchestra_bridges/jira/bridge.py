@@ -126,6 +126,12 @@ class Bridge:
             "deployment": self.config.deployment, "projects": self.config.projects, "jql": bool(self.config.jql),
             "every_s": self.config.every}, source=self.machine)
 
+    def _say_if_owner_unlisted(self, me: User) -> None:
+        if me.login and not self.people.listed(SYSTEM, me.login) and not (me.key and self.people.listed(SYSTEM, me.key)):
+            what = "account id" if self.api.cloud else "username"
+            self.log(f"the token's owner is not in the identity map, so is {self.machine_of(me.login)}: "
+                     f'list them as jira = "{me.login}" (their {what}) to name them')
+
     def _window(self, now: float) -> tuple[float, dict | None]:
         floor = now - self.config.max_catchup
         gap = None
@@ -140,6 +146,7 @@ class Bridge:
         scope = self.config.scope()
         if self.site is None:
             self.site = poll.site(self.api, self.config.sprint_field)
+            self._say_if_owner_unlisted(self.site.me)
         site = self.site
         issues = poll.updated(self.api, scope, now - start, site)
         if any(c.new not in site.statuses for i in issues for h in i.histories for c in h.changes if c.field == "status"):

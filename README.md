@@ -329,7 +329,20 @@ jira = ["automation", "jira-bot"] # several accounts (two sites, say) may be lis
 A listed account is `person.<key>` (`bot.<key>`). Anyone else is `person.jira.<username>` (Cloud:
 `person.jira.<account id>`, or `bot.jira.…` for an app account), announced with the display name
 Jira shows for them. The owner is whoever the token belongs to (`/myself`), so list your own account
-too, or your events and your issues' levels are `person.jira.<you>` rather than `person.<you>`.
+too, or your events and your issues' levels are `person.jira.<you>` rather than `person.<you>`; the
+bridge says so in its log on start, naming the account to list.
+
+To map yourself:
+
+- **Cloud**: by account id, which looks like `557058:0a1b2c3d-4e5f-…` (the part before the colon
+  may be absent on newer accounts). Find it in your profile's address
+  (`https://<site>.atlassian.net/jira/people/<account id>`), or as `accountId` in
+  `curl -u you@example.com:$JIRA_API_TOKEN https://<site>.atlassian.net/rest/api/3/myself`. Write
+  it exactly, colon included: `jira = "557058:0a1b2c3d-4e5f-…"`. The unmapped machine name shows
+  it with `-` for the colon (`person.jira.557058-0a1b2c3d-…`), which is not the account id.
+- **Data Center**: by username (what you sign in with: `jira = "dlewis"`), or by user key
+  (`JIRAUSER10100`), which stays the same if the username is renamed. Both are `name` and `key` in
+  `curl -H "Authorization: Bearer $JIRA_API_TOKEN" https://jira.example.com/rest/api/2/myself`.
 
 To poll once by hand: `ORCHESTRA_REPO=/path/to/project uv run python -m orchestra_bridges jira --once`.
 

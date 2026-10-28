@@ -309,6 +309,14 @@ def test_a_status_restated_at_creation_is_no_transition(project, jira, make):
     assert jira_events(project)[0]["data"]["status_id"] == "1"
 
 
+def test_the_owner_not_in_the_identity_map_is_told_how_to_list_themselves(project, jira, make, capsys):
+    once(make())
+    assert 'list them as jira = "owner" (their username)' in capsys.readouterr().err
+    (project.repo_root / "people.toml").write_text('[people.me]\njira = "owner"\n')
+    once(make())
+    assert "identity map" not in capsys.readouterr().err
+
+
 @pytest.mark.parametrize("deployment", ["cloud"], indirect=True)
 def test_a_cloud_app_account_is_a_bot(project, jira, make):
     jira.apps.add("automation")
