@@ -82,7 +82,7 @@ Install this package into the environment that runs Orchestra, for example as a 
 with no clone:
 
 ```bash
-uv tool install 'orchestra[sd] @ git+https://github.com/danroblewis/orchestra@main' --with 'orchestra-bridges @ git+https://github.com/danroblewis/orchestra-bridges'
+uv tool install 'orchestra[sd,bridges] @ git+https://github.com/danroblewis/orchestra@main'
 ```
 
 Its command line comes with it as `orchestra bridges` (`orchestra bridges --help`). Then
@@ -654,9 +654,11 @@ Read `SPEC.md` for the design and `AGENTS.md` for the rules.
 
 ## Developing against a local Orchestra
 
-`pyproject.toml` takes Orchestra from GitHub (`orchestra @ git+https://github.com/danroblewis/orchestra@main`),
-and `uv.lock` pins the commit it resolved to, so nothing needs cloning beside this repository.
-`uv lock --upgrade-package orchestra` moves the pin to the newest `main` (then `uv sync --extra dev`).
+`pyproject.toml` requires `orchestra>=1.0.0a1,<1.0.0` and takes it from GitHub's `main`
+(`[tool.uv.sources]`); `uv.lock` pins the commit it resolved to, so nothing needs cloning beside
+this repository. The source is this repository's own: installed as a plugin, it gets the Orchestra
+it is installed with. `uv lock --upgrade-package orchestra` moves the pin to the newest `main`
+(then `uv sync --extra dev`).
 
 To run against an Orchestra checkout instead, with its uncommitted changes, lay it over this
 environment for one command:
@@ -680,3 +682,12 @@ uv sync --extra dev                            # back to the locked Orchestra fr
 ```
 
 A plain `uv run` or `uv sync` also puts the locked Orchestra back.
+
+To keep a checkout as this environment's Orchestra, point the source at it in `pyproject.toml`,
+then `uv sync --extra dev`; leave that change, and the `uv.lock` it rewrites, out of commits
+(`git checkout pyproject.toml uv.lock`, then `uv sync --extra dev`, goes back):
+
+```toml
+[tool.uv.sources]
+orchestra = { path = "../orchestra_2", editable = true }   # the path to your Orchestra checkout
+```
