@@ -127,7 +127,7 @@ def make_slack(slack_project, slack, clock, slept):
     Retry-After waits are recorded in ``slept``, not slept."""
     def make():
         conf = cfg.slack(slack_project.config.raw, slack_project.repo_root)
-        events = Events.for_project(slack_project, source=slack_bridge.MACHINE)
+        events = Events.for_project(slack_project)
         store = ProjectStore(for_project(slack_project), slack_project.key)
         api = Slack(fake_slack.TOKEN, slack.base, sleep=slept.append, max_wait=conf.every)
         return slack_bridge.Bridge(conf, api, events, store, clock=clock)

@@ -14,6 +14,7 @@ from orchestra.collect.round import points_of
 from orchestra.collect.spec import Collector
 from orchestra.events import Events
 from orchestra.metrics import for_project
+from relayed import only_actors
 
 from orchestra_bridges.slack.bridge import INSTRUMENT
 from orchestra_bridges.slack.waits import COUNTERS
@@ -42,6 +43,11 @@ def scrape(bridge, project, at: float) -> None:
 def stored(project, series, **labels):
     last = for_project(project).latest(series, {"instrument": INSTRUMENT, "workspace": TEAM, **labels})
     return last[1] if last else None
+
+
+def gaps(b) -> tuple:
+    """The gap counters the bridge serves: (gaps, recovered, seconds)."""
+    return tuple(b.gaps.values(TEAM).values())
 
 
 def served(bridge) -> dict[tuple, float]:
@@ -89,6 +95,7 @@ def test_a_mention_is_a_ping_from_the_pinger_on_the_thread(slack_project, slack,
     assert (a["data"]["name"], a["data"]["team"], a["data"]["kind"], a["data"]["slack"]) == (
         "Bob Builder", "platform", "person", "bob")
     assert level(b, "slack_pings_unanswered") == 1 and level(b, "slack_pings_oldest_unanswered_seconds") == 120
+    assert {m["id"] for m in only_actors(bus(slack_project))} == {"person.bob"}
 
 
 def test_dms_group_mentions_and_replies_in_threads_are_pings(slack_project, slack, clock, make_slack, slack_toml):
@@ -227,8 +234,9 @@ def test_a_restart_publishes_nothing_twice_and_loses_no_count(slack_project, sla
     run_once(b2)                                           # resumes from the bus; re-reads the overlap
     scrape(b2, slack_project, clock.t)
     again = bus(slack_project)
-    assert [e for e in again if e["source"] != "bridges.slack"] == [e for e in first if e["source"] != "bridges.slack"]
+    assert again == first
     assert len({e["id"] for e in again}) == len(again)
+    assert {m["id"] for m in only_actors(again)} == {"person.slack.bob", "person.slack.daniel"}
     assert stored(slack_project, "slack_pings_answered_total", within="5m") == 1      # counted though never scraped before
     assert stored(slack_project, "slack_pings_unanswered") == 1
     assert stored(slack_project, "slack_pings_received_total") == 2
@@ -267,14 +275,12 @@ def test_a_gap_is_caught_up_and_recorded(slack_project, slack, clock, make_slack
     slack.say(BOB, slack.dm(BOB), T0 + 3600)
     clock.t += 7200
     b.round()
-    [gap] = published(slack_project, "bridge.gap")
-    assert gap["source"] == "bridges.slack"
-    assert gap["data"] == {"workspace": TEAM, "from": "2026-10-26T07:33:20+00:00", "to": "2026-10-26T09:33:20+00:00",
-                           "recovered": True}
+    assert gaps(b) == (1, 1, 7200.0)                                     # counted, never published
+    assert 'slack_bridge_gaps_total{workspace="T0FAKE"} 1\n' in b.render()
     got = published(slack_project)
-    assert [e["type"] for e in got] == ["bridge.gap", "slack.ping.received", "slack.ping.received", "slack.ping.answered"]
-    assert got[1]["time"].startswith("2026-10-26T08:03:20")             # caught up with Slack's own times
-    answered = got[3]["data"]
+    assert [e["type"] for e in got] == ["slack.ping.received", "slack.ping.received", "slack.ping.answered"]
+    assert got[0]["time"].startswith("2026-10-26T08:03:20")             # caught up with Slack's own times
+    answered = got[2]["data"]
     assert answered["not_before"] == "2026-10-26T08:03:20.000001+00:00"  # the reaction came somewhere in the gap
     assert answered["within"] == "unknown"                               # so its wait is not known
     assert level(b, "slack_pings_answered_total", within="unknown") == 1
@@ -295,7 +301,7 @@ def test_a_gap_longer_than_max_catchup_is_not_recovered(slack_project, slack, cl
     late = slack.say(BOB, CHANNEL, T0 + 9 * 3600, mentions=(OWNER,))
     clock.t += 10 * 3600
     b.round()
-    assert published(slack_project, "bridge.gap")[0]["data"]["recovered"] is False
+    assert gaps(b) == (1, 0, 36000.0)
     assert [e["data"]["ts"] for e in published(slack_project, "slack.ping.received")] == [late]
 
 
@@ -306,9 +312,11 @@ def test_a_restart_after_a_gap_records_it_from_the_last_good_poll(slack_project,
     scrape(b, slack_project, clock.t)
     slack.say(BOB, CHANNEL, T0 + 1200, mentions=(OWNER,))
     clock.t += 3600
-    run_once(make_slack())
-    [gap] = published(slack_project, "bridge.gap")
-    assert gap["data"]["from"] == "2026-10-26T07:33:20+00:00" and gap["data"]["recovered"] is True
+    b2 = make_slack()
+    run_once(b2)
+    assert gaps(b2) == (1, 1, 3600.0)                                   # from the last good poll the store holds
+    scrape(b2, slack_project, clock.t)
+    assert stored(slack_project, "slack_bridge_gap_seconds_total") == 3600
     assert len(published(slack_project, "slack.ping.received")) == 1
 
 
@@ -318,12 +326,11 @@ def test_asleep_then_awake_publishes_one_gap_once_it_is_over(slack_project, slac
     slack.asleep = True
     tick(b, clock, seconds=240, times=4)
     assert "poll failed" in capsys.readouterr().err
-    assert published(slack_project, "bridge.gap") == []
+    assert gaps(b) == (0, 0, 0)
     slack.asleep = False
     tick(b, clock)
     tick(b, clock)
-    [gap] = published(slack_project, "bridge.gap")
-    assert (gap["data"]["from"], gap["data"]["to"]) == ("2026-10-26T07:33:20+00:00", "2026-10-26T07:50:20+00:00")
+    assert gaps(b) == (1, 1, 1020.0)                                     # from T0 to the poll that worked, once
 
 
 def test_a_rate_limit_is_waited_out_for_its_retry_after(slack_project, slack, clock, make_slack, slept):
@@ -338,7 +345,7 @@ def test_a_rate_limit_is_waited_out_for_its_retry_after(slack_project, slack, cl
 
 def test_a_ping_waiting_too_long_expires_and_a_deleted_one_too(slack_project, slack, clock, make_slack):
     slack.user(BOB, "bob")
-    old = slack.say(BOB, CHANNEL, T0 - 1000, mentions=(OWNER,))
+    slack.say(BOB, CHANNEL, T0 - 1000, mentions=(OWNER,))
     gone = slack.say(BOB, CHANNEL, T0 - 900, mentions=(OWNER,))
     b = make_slack()
     run_once(b)
@@ -346,12 +353,14 @@ def test_a_ping_waiting_too_long_expires_and_a_deleted_one_too(slack_project, sl
     tick(b, clock)
     b.config.expire = 1200.0
     tick(b, clock, times=5)
-    got = {e["data"]["ts"]: e for e in published(slack_project, "slack.ping.expired")}
-    assert got[gone]["data"]["reason"] == "expired" and got[gone]["source"] == "bridges.slack"
-    assert got[old]["data"] == {"workspace": TEAM, "channel": CHANNEL, "ts": old, "reason": "expired",
-                                "wait_seconds": 1200.0}
-    assert got[old]["time"] == "2026-10-26T07:36:40.000001+00:00"
+    assert published(slack_project, "slack.ping.expired") == []        # no one did it: counted, not published
     assert level(b, "slack_pings_expired_total") == 2 and level(b, "slack_pings_unanswered") == 0
+    clock.t += 60
+    b2 = make_slack()
+    b2.config.expire = 1200.0
+    run_once(b2)                                                       # a restart finds the expiries again
+    assert level(b2, "slack_pings_expired_total") == 2 and level(b2, "slack_pings_unanswered") == 0
+    assert published(slack_project, "slack.ping.expired") == []
 
 
 def test_many_pings_are_read_across_pages(slack_project, slack, clock, make_slack):
@@ -452,11 +461,10 @@ def test_a_restart_after_an_outage_reads_the_outage_and_records_it(slack_project
     assert stored(slack_project, "slack_bridge_last_poll_timestamp_seconds") == T0
     slack.asleep = False
     clock.t += 60
-    run_once(make_slack())
+    b2 = make_slack()
+    run_once(b2)
     assert [e["data"]["ts"] for e in published(slack_project, "slack.ping.received")] == [during]
-    [gap] = published(slack_project, "bridge.gap")
-    assert gap["data"] == {"workspace": TEAM, "from": "2026-10-26T07:33:20+00:00", "to": "2026-10-26T10:04:20+00:00",
-                           "recovered": True}
+    assert gaps(b2) == (1, 1, 9060.0)                                   # from T0, the last good poll, to now
 
 
 def test_reactions_that_cannot_be_read_leave_pings_waiting_and_the_poll_goes_on(
@@ -473,8 +481,7 @@ def test_reactions_that_cannot_be_read_leave_pings_waiting_and_the_poll_goes_on(
     assert len([r for r in slack.requests if r[0] == "reactions.list"]) == 1   # tried once, then the poll goes on
     tick(b, clock)                                                     # T0+120: the old one has run out
     assert [e["data"]["ts"] for e in published(slack_project, "slack.ping.received")] == [old, new]
-    [x] = published(slack_project, "slack.ping.expired")
-    assert (x["data"]["ts"], x["data"]["reason"]) == (old, "expired")
+    assert level(b, "slack_pings_expired_total") == 1                  # the old one ran out
     assert level(b, "slack_pings_unanswered") == 1
     err = capsys.readouterr().err
     assert len([line for line in err.splitlines() if "missing_scope" in line]) == 3      # one line per poll
@@ -555,7 +562,7 @@ def test_a_long_retry_after_is_not_waited_and_a_slow_poll_is_no_gap(slack_projec
     tick(b, clock)
     assert slept == []
     tick(b, clock)
-    assert published(slack_project, "bridge.gap") == []
+    assert gaps(b) == (0, 0, 0)
 
     def sleep(s):                                                      # a wait that takes the clock's time
         slept.append(s)
@@ -564,7 +571,7 @@ def test_a_long_retry_after_is_not_waited_and_a_slow_poll_is_no_gap(slack_projec
     slack.fail_next = [(429, {"Retry-After": "55"})] * 3               # one poll takes 165 s
     tick(b, clock)
     tick(b, clock)                                                     # 225 s after it began, 60 s after it ended
-    assert slept == [55.0] * 3 and published(slack_project, "bridge.gap") == []
+    assert slept == [55.0] * 3 and gaps(b) == (0, 0, 0)
 
 
 def test_a_stop_during_a_retry_after_ends_the_wait(slack_project, slack, clock, make_slack):

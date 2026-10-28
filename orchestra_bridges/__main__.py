@@ -56,7 +56,7 @@ def _slack(project, stop: threading.Event):
     conf = cfg.slack(project.config.raw, project.repo_root)
     token = read_token("SLACK_USER_TOKEN", "slack-token", project.repo_root, conf.token_file)
     api = Slack(token, conf.api, sleep=stop.wait, max_wait=conf.every)
-    return slack.Bridge(conf, api, Events.for_project(project, source=slack.MACHINE),
+    return slack.Bridge(conf, api, Events.for_project(project),
                         ProjectStore(for_project(project), project.key))
 
 

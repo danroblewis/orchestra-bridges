@@ -130,11 +130,11 @@ def test_the_canary_never_leaves_the_bridge(tmp_path, monkeypatch, capsys):
     from orchestra.metrics import ProjectStore, for_project
 
     from orchestra_bridges import config as cfg
-    from orchestra_bridges.slack.bridge import MACHINE, Bridge
+    from orchestra_bridges.slack.bridge import Bridge
     canary = os.environ["SLACK_CANARY"]
     project = new_project(tmp_path, monkeypatch, '[bridges.slack]\nlookback = "48h"\nport = 0\nanswered = ["reaction", "reply"]\n')
     conf = cfg.slack(project.config.raw, project.repo_root)
-    b = Bridge(conf, api(), Events.for_project(project, source=MACHINE), ProjectStore(for_project(project), project.key))
+    b = Bridge(conf, api(), Events.for_project(project), ProjectStore(for_project(project), project.key))
     b.run(threading.Event(), once=True)
     evs = Events.for_project(project).after(0)[0]
     kinds = {e["data"]["kind"] for e in evs if e["type"] == "slack.ping.received"}

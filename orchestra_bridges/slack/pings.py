@@ -5,9 +5,11 @@ that mentions the owner, or one that mentions a configured group. Its events:
 
 - ``slack.ping.received``: source the pinger, subject the thread, time the message's;
 - ``slack.ping.answered``: source the owner, subject the thread (the rules are in ``bridge.py``);
-- ``slack.ping.expired``: source the bridge, when a ping waited ``expire`` without an answer
-  (``reason: expired``; a deleted ping too, since the bridge does not notice deletion). The
-  system's own doing, so the stock balances: unanswered = received − answered − expired.
+- a ping that waits ``expire`` without an answer (a deleted ping too, since the bridge does not
+  notice deletion) stops waiting with **no event**: no one did it. It is counted
+  (``slack_pings_expired_total``, ``waits.py``), so the stock still balances: unanswered = received
+  − answered − expired. ``slack.ping.expired`` events an older bridge published (as itself) are
+  still read back on restart, by their ids.
 
 The subject is ``<workspace>/<channel>/<thread ts>``, so a ping and its answer share it and
 Orchestra sees the hand-off. Ids are built from Slack's (``slack:<workspace>:<what>:<channel>:<ts>``,

@@ -18,7 +18,9 @@ Then, holding the lock the ``/metrics`` server reads under:
 - each new ping is published as ``slack.ping.received`` (source the pinger, time the message's);
 - **the reply rule**: the owner's first message after a ping in its thread (or in its channel after
   it, when the ping was not in a thread) answers it, at that message's time;
-- a ping that has waited ``expire`` stops waiting (``slack.ping.expired``, at the moment it ran out);
+- a ping that has waited ``expire`` stops waiting, at the moment it ran out: no one's act, so no
+  event; it is counted (``slack_pings_expired_total``), and a restart finds it again from the
+  events (``Waits.expire``);
 - **the reaction rule** (the default): a checkmark the owner put on a ping answers it, and the
   earlier pings still waiting that the owner's reply there would answer: in its thread, or, for a
   ping not in a thread, the earlier ones in its channel not in a thread either. Slack does not say
@@ -30,27 +32,28 @@ Then, holding the lock the ``/metrics`` server reads under:
 When both rules see an answer in the same poll, the reply wins: it has its own time.
 
 **It keeps no state of its own.** On start it reads its own events back from the bus (ids starting
-``slack:<workspace>:``) and rebuilds the waiting pings and the counts from them; each counter then
+``slack:<workspace>:``) and rebuilds the waiting pings and the counts from them (expiring, in time
+order, each ping whose ``expire`` ran out before the next event, as the polls did); each counter then
 continues from what the store last holds for it, if that is more (``waits.py``). It reads Slack
 again from the later of its last event and the last good poll the store holds
 (``slack_bridge_last_poll_timestamp_seconds``'s value, which a scrape keeps storing while polls
 fail), less ``overlap``; never further back than ``max_catchup``. With nothing on either, it reads
 from ``lookback`` ago. A poll that succeeds more than three rounds after the end of the last good
-one (the laptop slept, the bridge was stopped, Slack or the network was down) records the gap once,
-as ``bridge.gap`` {workspace, from, to, recovered}, and reads back to where it left off.
+one (the laptop slept, the bridge was stopped, Slack or the network was down) closes a **gap**: it
+reads back to where it left off, and counts the gap (``gaps.py``:
+``slack_bridge_gaps_total{workspace}`` and the rest), never publishes it.
 
-The bridge is the machine ``bridges.slack`` by its events: it announces itself and publishes
-``slack.ping.expired`` and ``bridge.gap`` under that source. Its counts are not the machine's: they
-are measurements of the system, served on ``/metrics`` and stored by an instrument, the scrape the
-plugin declares (``plugin.py``), which runs as ``bridges.slack`` and labels every point
-``instrument="bridges.slack"``. On start the bridge reads its counters back by that label (and, for
-points stored before Orchestra's instruments of 2026-10-27, by the old ``machine="bridges.slack"``),
-so the scrape must keep that name: a project's own ``[[scrape]]`` replacing the plugin's has to be
-named ``bridges.slack`` too."""
+**The bridge is no machine** (``relay.py``): it never announces itself and publishes only as the
+people and bots who acted, the pinger and the owner. Its counts are measurements of the system,
+served on ``/metrics`` and stored by an instrument, the scrape the plugin declares (``plugin.py``),
+which runs as ``bridges.slack`` and labels every point ``instrument="bridges.slack"``. On start the
+bridge reads its counters back by that label (and, for points stored before Orchestra's instruments
+of 2026-10-27, by the old label ``machine="bridges.slack"``: read, never written), so the scrape must
+keep that name: a project's own ``[[scrape]]`` replacing the plugin's has to be named
+``bridges.slack`` too."""
 
 from __future__ import annotations
 
-import os
 import sys
 import threading
 import time
@@ -61,36 +64,39 @@ from orchestra.metrics import MetricsStore
 
 from ..announce import Announcer
 from ..config import SlackConfig
+from ..gaps import Gaps
 from ..identity import Actor, People
+from ..relay import Relay
 from ..serve import MetricsServer
 from . import search
 from .api import Slack, SlackError
-from .pings import ANSWERED, EXPIRED, RANK, RECEIVED, event_id, iso, iso_ts, kind, parse_id, subject
+from .pings import ANSWERED, RANK, RECEIVED, event_id, iso, iso_ts, kind, parse_id, subject
 from .waits import COUNTERS, LAST_POLL, UNKNOWN, Waits, within
 
-MACHINE = "bridges.slack"                         # the source of its own events
+NAME = "bridges.slack"                            # its process and log; never a source
 INSTRUMENT = "bridges.slack"                      # the scrape that stores its counts (plugin.py)
-LEGACY = {"machine": MACHINE}                     # how scrapes labelled points before 2026-10-27
+LEGACY = {"machine": "bridges.slack"}             # how scrapes labelled points before 2026-10-27 (read only)
 SYSTEM = "slack"
-GAP_ROUNDS = 3
 KNOWN_ROUNDS = 2                                  # a checkmark seen within this many polls has a known wait
 REACTION_PAGES = 5
 
 
 def log(msg: str) -> None:
-    print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {MACHINE}: {msg}", file=sys.stderr, flush=True)
+    print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {NAME}: {msg}", file=sys.stderr, flush=True)
 
 
 class Bridge:
     def __init__(self, config: SlackConfig, api: Slack, events: Events, store: MetricsStore, *,
                  people: People | None = None, clock: Callable[[], float] = time.time):
-        self.config, self.api, self.events, self.store, self.clock = config, api, events, store, clock
+        self.config, self.api, self.store, self.clock = config, api, store, clock
+        self.events = Relay(events)
         self.people = people if people is not None else People.load(config.people)
         self.lock = threading.Lock()
         self.me = self.my_name = self.team = ""
         self.waits = Waits()
         self.seen: set[str] = set()
-        self.announcer = Announcer(events, SYSTEM, self.people)
+        self.announcer = Announcer(self.events, SYSTEM, self.people)
+        self.gaps = Gaps(SYSTEM)
         self.last_ok: float | None = None             # when the last good poll began
         self.last_end: float | None = None            # when it ended: gaps are measured from here
         self.since = 0.0                              # where the next poll reads from
@@ -159,6 +165,7 @@ class Bridge:
                 mine.append((event_time(e) or 0.0, RANK[p[1]], p[1], p[2], p[3], e.get("subject") or "", known))
         waits = Waits()
         for t, _, type_, channel, ts, subj, known in sorted(mine):
+            waits.expire(t, self.config.expire)
             waits.fold(type_, channel, ts, subj, t, known=known)
         written, last_poll = self._stored()
         waits.continue_from(written)
@@ -170,28 +177,20 @@ class Bridge:
             self.last_ok = self.last_end = last_poll or None
             self.since = last - self.config.overlap if last else self.clock() - self.config.lookback
             self.ready = True
+        self.gaps.resume(self.team, self.store, {"instrument": INSTRUMENT, **self.labels()}, log)
         log(f"resumed: {len(mine)} of its events on the bus, {len(waits.waiting)} pings waiting; "
             f"reading from {iso(self.since)}")
-
-    def announce(self) -> None:
-        self.events.publish("orchestra.machine.started", {
-            "mode": "continuous", "kind": "program", "package": "bridges", "listens_for": [],
-            "log": os.environ.get("ORCHESTRA_MACHINE_LOG"), "system": SYSTEM, "workspace": self.team,
-            "answered": self.config.answered, "every_s": self.config.every}, source=MACHINE)
 
     def reannounce(self) -> None:
         """Everyone the identity map lists who was announced before, again when their name or team
         is not what their last announcement says."""
         self.announcer.reannounce(iso(self.clock()), lambda login: self.actor(login, login))
 
-    def _window(self, now: float) -> tuple[float, dict | None]:
-        """Where this poll reads from, and the gap it closes when the last good poll ended too long
-        ago (published only once the poll's reads succeed)."""
-        start, last = self.since, self.last_end
-        floor = now - self.config.max_catchup
-        gap = None
-        if last and now - last > GAP_ROUNDS * self.config.every:
-            gap = {"workspace": self.team, "from": iso(last), "to": iso(now), "recovered": start >= floor}
+    def _window(self, now: float) -> tuple[float, bool | None]:
+        """Where this poll reads from, and whether it closes a gap (the last good poll ended too long
+        ago) that it reads back whole (None: no gap; counted only once the poll's reads succeed)."""
+        start, floor = self.since, now - self.config.max_catchup
+        gap = (start >= floor) if Gaps.late(self.last_end, now, self.config.every) else None
         return max(start, floor), gap
 
     def _read(self, start: float) -> tuple[list[search.Message], list[search.Message], dict[tuple[str, str], str]]:
@@ -256,15 +255,6 @@ class Bridge:
         self.seen.add(eid)
         self.waits.fold(ANSWERED, *key, subj, at, known=known)
 
-    def _expire(self, key: tuple[str, str], at: float, reason: str) -> None:
-        subj, t0 = self.waits.waiting[key]
-        eid = event_id(self.team, EXPIRED, *key)
-        self.events.publish(EXPIRED, {"workspace": self.team, "channel": key[0], "ts": key[1], "reason": reason,
-                                      "wait_seconds": round(at - t0, 3)},
-                            source=MACHINE, subject=subj, time=iso(at), id=eid)
-        self.seen.add(eid)
-        self.waits.fold(EXPIRED, *key, subj, at)
-
     def _receive(self, m: search.Message) -> bool:
         eid = event_id(self.team, RECEIVED, m.channel, m.ts)
         if eid in self.seen:
@@ -295,9 +285,8 @@ class Bridge:
                     self._answer(key, r.t, iso_ts(r.ts), {"rule": "reply", "reply_ts": r.ts})
 
     def _expiries(self, now: float) -> None:
-        for key, (_, t0) in sorted(self.waits.waiting.items(), key=lambda kv: kv[1][1]):
-            if t0 + self.config.expire <= now:
-                self._expire(key, t0 + self.config.expire, "expired")
+        """The pings whose ``expire`` ran out stop waiting: counted, not published (no one did it)."""
+        self.waits.expire(now, self.config.expire)
 
     def _reactions(self, marks: dict[tuple[str, str], str], now: float, not_before: float | None) -> None:
         """The reaction rule: each checkmark answers its ping and the earlier pings still waiting
@@ -320,10 +309,10 @@ class Bridge:
         start, gap = self._window(now)
         pings, own, marks = self._read(start)
         with self.lock:
-            if gap:
-                self.events.publish("bridge.gap", gap, source=MACHINE)
+            if gap is not None:
+                self.gaps.close(self.team, now - (self.last_end or now), gap)
                 log(f"gap of {round(now - (self.last_end or now))} s since the last good poll"
-                    + ("" if gap["recovered"] else f"; only the last {round(self.config.max_catchup)} s were read"))
+                    + ("" if gap else f"; only the last {round(self.config.max_catchup)} s were read"))
             new = sum(self._receive(m) for m in pings)
             self._replies(own)
             self._expiries(now)
@@ -336,7 +325,8 @@ class Bridge:
     def render(self) -> str | None:
         """What ``/metrics`` serves; None until the bridge has read its past back."""
         with self.lock:
-            return self.waits.exposition(self.clock(), self.labels(), self.last_ok) if self.ready else None
+            return (self.waits.exposition(self.clock(), self.labels(), self.last_ok, self.gaps.values(self.team))
+                    if self.ready else None)
 
     def round(self) -> None:
         try:
@@ -361,7 +351,6 @@ class Bridge:
             if stop.is_set():
                 return
             self.resume()
-            self.announce()
             self.reannounce()
             while not stop.is_set():
                 self.round()

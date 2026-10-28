@@ -11,16 +11,20 @@ with the workspace (the scrape adds ``instrument="bridges.slack"``):
   15 minutes). ``unknown`` is a checkmark the bridge first saw more than two polls after the ping
   could last have been seen unanswered (after a gap, or on a first start): its wait is somewhere in
   that span, so it goes in no timed bucket. The promise is (5m + 15m) / (5m + 15m + 60m + over);
-- ``slack_pings_expired_total``: stopped waiting unanswered (``pings.py``);
+- ``slack_pings_expired_total``: stopped waiting unanswered, ``expire`` after the ping (``expire``):
+  counted here only, since no one did it, so no event says it;
 - ``slack_ping_wait_seconds_total``: the waits of the answers in a timed bucket added up (the mean
   is its rate over the rate of those answers; ``unknown`` ones are left out of both);
 - ``slack_bridge_last_poll_timestamp_seconds``: when the last successful poll began (Unix seconds),
   absent before the first. A scrape stores it even while polls fail, so on restart its value, not
-  the time of the scrape, says where the bridge left off.
+  the time of the scrape, says where the bridge left off;
+- the gap counts (``gaps.py``), which the bridge passes in: ``slack_bridge_gaps_total`` and the rest.
 
 So ``unanswered`` changes by received − answered (every bucket) − expired, exactly, while the bus
 keeps the bridge's events. The state is rebuilt from the
-bridge's own events when it starts, and every counter then continues from the larger of what was
+bridge's own events when it starts, each ping expiring when its ``expire`` runs out before the next
+event, as the polls expired it (an ``expire`` changed since gives the new answer; a counter still
+never goes down), and every counter then continues from the larger of what was
 rebuilt and what the store last holds for it (``continue_from``): a trimmed bus never takes a
 counter down, and a count the store had not scraped yet is not lost."""
 
@@ -81,6 +85,15 @@ class Waits:
         self.wait_seconds += wait
         return wait
 
+    def expire(self, now: float, after: float) -> list[tuple[str, str]]:
+        """Stop the pings that have waited ``after`` by ``now`` (each at the moment it ran out),
+        oldest first; which ones."""
+        out = sorted((k for k, (_, t) in self.waiting.items() if t + after <= now), key=lambda k: self.waiting[k][1])
+        for k in out:
+            subj, t = self.waiting[k]
+            self.fold(EXPIRED, *k, subj, t + after)
+        return out
+
     def in_thread(self, subject: str, before: float) -> list[tuple[str, str]]:
         """The pings waiting in thread ``subject`` that came before ``before``, oldest first."""
         return sorted((k for k, (s, t) in self.waiting.items() if s == subject and t < before), key=lambda k: float(k[1]))
@@ -110,11 +123,14 @@ class Waits:
         out += [(name, extra, round(counts[k] + self.offset.get(k, 0.0), 1)) for k, (name, extra) in COUNTERS.items()]
         return out
 
-    def exposition(self, now: float, labels: dict[str, str], last_poll: float | None = None) -> str:
-        """The Prometheus text format, one sample per series; ``last_poll`` too, when there was one."""
+    def exposition(self, now: float, labels: dict[str, str], last_poll: float | None = None,
+                   also: dict[str, float] | None = None) -> str:
+        """The Prometheus text format, one sample per series; ``last_poll`` too, when there was one,
+        and ``also`` (the gap counts)."""
         lines, typed = [], set()
         last = [(LAST_POLL, {}, last_poll)] if last_poll else []
-        for name, extra, value in [*self.values(now), *last]:
+        more = [(name, {}, value) for name, value in (also or {}).items()]
+        for name, extra, value in [*self.values(now), *more, *last]:
             if name not in typed:
                 lines.append(f"# TYPE {name} {'counter' if name.endswith('_total') else 'gauge'}")
                 typed.add(name)
