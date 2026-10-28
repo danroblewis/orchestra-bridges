@@ -1,6 +1,8 @@
-"""``python -m orchestra_bridges github|github_prs|slack|jira[_<name>] [--once]``: run a bridge for the
-project at ORCHESTRA_REPO (the launcher sets it), else the working directory, until SIGTERM or
-SIGINT. A bridge publishes only as the people and bots who acted (``relay.py``), so its bus has no
+"""Run a bridge for the project at ORCHESTRA_REPO, else the working directory, until SIGTERM or SIGINT.
+
+``orchestra bridges github|github_prs|slack|jira[_<name>] [--once]`` (``orchestra --repo PATH bridges
+...`` sets ORCHESTRA_REPO), or ``python -m orchestra_bridges ...``, which the launcher runs and gives
+ORCHESTRA_REPO. A bridge publishes only as the people and bots who acted (``relay.py``), so its bus has no
 source of its own."""
 
 from __future__ import annotations
@@ -68,7 +70,7 @@ def _log(name: str, msg: str) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="orchestra_bridges")
+    ap = argparse.ArgumentParser(prog="orchestra bridges")
     ap.add_argument("bridge", help=f"{', '.join(sorted(BRIDGES))}, jira, or jira_<name>")
     ap.add_argument("--once", action="store_true", help="poll once and exit")
     args = ap.parse_args(argv)

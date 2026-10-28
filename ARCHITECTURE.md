@@ -114,7 +114,7 @@ flowchart LR
 
     subgraph pkg["orchestra-bridges (this repo)"]
         plugin["plugin.py<br/>entry point 'bridges'"]
-        main["__main__.py<br/>python -m orchestra_bridges"]
+        main["__main__.py<br/>orchestra bridges, python -m orchestra_bridges"]
         cfg["config.py"]
         ident["identity.py"]
         ann["announce.py"]
@@ -227,7 +227,7 @@ SIGTERM or SIGINT. A configuration, identity or credential error prints one line
 poll once by hand:
 
 ```sh
-ORCHESTRA_REPO=/path/to/project uv run python -m orchestra_bridges github --once
+uv run orchestra --repo /path/to/project bridges github --once
 ```
 
 ### 4.3 The instruments that store what the bridges serve (Slack's as the example)

@@ -15,6 +15,9 @@ dev = ["pytest>=8.0", "ruff>=0.6"]
 [project.entry-points."orchestra.plugins"]
 bridges = "orchestra_bridges.plugin:plugin"
 
+[project.entry-points."orchestra.commands"]
+bridges = "orchestra_bridges.__main__:main"
+
 [tool.hatch.metadata]
 allow-direct-references = true   # Orchestra comes from GitHub (see README, "Developing against a local Orchestra")
 

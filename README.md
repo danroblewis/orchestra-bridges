@@ -78,15 +78,21 @@ host = "127.0.0.1"                # where /metrics listens
 port = 9464                       # where /metrics is served; 0: any free port, and no scrape
 ```
 
-With this package installed in the environment that runs Orchestra (`uv add` it, or
-`uv pip install -e ../orchestra-bridges`), `orchestra run` starts the bridge as the process
-`bridges.github`, logs it to `<state>/logs/machines/bridges.github.log` (Orchestra's place for
-process logs) and restarts it if it exits, and scrapes it as the instrument `bridges.github`. The
+Install this package into the environment that runs Orchestra, for example as a tool, from GitHub
+with no clone:
+
+```bash
+uv tool install 'orchestra[sd] @ git+https://github.com/danroblewis/orchestra@main' --with 'orchestra-bridges @ git+https://github.com/danroblewis/orchestra-bridges'
+```
+
+Its command line comes with it as `orchestra bridges` (`orchestra bridges --help`). Then
+`orchestra run` starts the bridge as the process `bridges.github`, logs it to
+`<state>/logs/machines/bridges.github.log` (Orchestra's place for process logs) and restarts it if it exits, and scrapes it as the instrument `bridges.github`. The
 bridge is not on the Machines page; the people it publishes as are, once seen. Without a
 `[bridges.github]` section, nothing runs. A project's own `[[scrape]]` named `bridges.github`
 replaces the plugin's; it must keep that name, by which a restarted bridge finds its counts.
 
-To try one poll by hand: `ORCHESTRA_REPO=/path/to/project uv run python -m orchestra_bridges github --once`.
+To try one poll by hand: `uv run orchestra --repo /path/to/project bridges github --once`.
 
 **Credentials.** For github.com it uses `GH_TOKEN` (or `GITHUB_TOKEN`) when one is set; for a
 GitHub Enterprise `api`, `GH_ENTERPRISE_TOKEN` (or `GITHUB_ENTERPRISE_TOKEN`). Otherwise it runs
@@ -210,7 +216,7 @@ SAIL = ["SAIL-passed", "SAIL-failed"]   # carrying SAIL and neither of these: aw
 ```
 
 `orchestra run` starts it as `bridges.github_prs` and scrapes its `/metrics` every 30 s. To poll
-once by hand: `ORCHESTRA_REPO=/path/to/project uv run python -m orchestra_bridges github_prs --once`.
+once by hand: `uv run orchestra --repo /path/to/project bridges github_prs --once`.
 Credentials are the issues bridge's: `GH_TOKEN`, or your `gh` login, never a token in
 `orchestra.toml` (a `token` key is refused).
 
@@ -370,7 +376,7 @@ To map yourself:
   (`JIRAUSER10100`), which stays the same if the username is renamed. Both are `name` and `key` in
   `curl -H "Authorization: Bearer $JIRA_API_TOKEN" https://jira.example.com/rest/api/2/myself`.
 
-To poll once by hand: `ORCHESTRA_REPO=/path/to/project uv run python -m orchestra_bridges jira --once`.
+To poll once by hand: `uv run orchestra --repo /path/to/project bridges jira --once`.
 
 **Cost.** A round makes about four searches (changed issues, open issues, the owner's open issues,
 and hourly the done count), one page per 50 issues (1,000 for the done count), plus one request per
@@ -540,7 +546,7 @@ is `person.slack.<handle>` (`bot.slack.<handle>` for a bot), so a stranger who s
 someone on GitHub is a different machine; only the map joins accounts across systems.
 
 To try one poll by hand:
-`SLACK_USER_TOKEN=... ORCHESTRA_REPO=/path/to/project uv run python -m orchestra_bridges slack --once`.
+`SLACK_USER_TOKEN=... uv run orchestra --repo /path/to/project bridges slack --once`.
 
 ### When the laptop sleeps
 
