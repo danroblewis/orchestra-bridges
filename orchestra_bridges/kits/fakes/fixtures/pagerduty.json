@@ -1,0 +1,48 @@
+{
+  "services": [
+    {
+      "id": "PSVC001",
+      "type": "service_reference",
+      "summary": "Checkout API"
+    },
+    {
+      "id": "PSVC002",
+      "type": "service_reference",
+      "summary": "Payments"
+    }
+  ],
+  "incidents": [
+    {
+      "id": "PINC001",
+      "incident_number": 101,
+      "title": "CANARY-TEXT-NEVER-LEAVES: checkout latency",
+      "status": "triggered",
+      "urgency": "high",
+      "created_at": "2026-10-31T08:00:00Z",
+      "last_status_change_at": "2026-10-31T08:00:00Z",
+      "service": "PSVC001",
+      "changed_by": null
+    },
+    {
+      "id": "PINC002",
+      "incident_number": 102,
+      "title": "CANARY-TEXT-NEVER-LEAVES: payments errors",
+      "status": "acknowledged",
+      "urgency": "low",
+      "created_at": "2026-10-31T08:30:00Z",
+      "last_status_change_at": "2026-10-31T08:40:00Z",
+      "service": "PSVC002",
+      "changed_by": "PUSER01"
+    }
+  ],
+  "users": [
+    {
+      "id": "PUSER01",
+      "summary": "CANARY-TEXT-NEVER-LEAVES Alice"
+    },
+    {
+      "id": "PUSER02",
+      "summary": "CANARY-TEXT-NEVER-LEAVES Bob"
+    }
+  ]
+}

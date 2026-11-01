@@ -293,6 +293,18 @@ orders = "orders-api"
 - RabbitMQ never names publishers. Fill `[sources.producers]` from the code (`basic_publish` and
   the exchange each service names); unnamed producers are drawn unattributed, which is honest.
 
+## A system no bridge reads: the kits (`orchestra bridges scaffold`)
+
+For PagerDuty, a Slack channel's history, a Jira query the bridge does not cover, or series from a
+Prometheus API, write a poller from a kit: `orchestra bridges scaffold <jira|slack|pagerduty|promql>
+<name>` writes `<state>/machines/<name>/` (`--root overlay` beside the private overlay, `--root repo`
+for a pull request only). Run its test against the fake first; read its `AGENTS.md` for what it may
+do. Then add the two entries it prints (`[[machines]]` for the poller, `[[collect]]` for its
+`measure`) with `config_edit`, target overlay. Its `machine.toml` says `clearance = "needs
+approval"`: it reads only a fake until the human approves reading the system; you never change that
+yourself. Its token is named by environment variable (`[settings] token_env`), never written.
+`[bridges.kits]` (`per_minute`, `hosts`, `tokens`, `ttl`, `cache_dir`) is checked like the rest.
+
 ## Checking that it works
 
 1. config_edit accepted the change with the bridges' check: the settings read.

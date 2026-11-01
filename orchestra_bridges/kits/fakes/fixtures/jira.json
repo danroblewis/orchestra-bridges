@@ -1,0 +1,104 @@
+{
+  "statuses": {
+    "Open": "new",
+    "In Progress": "indeterminate",
+    "In Review": "indeterminate",
+    "Done": "done"
+  },
+  "transitions": {
+    "Open": [
+      {
+        "id": "11",
+        "name": "Start",
+        "to": "In Progress"
+      }
+    ],
+    "In Progress": [
+      {
+        "id": "21",
+        "name": "Review",
+        "to": "In Review"
+      },
+      {
+        "id": "12",
+        "name": "Stop",
+        "to": "Open"
+      }
+    ],
+    "In Review": [
+      {
+        "id": "31",
+        "name": "Done",
+        "to": "Done"
+      },
+      {
+        "id": "22",
+        "name": "Rework",
+        "to": "In Progress"
+      }
+    ],
+    "Done": [
+      {
+        "id": "41",
+        "name": "Reopen",
+        "to": "Open"
+      }
+    ]
+  },
+  "issues": [
+    {
+      "id": "10001",
+      "key": "ABC-1",
+      "project": "ABC",
+      "summary": "CANARY-TEXT-NEVER-LEAVES: first",
+      "status": "Open",
+      "issuetype": "Story",
+      "priority": "Medium",
+      "assignee": "alice",
+      "created": "2026-10-30T09:00:00.000+0000",
+      "updated": "2026-10-30T09:00:00.000+0000"
+    },
+    {
+      "id": "10002",
+      "key": "ABC-2",
+      "project": "ABC",
+      "summary": "CANARY-TEXT-NEVER-LEAVES: second",
+      "status": "In Progress",
+      "issuetype": "Bug",
+      "priority": "High",
+      "assignee": "bob",
+      "created": "2026-10-30T10:00:00.000+0000",
+      "updated": "2026-10-31T07:00:00.000+0000",
+      "history": [
+        {
+          "id": "20001",
+          "by": "bob",
+          "at": "2026-10-31T07:00:00.000+0000",
+          "from": "Open",
+          "to": "In Progress"
+        }
+      ]
+    },
+    {
+      "id": "10003",
+      "key": "OPS-7",
+      "project": "OPS",
+      "summary": "CANARY-TEXT-NEVER-LEAVES: third",
+      "status": "Done",
+      "issuetype": "Task",
+      "priority": "Low",
+      "assignee": null,
+      "created": "2026-10-29T10:00:00.000+0000",
+      "updated": "2026-10-31T06:00:00.000+0000",
+      "history": [
+        {
+          "id": "20002",
+          "by": "carol",
+          "at": "2026-10-31T06:00:00.000+0000",
+          "from": "In Review",
+          "to": "Done"
+        }
+      ]
+    }
+  ]
+}

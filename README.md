@@ -596,6 +596,32 @@ no gap.
 - Search indexing can lag. Each poll re-reads `overlap` (10 minutes), so a ping indexed late is
   still found.
 
+## Kits: build a poller for a system no bridge reads
+
+For a system none of the bridges reads (PagerDuty, a Slack channel's history, a Jira query, a
+Prometheus API such as Chronosphere), `orchestra_bridges.kits` has the parts and a scaffold
+(SPEC §8; Orchestra's `docs/INTEGRATING.md`):
+
+```bash
+orchestra bridges scaffold pagerduty pd_alerts            # into <state>/machines/pd_alerts/ (--root overlay|repo)
+uv run python -m pytest ~/.orchestrator/<key>/machines/pd_alerts/test_pd_alerts.py -q   # against the fake
+```
+
+It writes `machine.toml` (settings, the token's environment variable NAME, clearance),
+`pd_alerts.py` (what it reads, keeps and publishes), its test against the kit's fake and an
+`AGENTS.md` for a coding tool, and prints the `[[machines]]` and `[[collect]]` entries that run it.
+Like a bridge, a poller is a relay (its events' sources are who acted, each announced once), keeps
+only metadata (its disk cache holds only what `keep` returns), reads only, and keeps the token in
+memory. Until `clearance = "approved"` it reads only a fake on this machine.
+
+```toml
+[bridges.kits]                     # optional
+per_minute = 60                    # requests a minute per host, for every kit client
+hosts = { "api.pagerduty.com" = 30 }
+tokens = { pagerduty = "PAGERDUTY_TOKEN" }   # environment variable NAMES, never a token
+ttl = "5m"
+```
+
 ## RabbitMQ: a preset and a test rig (counted traffic, not a bridge)
 
 Some buses carry too much, or data that is not ours, to read message by message. Orchestra reads

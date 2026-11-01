@@ -65,7 +65,8 @@
     queries = ["<@{me}>", "to:<@{me}>"]   # replaces the default searches (slack/search.py); {me} is your member id
     api = "https://slack.com/api"     # https on slack.com, or a local fake (loopback) in tests
 
-``[bridges] people`` (the identity map) applies to every bridge.
+``[bridges] people`` (the identity map) applies to every bridge. ``[bridges.kits]`` is no bridge:
+it is the kits' settings (``kits/settings.py``).
 
 A bridge runs only where its section exists (``plugin.py``). No token is ever in orchestra.toml:
 the GitHub bridges use the owner's ``gh`` login (``github/api.py``), the Jira and Slack bridges an

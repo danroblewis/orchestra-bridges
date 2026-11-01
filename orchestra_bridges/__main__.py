@@ -1,6 +1,7 @@
 """Run a bridge for the project at ORCHESTRA_REPO, else the working directory, until SIGTERM or SIGINT.
 
-``orchestra bridges github|github_prs|slack|jira[_<name>] [--once]`` (``orchestra --repo PATH bridges
+``orchestra bridges github|github_prs|slack|jira[_<name>] [--once]`` (or ``orchestra bridges scaffold
+<kind> <name>``, which writes a new machine from a kit: ``kits/scaffold.py``) (``orchestra --repo PATH bridges
 ...`` sets ORCHESTRA_REPO), or ``python -m orchestra_bridges ...``, which the launcher runs and gives
 ORCHESTRA_REPO. A bridge publishes only as the people and bots who acted (``relay.py``), so its bus has no
 source of its own."""
@@ -70,8 +71,12 @@ def _log(name: str, msg: str) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == ["scaffold"]:                  # a new Programmatic Machine from a kit (kits/scaffold.py)
+        from .kits.scaffold import main as scaffold
+        return scaffold(argv[1:])
     ap = argparse.ArgumentParser(prog="orchestra bridges")
-    ap.add_argument("bridge", help=f"{', '.join(sorted(BRIDGES))}, jira, or jira_<name>")
+    ap.add_argument("bridge", help=f"{', '.join(sorted(BRIDGES))}, jira, or jira_<name> (or: scaffold <kind> <name>)")
     ap.add_argument("--once", action="store_true", help="poll once and exit")
     args = ap.parse_args(argv)
     if args.bridge not in BRIDGES and not cfg.JIRA_SECTION.match(args.bridge):

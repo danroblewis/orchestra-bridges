@@ -1,0 +1,28 @@
+# {{name}}: a poller scaffolded from the orchestra-bridges kit `jira`: a relay of what people did in
+# Jira, never a machine itself (the machines are the actors it publishes as).
+# Read by its own program ({{name}}.py: [settings], clearance) and by the Supervisor (description,
+# engagement, [[publishes]]); never by Orchestra, which knows the actors by their events.
+# Before writing one: the bridges' own Jira reader ([bridges.jira]) may already read what you need.
+name = "{{name}}"
+kit = "jira"
+description = "Polls Jira (Data Center) every 5 minutes and relays each issue's status change as jira.issue.transitioned, as who made it; measure prints the issues in scope by status."
+engagement = "scheduled"
+created_by = "orchestra bridges scaffold"
+# The compliance check: until the owner approves reading Jira (then "approved", with the data
+# class), the program reads only a fake on this machine.
+clearance = "needs approval"
+data_class = "unknown"
+
+[settings]
+base_url = "https://jira.example.com"   # your Data Center site
+token_env = "JIRA_API_TOKEN"      # the NAME of the variable holding a personal access token; never the token
+every = "5m"
+per_minute = 20
+ttl = "4m"
+jql = "project = ABC"             # the issues in scope; no ORDER BY (the poller adds its own)
+lookback = "1d"                   # how far back the first poll reads
+overlap = "10m"                   # each poll re-reads this much before the last one
+
+[[publishes]]
+type = "jira.issue.transitioned"
+subject = "the issue key (ABC-12)"

@@ -1,0 +1,11 @@
+{
+  "comment": "Sample times are seconds relative to the fake's t0 (its start, unless given): -60 is a minute before it.",
+  "series": [
+    {"labels": {"__name__": "http_requests_total", "service": "checkout", "k8s_cluster": "prod-1"},
+     "samples": [[-600, 100], [-300, 160], [-60, 220], [0, 240]]},
+    {"labels": {"__name__": "http_requests_total", "service": "payments", "k8s_cluster": "prod-1"},
+     "samples": [[-600, 50], [-300, 55], [-60, 61], [0, 70]]},
+    {"labels": {"__name__": "queue_depth", "queue": "orders", "k8s_cluster": "prod-2"},
+     "samples": [[-600, 3], [-300, 9], [-60, 4], [0, 5]]}
+  ]
+}
