@@ -21,6 +21,12 @@ subject (``<owner>/<name>#<number>``) and who acted as the source (``person.gith
 | ``github.issue.opened`` | an issue opened since the poller began (``[settings] issues``) | the author | ``opened`` |
 | ``github.issue.labeled``, ``.unlabeled``, ``.closed``, ``.reopened`` | as for a pull request | who did it | the event's id |
 
+**The first run** starts at ``[settings] since`` (``now`` by default; or a duration back, ``"1d"``,
+or a time: ``start_of``), never at the beginning of the repository's history: nothing done before it
+is relayed (a label, a review, a head's checks completed before it), and of a catch-up window it
+relays only the pull requests and issues still open. Later polls relay every change, a merge or a
+close included, made after the first run began.
+
 A cost to keep in mind (``per_minute``): one list of each a poll, a page per 50 updated, then about
 two requests per pull request updated and one or two per open one awaiting its checks; GitHub
 allows 5,000 an hour per token. ``python {{name}}.py measure`` (for a ``[[collect]]`` entry) prints
@@ -33,6 +39,7 @@ conclusions, times. Never a title, a body, a comment, a review's text or a check
 from __future__ import annotations
 
 import fnmatch
+import math
 import sys
 import time
 from datetime import UTC, datetime
@@ -41,7 +48,7 @@ from pathlib import Path
 from orchestra.config import parse_duration
 
 from orchestra_bridges.kits import runner
-from orchestra_bridges.kits.poller import actor_source
+from orchestra_bridges.kits.poller import actor_source, start_of
 
 HERE = Path(__file__).resolve().parent
 HEADERS = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
@@ -77,7 +84,8 @@ def keep_pulls(body: list) -> list[dict]:
 
 def keep_issues(body: list) -> list[dict]:
     return [{"number": i["number"], "author": _who(i.get("user")), "created": i.get("created_at"),
-             "updated": i.get("updated_at"), "pull": "pull_request" in i} for i in body or []]
+             "updated": i.get("updated_at"), "closed": i.get("closed_at"), "pull": "pull_request" in i}
+            for i in body or []]
 
 
 def keep_events(body: list) -> list[dict]:
@@ -176,11 +184,14 @@ def relay_pr(p, api, repo: str, pr: dict, began: str, heads: dict) -> None:
                    source=actor(r["user"]), stamp=str(r["id"]), time=r["at"])
 
 
-def relay_checks(p, api, repo: str, n: int, sha: str) -> bool:
-    """``github.checks.completed`` for the head once its checks are final; whether they are."""
+def relay_checks(p, api, repo: str, n: int, sha: str, began: str) -> bool:
+    """``github.checks.completed`` for the head once its checks are final (none for checks that were
+    final before ``began``); whether they are."""
     c = checks(api, repo, sha)
     if c is None:
         return False
+    if c["at"] and c["at"] < began:
+        return True                     # done before the poller began: not news
     p.emit("github.checks.completed", f"{repo}#{n}", {"repository": repo, "number": n, "head_sha": sha,
                                                       "outcome": c["outcome"], "via": c["via"], "checks": c["checks"]},
            source=c["source"], key=f"{repo}@{sha}", stamp="checks", time=c["at"])
@@ -189,39 +200,43 @@ def relay_checks(p, api, repo: str, n: int, sha: str) -> bool:
 
 def make_poll(api, settings):
     repo = str(settings.extra.get("repo", "acme/service"))
-    lookback = parse_duration(settings.extra.get("lookback"), 86400.0)
     overlap = parse_duration(settings.extra.get("overlap"), 600.0)
 
     def poll(p):
         started = time.time()
         cur = p.cursor if isinstance(p.cursor, dict) else {}
-        since = float(cur.get("since") or started - lookback)
-        began = iso(float(cur.get("began") or since))
+        # No cursor yet: the first run reads from [settings] since, never history; it relays what it
+        # keeps of that window (the open items), and later polls only what was done after it began
+        # (``live``), so an item the first run passed over (closed) is never relayed from before.
+        first = not cur.get("since")
+        since = float(cur.get("since") or math.floor(start_of(settings.extra.get("since"), started)))
+        live = float(cur.get("live") or cur.get("began") or since)
+        began = iso(since if first else live)
         after = iso(since - overlap)
         heads, open_, checked = dict(cur.get("heads") or {}), dict(cur.get("open") or {}), dict(cur.get("checked") or {})
         updated = listed(api, f"/repos/{repo}/pulls", {"state": "all", "sort": "updated", "direction": "desc"},
                          keep_pulls, after)
         for pr in updated:
-            if not follows(settings, pr):
-                continue
+            if not follows(settings, pr) or (first and pr["closed"]):
+                continue                                 # a catch-up relays the work still open
             relay_pr(p, api, repo, pr, began, heads)
             if pr["closed"]:
                 open_.pop(str(pr["number"]), None)
             else:
                 open_[str(pr["number"])] = pr["head"]
         for n, sha in open_.items():                     # checks change no pull request's updated time
-            if checked.get(n) != sha and relay_checks(p, api, repo, int(n), sha):
+            if checked.get(n) != sha and relay_checks(p, api, repo, int(n), sha, began):
                 checked[n] = sha
         if settings.extra.get("issues", True):
             for i in listed(api, f"/repos/{repo}/issues", {"state": "all", "since": after, "sort": "updated",
                                                            "direction": "desc"}, keep_issues, after):
-                if i["pull"]:
+                if i["pull"] or (first and i["closed"]):
                     continue
                 if (i["created"] or "") >= began:
                     p.emit("github.issue.opened", f"{repo}#{i['number']}", {"repository": repo, "number": i["number"]},
                            source=actor(i["author"]), stamp="opened", time=i["created"])
                 relay_events(p, api, repo, i["number"], "issue", began)
-        p.cursor = {"since": started, "began": cur.get("began") or since, "heads": heads, "open": open_,
+        p.cursor = {"since": started, "live": math.floor(started) if first else live, "heads": heads, "open": open_,
                     "checked": {n: s for n, s in checked.items() if n in open_}}
 
     return poll

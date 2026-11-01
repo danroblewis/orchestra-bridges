@@ -228,7 +228,7 @@ the world between polls, and so the Outbox's own tests have something to write t
 - **A token named but not set**: `approve_integration` says so; the owner sets it and restarts
   `orchestra run`, or (better) puts it in a file.
 - **No events but the series move**: nothing changed within the scope, or the scope is wrong
-  (`jql`, `channels`, `branches`); the first poll reads back only `lookback`.
+  (`jql`, `channels`, `branches`); the Jira and GitHub kits' first run starts now (`since`: a duration back reads a catch-up window of the items not yet done), and the others read back only `lookback`.
 - **The same thing twice**: never from a re-read (an event's id is the item's id and its change's
   stamp); two collectors over one scope, or a script edited to stamp by time, would.
 - **A dependency missing**: the kits not installed in Orchestra's Python (`python -c "import

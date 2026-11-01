@@ -184,3 +184,21 @@ def test_the_identity_map_wins_for_a_kit_poller_as_for_the_jira_reader(tmp_path)
     [alice] = [e for e in evs if e["type"] == "orchestra.machine.started" and e["source"] == "person.alice"]
     assert alice["data"] == {"mode": "ad hoc", "kind": "person", "listens_for": [], "package": "bridges",
                              "name": "Alice Example", "team": "sre"}
+
+
+def test_a_first_run_starts_now_unless_since_says_otherwise():
+    """``start_of``: a poller with no cursor starts now, a duration back, or at a time; never at the
+    beginning of the other system's history (a time to come is now)."""
+    from datetime import UTC, datetime
+
+    from orchestra_bridges.kits.poller import start_of
+
+    now = datetime(2026, 11, 1, 12, tzinfo=UTC).timestamp()
+    assert start_of(None, now) == start_of("now", now) == start_of("", now) == now
+    assert start_of("2h", now) == now - 7200 and start_of(86400, now) == now - 86400
+    assert start_of("2026-11-01T10:00:00Z", now) == now - 7200
+    assert start_of("2026-11-01T10:00:00", now) == now - 7200                    # UTC unless it says
+    assert start_of(datetime(2026, 11, 1, 11, tzinfo=UTC), now) == now - 3600   # TOML's own time
+    assert start_of("2027-01-01T00:00:00Z", now) == now
+    with pytest.raises(ValueError, match="since"):
+        start_of("the beginning", now)

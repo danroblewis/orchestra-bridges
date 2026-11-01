@@ -27,7 +27,7 @@ every = "5m"
 per_minute = 20
 ttl = "4m"
 jql = "project = ABC"             # guess: ask the owner (the issues in scope; no ORDER BY, the poller adds its own)
-lookback = "1d"                   # how far back the first poll reads
+since = "now"                     # where the first run starts: "now", a duration back ("1d"; issues not yet done only), or an ISO time
 overlap = "10m"                   # each poll re-reads this much before the last one
 
 [[publishes]]

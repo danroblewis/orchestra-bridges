@@ -1,6 +1,7 @@
 """{{name}} against the kit's Jira fake, in the flavour machine.toml names (Data Center or Cloud):
 two polls (a restart between them) relay each creation, assignment and status change once, as who
-made it; ``measure`` prints the issues by status; the fake gets only the runner's placeholders,
+made it; the first run starts now (or at ``since``: then only the issues not yet done), never at the
+beginning of history; ``measure`` prints the issues by status; the fake gets only the runner's placeholders,
 never a real token; no text or token leaves.
 
 Run with Orchestra's own Python (the one ``orchestra`` runs in, which has the kits): ``python -m pytest {{dir}}/test_{{name}}.py``."""
@@ -27,7 +28,8 @@ TOKEN_ENV = token_env(HERE, "JIRA_API_TOKEN")        # machine.toml's, so the ow
 # run is given `project = <it>` (the rest of the owner's JQL is theirs; the fake knows only projects).
 _named = re.search(r'(?i)\bproject\s*(?:=|in\s*\()\s*"?([A-Z][A-Z0-9_]*)', settings(HERE).get("jql", ""))
 PROJECT = _named.group(1) if _named and _named.group(1) != "OPS" else "ABC"   # OPS: the fixture's out-of-scope one
-SCOPE = set_args(jql=f"project = {PROJECT}")
+SCOPE = set_args(jql=f"project = {PROJECT}", since="now")
+CATCH_UP = set_args(jql=f"project = {PROJECT}", since="1d")     # the first run reads the last day
 
 
 def program(here=HERE):
@@ -62,13 +64,14 @@ def fake(tmp_path, monkeypatch):
         yield f
 
 
-def args(fake, tmp, *extra):
-    return [*extra, "--base-url", fake.url, "--state-dir", str(tmp / "state"), "--ttl", "0", *SCOPE]
+def args(fake, tmp, *extra, scope=SCOPE):
+    return [*extra, "--base-url", fake.url, "--state-dir", str(tmp / "state"), "--ttl", "0", *scope]
 
 
-def poll_once(fake, tmp):
-    assert program().main(args(fake, tmp, "--once", "--events-file", str(tmp / "events.jsonl"))) == 0
-    return [json.loads(x) for x in (tmp / "events.jsonl").read_text().splitlines()]
+def poll_once(fake, tmp, scope=SCOPE):
+    assert program().main(args(fake, tmp, "--once", "--events-file", str(tmp / "events.jsonl"), scope=scope)) == 0
+    log = tmp / "events.jsonl"                      # none published: no file
+    return [json.loads(x) for x in log.read_text().splitlines()] if log.exists() else []
 
 
 def changes(events):
@@ -77,12 +80,12 @@ def changes(events):
 
 
 def test_two_polls_relay_each_change_once(fake, tmp_path):
-    assert changes(poll_once(fake, tmp_path)) == [("jira.issue.transitioned", f"{PROJECT}-2", "person.jira.bob",
+    assert changes(poll_once(fake, tmp_path, CATCH_UP)) == [("jira.issue.transitioned", f"{PROJECT}-2", "person.jira.bob",
                                                     {"from": "Open", "to": "In Progress"})]
     fake.move(f"{PROJECT}-1", "In Progress", by="alice")
     fake.assign(f"{PROJECT}-1", "bob", by="alice")
     fake.create(f"{PROJECT}-9", by="carol", assignee="alice")
-    events = poll_once(fake, tmp_path)                                  # a restart: the cursor is read back
+    events = poll_once(fake, tmp_path, CATCH_UP)                        # a restart: the cursor is read back
     assert changes(events)[1:] == [
         ("jira.issue.transitioned", f"{PROJECT}-1", "person.jira.alice", {"from": "Open", "to": "In Progress"}),
         ("jira.issue.assigned", f"{PROJECT}-1", "person.jira.alice", {"assignee": "bob"}),
@@ -95,6 +98,29 @@ def test_two_polls_relay_each_change_once(fake, tmp_path):
     assert fake.requests and all(r.authorized for r in fake.requests)  # the placeholder, never REAL
 
 
+def test_the_first_run_starts_now(fake, tmp_path):
+    """No cursor and ``since = "now"``: nothing done before the poller began is relayed (the
+    fixture's changes of the last hours), and what is done after it is."""
+    assert changes(poll_once(fake, tmp_path)) == []
+    fake.move(f"{PROJECT}-1", "In Progress", by="alice")
+    assert changes(poll_once(fake, tmp_path)) == [
+        ("jira.issue.transitioned", f"{PROJECT}-1", "person.jira.alice", {"from": "Open", "to": "In Progress"})]
+
+
+def test_a_catch_up_relays_only_the_issues_not_yet_done(fake, tmp_path):
+    """``since = "1d"``: an issue already done when the poller first runs is never relayed as
+    created or assigned; once the poller runs, its later changes are."""
+    hours_ago = datetime.now(UTC) - timedelta(hours=2)
+    fake.create(f"{PROJECT}-5", status="Done", by="carol", assignee="alice", at=hours_ago)
+    fake.assign(f"{PROJECT}-2", "carol", by="bob", at=hours_ago)
+    fake.move(f"{PROJECT}-2", "In Review", by="bob", at=hours_ago)
+    fake.move(f"{PROJECT}-2", "Done", by="carol", at=hours_ago)
+    assert changes(poll_once(fake, tmp_path, CATCH_UP)) == []
+    fake.move(f"{PROJECT}-5", "Open", by="alice")                  # reopened after the poller began
+    assert changes(poll_once(fake, tmp_path, CATCH_UP)) == [
+        ("jira.issue.transitioned", f"{PROJECT}-5", "person.jira.alice", {"from": "Done", "to": "Open"})]
+
+
 def test_measure_counts_by_status(fake, tmp_path, capsys):
     assert program().main(args(fake, tmp_path, "measure")) == 0
     out = capsys.readouterr().out
@@ -103,7 +129,7 @@ def test_measure_counts_by_status(fake, tmp_path, capsys):
 
 
 def test_no_text_or_token_leaves(fake, tmp_path, capsys):
-    poll_once(fake, tmp_path)
+    poll_once(fake, tmp_path, CATCH_UP)
     program().main(args(fake, tmp_path, "measure"))
     out = capsys.readouterr()
     assert CANARY not in out.out + out.err and REAL not in out.out + out.err
