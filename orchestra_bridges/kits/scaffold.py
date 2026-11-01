@@ -53,6 +53,10 @@ KINDS = {
                   "`slack.message.posted` (subject: `<channel>/<thread ts>`; source: `person.slack.<member id>` or "
                   "`bot.slack.<id>`; data: channel, reply or not, bot or not)",
                   "`slack_channel_messages_last_hour{channel}`"),
+    "http": Kind("a JSON API no kit knows", "API_TOKEN", "FakeAPI (a FakeServer written in the test)",
+                 "`<system>.<thing>.<state>` once per item change (subject: the item's id; source: "
+                 "`person.<system>.<account>`, or `bot.<system>` when no one; settings name the fields)",
+                 "`<system>_<thing>s{state}` (the items listed, by state)"),
     "promql": Kind("a Prometheus API (Prometheus, Chronosphere, Mimir)", "PROMETHEUS_TOKEN", "FakePrometheus",
                    "none: a metrics store has no item events, so it has no poller and no `[[machines]]` entry "
                    "(its `make_poll` does nothing)",

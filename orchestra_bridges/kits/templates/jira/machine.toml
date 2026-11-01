@@ -4,6 +4,8 @@
 # engagement, [[publishes]]); never by Orchestra, which knows the actors by their events.
 # Before writing one: the bridges' own Jira reader ([bridges.jira]) may already read what you need.
 name = "{{name}}"
+# kit: the template it came from, and the system's name in [bridges.kits] tokens: when token_env
+# below is not set, the token's variable is the project's tokens.<kit> (tokens = { jira = "JIRA_API_TOKEN" }).
 kit = "jira"
 description = "Polls Jira (Data Center) every 5 minutes and relays each issue's status change as jira.issue.transitioned, as who made it; measure prints the issues in scope by status."
 engagement = "scheduled"

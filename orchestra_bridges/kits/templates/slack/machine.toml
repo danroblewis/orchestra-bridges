@@ -4,6 +4,8 @@
 # engagement, [[publishes]]); never by Orchestra, which knows the actors by their events.
 # For mentions of you and whether you answered, the bridges' own Slack reader ([bridges.slack]) is the tool.
 name = "{{name}}"
+# kit: the template it came from, and the system's name in [bridges.kits] tokens: when token_env
+# below is not set, the token's variable is the project's tokens.<kit> (tokens = { jira = "JIRA_API_TOKEN" }).
 kit = "slack"
 description = "Polls a few Slack channels every 5 minutes and relays each message as slack.message.posted, as who posted it; measure prints the messages per channel in the last hour."
 engagement = "scheduled"

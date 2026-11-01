@@ -3,6 +3,8 @@
 # Read by its own program ({{name}}.py: [settings], clearance) and by the Supervisor; never by Orchestra.
 # First consider a [[sources]] entry: Orchestra reads such a store in place (INTEGRATING.md).
 name = "{{name}}"
+# kit: the template it came from, and the system's name in [bridges.kits] tokens: when token_env
+# below is not set, the token's variable is the project's tokens.<kit> (tokens = { jira = "JIRA_API_TOKEN" }).
 kit = "promql"
 description = "Runs a few PromQL queries against the company's Prometheus API each minute and prints their answers as gauges."
 engagement = "scheduled"

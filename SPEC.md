@@ -379,8 +379,11 @@ that writes one (Orchestra's `docs/INTEGRATING.md`, strategy (c); task I2 of M6)
   transitions), Slack (`conversations.history`, `users.info`), PagerDuty (incidents, an incident)
   and a Prometheus API (`query`, `query_range`, `series`), each on a random port, seeded from a JSON
   fixture, checking a token, recording requests and failing on request; a canary in every text.
+  Their base, `FakeServer` (exported), is for a fake of a new system: a subclass implements
+  `route(method, path, query, body)`; the `http` template's test shows one.
 - `scaffold.py`, `orchestra bridges scaffold <kind> <name> [--root state|overlay|repo]`: a poller
-  from a template (`jira`, `slack`, `pagerduty`; `promql`, a measurement only) as
+  from a template (`jira`, `slack`, `pagerduty`; `http`, any JSON API no kit knows: a list endpoint, items
+  mapped to events by a key and a change stamp, one gauge; `promql`, a measurement only) as
   `<root>/machines/<name>/{machine.toml, <name>.py, test_<name>.py, AGENTS.md}`: the state
   directory by default, beside the private overlay, or `.orchestra/` in the repository. It writes no
   configuration: it prints the `[[machines]]` and `[[collect]]` entries for `config_edit`.

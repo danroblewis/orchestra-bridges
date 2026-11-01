@@ -40,7 +40,7 @@ def test_writes_the_four_files_into_the_state_root(proj, capsys):
     assert "{{" not in agents and "$PAGERDUTY_TOKEN" in agents and "[[collect]]" in agents and "measure" in agents
     assert "never a machine" in agents
     out = capsys.readouterr().out
-    assert "[[machines]]" in out and "pd_alerts.py measure" in out
+    assert "[[machines]]" in out and "pd_alerts.py measure" in out and 'restart = "always"' in out
 
 
 def test_roots(proj):

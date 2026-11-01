@@ -3,6 +3,8 @@
 # Read by its own program ({{name}}.py: [settings], clearance) and by the Supervisor (description,
 # engagement, [[publishes]]); never by Orchestra, which knows the actors by their events.
 name = "{{name}}"
+# kit: the template it came from, and the system's name in [bridges.kits] tokens: when token_env
+# below is not set, the token's variable is the project's tokens.<kit> (tokens = { jira = "JIRA_API_TOKEN" }).
 kit = "pagerduty"
 description = "Polls PagerDuty's incidents every 5 minutes and relays pagerduty.incident.<status> once per change, as who changed it; measure prints the open incidents by service and urgency."
 engagement = "scheduled"
