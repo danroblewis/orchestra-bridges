@@ -89,5 +89,6 @@ every = "60s"
 timeout = "30s"
 ```
 
-Then `orchestra check` lists the instrument, the Machines page shows the people and bots it relays
-once they act, and the Instruments page shows `slack_watcher`'s rounds and points.
+Then the Instruments page lists `slack_watcher` (its rounds, points and last error), `orchestra events info`
+shows the events arriving on the bus, and the Machines page shows the people and bots it relays
+once they act (for a `[[sources]]` store, `orchestra sources check` probes it).

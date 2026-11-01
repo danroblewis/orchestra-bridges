@@ -13,9 +13,10 @@ sets it; else the working directory): events on the project's bus, the cursor un
 (``<state>/kits/cache``). A test gives both, and a fake's URL. Before anything is read, the
 compliance check (``machinefile.require_clearance``).
 
-A fake on this machine needs no credentials: against a loopback URL with ``token_env`` unset, no
-token is sent (anywhere else a missing token is an error, as ever). ``measure`` finds the poller's
-directory in ``MachineFile.poll_dir``, so it can print the counters the poller keeps
+The token comes from ``[settings] token_env`` (an environment variable's name) or ``token_file`` (a
+``chmod 600`` file outside any repository). A fake on this machine needs neither: against a
+loopback URL with the variable unset and no such file, no token is sent (anywhere else a missing
+token is an error, as ever). ``measure`` finds the poller's directory in ``MachineFile.poll_dir``, so it can print the counters the poller keeps
 (``pollstate.counters_at``) beside what it reads itself."""
 
 from __future__ import annotations
@@ -75,11 +76,12 @@ def main(here: str | Path, make_poll: Callable[[CachedClient, MachineFile], Poll
         require_clearance(m, base_url)
         if a.ttl is not None:
             m.ttl_s = a.ttl
-        token_env = m.token_env
-        if token_env and not os.environ.get(token_env) and is_local(base_url):
-            token_env = None                    # a fake on this machine: no credentials needed
+        token_env, token_file = m.token_env, m.token_file
+        if is_local(base_url) and not (token_env and os.environ.get(token_env)) and not (
+                token_file and Path(token_file).expanduser().is_file()):
+            token_env = token_file = None       # a fake on this machine: no credentials needed
         m.poll_dir = poll_dir(m.name, a.state_dir, project)
-        common = {"token_env": token_env, "auth_format": auth_format, "headers": headers, "dry_run": a.dry_run}
+        common = {"token_env": token_env, "token_file": token_file, "auth_format": auth_format, "headers": headers, "dry_run": a.dry_run}
         if a.state_dir:
             client = CachedClient(base_url, per_minute=m.per_minute, cache_dir=Path(a.state_dir) / "cache",
                                   ttl_s=m.ttl_s, **common)
