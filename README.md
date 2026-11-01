@@ -23,16 +23,16 @@ Drive come later (Orchestra's `docs/proposals/event-sources.md` §4).
 
 ## The GitHub issues bridge
 
-Every `every` seconds it reads a repository's issues, issue comments and issue events through the
+`every` seconds after its last round ends, it reads a repository's issues, issue comments and issue events through the
 REST API, and publishes:
 
 | Event | Source | Data (no text) |
 |---|---|---|
 | `github.issue.opened` | the author | repository, issue number, login, association |
 | `github.issue.commented` | the commenter | the same, and the comment's id |
-| `github.issue.labelled` | who added the label | the same, and the label's name |
-| `github.issue.closed` | who closed it | the same, and the close reason |
-| `github.issue.reopened` | who reopened it | the same |
+| `github.issue.labelled` | who added the label | repository, issue number, login, and the label's name |
+| `github.issue.closed` | who closed it | repository, issue number, login, and the close reason |
+| `github.issue.reopened` | who reopened it | repository, issue number, login |
 
 The subject is the issue (`microsoft/vscode#1234`). The time and the id come from GitHub, so a
 poll that overlaps the last one never publishes anything twice. Pull requests are left out. The
@@ -107,13 +107,13 @@ redirect or a pagination link to anywhere else is not followed.
 map gives a person a name and a team, and joins their accounts across systems:
 
 ```toml
-[people.daniel]
-name = "Daniel Lewis"
+[people.alice]
+name = "Alice Example"
 team = "sre"
-github = "danroblewis"
+github = "alice"
 ```
 
-That person is then `person.daniel`, announced with their name and team.
+That person is then `person.alice`, announced with their name and team.
 
 ### When the laptop sleeps
 
@@ -142,9 +142,8 @@ times too. A gap longer than `max_catchup` is read only back to that limit, and 
 
 ## The GitHub pull-request bridge
 
-It follows pull requests until they are merged or closed, and publishes what happens on them, so
-that whatever wrote a change (a worker, through the task system) can be told when a review, a
-review comment or a pipeline's label arrives. It only reads: it never pushes, labels, comments or
+It follows pull requests until they are merged or closed, and publishes what happens on them: the
+events carry the repository, the pull request and its branch, for any consumer. It only reads: it never pushes, labels, comments or
 merges. Submitting to a pipeline (adding `SAIL`, say) stays the owner's own act.
 
 Every `every` seconds (after the last round) it reads each configured repository's open pull
@@ -349,11 +348,11 @@ https, except a loopback address for a fake.
 bridges use, so one person is one machine on every system:
 
 ```toml
-[people.daniel]
-name = "Daniel Lewis"
+[people.alice]
+name = "Alice Example"
 team = "sre"
-github = "danroblewis"
-jira = "dlewis"                   # Data Center: the username, or the user key (JIRAUSER10100); Cloud: the account id
+github = "alice"
+jira = "alice"                    # Data Center: the username, or the user key (JIRAUSER10100); Cloud: the account id
 
 [people.automation]
 name = "Jira automation"
@@ -601,7 +600,7 @@ no gap.
 
 For a system none of the bridges reads (PagerDuty, a Slack channel's history, a Jira query, a
 Prometheus API such as Chronosphere), `orchestra_bridges.kits` has the parts and a scaffold
-(SPEC §8; Orchestra's `docs/INTEGRATING.md`):
+(SPEC §7; Orchestra's `docs/INTEGRATING.md`):
 
 ```bash
 orchestra bridges scaffold pagerduty pd_alerts            # into <state>/machines/pd_alerts/ (--root overlay|repo)
@@ -642,18 +641,19 @@ publishes events; Orchestra reads the counts from a Prometheus-compatible store.
   acknowledgements, backlog and consumers per queue. Exchanges are channels; a queue named
   `<consumer>.<anything>` is that consumer's. RabbitMQ never names publishers, so a project names
   them in `[sources.producers]`, or they are drawn unattributed. Name the preset from a project's
-  `[[sources]]` table (`preset = "..."`); `rig/orchestra.toml` is an example.
-- `orchestra_bridges/rabbitmq/fleet.py`: a simulated fleet for testing it. `orders-api`,
+  `[[sources]]` table (`preset = "..."`, the path `python -c "import importlib.resources as r; print(r.files('orchestra_bridges') / 'rabbitmq/preset.toml')"`
+  prints); `tests/rabbitmq_rig/orchestra.toml` is an example.
+- `tests/rabbitmq_rig/fleet.py` (a test system, not part of the package): a simulated fleet for testing it. `orders-api`,
   `payments-api` and `web` publish into three fanout exchanges; `billing` acknowledges in batches
   every 20 s, `shipping` and `notifier` keep up, and `analytics` is too slow at peak, so its
   backlog grows and drains with a 20-minute simulated day.
-- `orchestra_bridges/rabbitmq/rig/rig.sh up|down|status`: a RabbitMQ (`orchestra-test-rabbit`:
+- `tests/rabbitmq_rig/rig.sh up|down|status`: a RabbitMQ (`orchestra-test-rabbit`:
   AMQP on 127.0.0.1:5682, management on 15682, metrics on 15702), a VictoriaMetrics that scrapes it
   every 5 s (`orchestra-test-rabbit-vm`, 127.0.0.1:8441) and the fleet, whose pid and log are in
   `~/.local/state/orchestra-rabbit-rig/`. The fleet needs only `pika`
   (`uv run --no-project --with pika`).
 
-What the rig shows, in a project made from `rig/orchestra.toml`: the Machines page draws the seven
+What the rig shows, in a project made from `tests/rabbitmq_rig/orchestra.toml`: the Machines page draws the seven
 services as machines known by counts, the three exchanges as channels, double lines with each
 rate, and the two unnamed publishers as unattributed. Discovery finds each slow or batched
 consumer's backlog as a stock filled by its exchange's publishes and drained by its own acks, the

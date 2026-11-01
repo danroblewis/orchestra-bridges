@@ -14,7 +14,8 @@ This repository holds the bridges. Orchestra holds no bridge (its rule 1).
   and so on (the README's table), so a later bridge's types (`jira.issue.created`) never mix with
   these in Orchestra's counts by type. Events published before the prefix (`issue.opened`) are
   still read back on a restart (`translate.current`).
-- **Source**: who acted, as a machine (`identity.py`); never the bridge. Someone listed in the owner's identity map
+- **Source**: who acted, as a machine (`identity.py`); never the bridge. The identity map wins
+  for the kits' pollers too (`kits/poller.py`): an account it lists is published as `person.<key>`. Someone listed in the owner's identity map
   is `person.<key>`, or `bot.<key>` for a bot, whichever system they acted in: only the map joins
   accounts across systems. Anyone else is known by their account on that system: `person.<login>`
   or `bot.<login>` on GitHub (as first published, for issues and pull requests alike); a bridge
@@ -36,12 +37,11 @@ listen.
 
 ## 2. People as machines
 
-The bridge announces each actor once, just before their first event: an
+The bridge announces each actor once, and again when what is announced changes, just before their first event: an
 `orchestra.machine.started` whose source is the actor and whose time is that first event's time.
 It carries `kind` (`person`, or `program` for a bot), `mode` (`ad hoc`), `package` (`bridges`),
-`name` and `team`, which Orchestra reads (the team is the machine's group: a label that groups
-people on the Machines page, never separates them), plus the account and `bot`, which Orchestra
-passes to the package's card without reading. A person is announced again whenever what the
+`name` and `team`, all of which Orchestra reads (the team is the machine's group: a label that groups
+people on the Machines page, never separates them); nothing else. A person is announced again whenever what the
 bridge would announce differs from their last announcement on the bus: before their next event,
 and on start for everyone the map lists who was announced before, so a team changed in the map
 shows even if they do nothing. Someone the map lists but the bridge never saw is not announced.
@@ -127,10 +127,9 @@ as the Slack bridge does (§4d), so the upgrade loses no count.
 ## 4b. The GitHub pull-request bridge (`orchestra_bridges/github_prs/`)
 
 Goal G6 in Orchestra's `docs/roadmap/goals.md`: pull requests tracked to resolution. The owner's
-CI/CD is driven by labels (the owner adds `SAIL`; the pipeline reports with labels), and whatever
-wrote a change must be re-engaged when reviews, review comments, change requests or a failing label
-arrive. Re-engaging is the task system's job. This bridge only reads and publishes, with the actor
-as source and the pull request as subject, the events that wiring needs (README's table).
+CI/CD is driven by labels (the owner adds `SAIL`; the pipeline reports with labels). This bridge
+only reads and publishes, with the actor as source and the pull request as subject, events that
+carry the repository, the pull request and its branch for any consumer (README's table).
 
 It is its own bridge, not an extension of the issues bridge: it reads other endpoints (the pulls
 lists, per-pull-request timelines, checks), on another rhythm (every open followed pull request
@@ -341,14 +340,15 @@ Orchestra's own Machines and Instruments pages, map and series.
   `JIRA_URL` and `JIRA_API_TOKEN`): the fake's shapes against a real Jira. Not yet run: there is no
   account.
 
-## 8. Kits for pollers (`orchestra_bridges/kits/`)
+## 7. Kits for pollers (`orchestra_bridges/kits/`)
 
 The bridges above read what the owner configured. The kits are for what nobody built yet: small
 parts the Supervisor, or the owner's coding tool at work, builds a poller from, and a scaffold
-that writes one (Orchestra's `docs/INTEGRATING.md`, strategy (c); task I2 of M6). One module each:
+that writes one (Orchestra's `docs/INTEGRATING.md`, strategy (c)). One module each:
 
 - `client.py`, `CachedClient(base_url, token_env=None, token_file=None, per_minute=60,
-  cache_dir=<state>/kits/cache, ttl_s=300)`: GET and POST under one origin (any other is refused),
+  cache_dir=<state>/kits/cache, ttl_s=300)`: reads only, GET and a POST of a form, under one origin (any other
+  method, body or origin is refused: a write is the outbox's; no project, no cache: an error),
   a disk TTL cache keyed by method, URL and body holding **only what the caller's `keep` returns**
   (a request without `keep` is never cached), a per-host token bucket (Orchestra's
   `orchestra.sources.limits.RateLimit`, in a file every process on the machine shares,
@@ -362,25 +362,30 @@ that writes one (Orchestra's `docs/INTEGRATING.md`, strategy (c); task I2 of M6)
 - `poller.py`, `Poller(name, every_s=300, state_dir=...)`: the interval loop (`run(poll)`, a clean
   stop on SIGTERM or SIGINT), the cursor in `cursor.json`, idempotent emission (`emit(type, subject,
   data, source, stamp=...)`, the id `<name>:<type>:<key>@<stamp>`, skipped when emitted before,
-  across restarts: `emitted.log`), and `gauge`/`counter` written as Prometheus text after each good
-  poll. **A poller is a relay** (§2, Orchestra's rule 2, D19): `emit` refuses any source but
+  across restarts: `emitted.log`), and `counter` totals kept with the cursor after each good poll,
+  which the program's `measure` prints. **A poller is a relay** (§2, Orchestra's rule 2, D19): `emit` refuses any source but
   `person.…` and `bot.…` (`actor_source(system, account)`), and each actor is announced once
   (`orchestra.machine.started`, mode `ad hoc`, kind `person` or `program`, `listens_for`, `package`)
   before their first event. The poller never announces itself or publishes as itself.
-- `exposition.py`: the series' text, and `python -m orchestra_bridges.kits.exposition <file>
-  --max-age S` for a `[[collect]]` entry over a poller's file (nothing printed when it is stale).
+- `exposition.py`: the series' text (`Registry`), printed on standard output by `measure`.
 - `runner.py`: the command line each scaffolded poller shares: `python <name>.py` polls,
   `python <name>.py measure` prints one measurement for its `[[collect]]` entry (an instrument,
   which publishes nothing); both run the compliance check first. The poller run for good (no
   `--once`/`--rounds`) and not cleared waits instead of exiting: one `waiting for approval` line,
   nothing read, `machine.toml` re-read on its interval until approved (so an early `[[machines]]`
   entry does not crash-loop). `--set KEY=VALUE` gives one run the kit's own settings (a test's
-  scope); never the URL or the credentials.
+  scope); never the URL or the credentials. A measurement-only program (`promql`) passes no
+  `make_poll`, and refuses to poll. **Exit codes**, the one statement of them: 0 done (a poll run
+  that ended, a stop while waiting, a measurement printed); 1 a measurement whose read failed; 2
+  refused before any read (`machine.toml` unreadable, no project, not cleared for `--once`,
+  `--rounds` or `measure`, a missing token, a poll asked of a measurement-only program).
 - `testing.py`: what a scaffolded test reads from its `machine.toml` (the token's variable, the
   scope), so it passes after the owner's values are set.
 - `integrations.py`, `orchestra bridges integrations [--json]`: read-only, the kits and the machines
   scaffolded under the three roots, with kit, clearance, data class, the token's variable NAME,
-  whether the `[[machines]]`/`[[collect]]` entries are configured, and the `# guess` marks left.
+  what schedules the poller (`[[machines]]`, `every`: a Workflows `workflows.every.<item>` whose role is
+  its name with a `machine.json` beside it, or `no`), whether its `[[collect]]` entry is configured,
+  and the `# guess` marks left.
 - `machinefile.py`: a poller's `machine.toml` (`[settings]`: `base_url`, `token_env`, `every`,
   `per_minute`, `ttl` and the kit's own keys; never a token) and its **clearance**: until
   `clearance = "approved"` (the owner's say), it reads only a fake on a loopback host.
@@ -405,7 +410,7 @@ declared by the plugin (it is the Supervisor's, run by a `[[machines]]` entry it
 series are stored by the `[[collect]]` entry that runs its `measure`. Every other rule holds:
 never text (`keep`), read only, the token in memory, a relay.
 
-## 7. Not built yet
+## 8. Not built yet
 
 Confluence and Drive bridges; webhooks; a team-only mode; the
 Pub/Sub preset. Counted traffic is built in Orchestra (its SPEC §4.4); the RabbitMQ preset and its

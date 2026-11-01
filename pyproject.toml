@@ -12,7 +12,8 @@ requires-python = ">=3.12"
 dependencies = ["orchestra>=1.0.0a1,<1.0.0rc0", "pytest>=8.0"]
 
 [project.optional-dependencies]
-# orchestra[sd]: the RabbitMQ contract test aligns series with discovery's own reader (orchestra.sd.rediscover).
+# orchestra[sd]: the examples' model-acceptance test (test_integrations_model.py) and the RabbitMQ contract test
+# (discovery's own reader, orchestra.sd.rediscover). pytest is a dependency itself (a scaffolded test runs beside the kits).
 dev = ["ruff>=0.6", "orchestra[sd]"]
 
 [project.entry-points."orchestra.plugins"]

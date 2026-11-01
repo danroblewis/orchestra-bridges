@@ -1,4 +1,4 @@
-"""Kits for Programmatic Machines that bring an outside system in (Orchestra's docs/INTEGRATING.md):
+"""Kits for pollers (relays of what people and bots did) that bring an outside system in (Orchestra's docs/INTEGRATING.md):
 small parts a coding tool or the Supervisor builds a poller from, and a scaffold that writes one.
 
 - ``client.CachedClient``: HTTP with a disk TTL cache, a per-host rate limit, retries, the token

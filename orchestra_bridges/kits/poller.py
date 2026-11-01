@@ -13,13 +13,17 @@ the people and bots there did as events on the project's bus.
 
 - **A relay, never a machine** (Orchestra's rule 2, D19: the provider is never the machine; the
   bridges' SPEC §2). Every event's ``source`` is who acted, ``person.<system>.<account>`` or
-  ``bot.<system>`` (``actor_source``); any other source is refused (``RelayError``). The poller
-  never announces itself and never publishes under its own name. Each actor is **announced** once,
-  just before their first event: ``orchestra.machine.started`` from their source, with ``mode``
-  (``ad hoc``), ``kind`` (``person``, or ``program`` for a bot), ``listens_for`` (none) and
-  ``package`` (the poller's name), and the poller's notes (``notes.py``: ``fake``, ``stand_in``,
-  ``disabled``), so the actor's own card says it was relayed from a fake. An announcement is
-  emitted once, across restarts too; a changed note announces each actor again, at their next event.
+  ``bot.<system>`` (``actor_source``); any other source is refused (``RelayError``). **The
+  identity map wins**, as for the readers: an account the project's ``[bridges] people`` map lists
+  on that system is published as ``person.<key>`` (``bot.<key>``), so one person is one machine
+  whichever reader or poller saw them. The poller never announces itself and never publishes under
+  its own name. Each actor is **announced** once, just before their first event:
+  ``orchestra.machine.started`` from their source, with ``mode`` (``ad hoc``), ``kind``
+  (``person``, or ``program`` for a bot), ``listens_for`` (none), ``package`` (``bridges``) and, for
+  a mapped person, the map's ``name`` and ``team``, and the poller's notes (``notes.py``: ``fake``,
+  ``stand_in``, ``disabled``), so the actor's own announcement says it was relayed from a fake. An
+  announcement is emitted once, across restarts too; a changed note announces each actor again,
+  at their next event.
 - **The interval loop**: ``run(poll)`` calls ``poll(poller)`` now and every ``every_s`` until
   SIGTERM or SIGINT (or ``stop()``), which ends it between polls or in the wait. A poll that raises
   is logged by its exception's type and message and tried again next interval; its cursor and
@@ -29,10 +33,10 @@ the people and bots there did as events on the project's bus.
 - **Idempotent emission**: the id is ``<name>:<type>:<key>@<stamp>``, the key being the item's id
   in the other system (the subject, by default) and the stamp its change (an updated time, a
   version; by default a hash of the data). An id already emitted is skipped, across restarts too.
-- **Series**: ``gauge`` and ``counter`` are written after each good poll, as Prometheus text, to
-  ``metrics_path`` (``-``: standard output) for a ``[[collect]]`` entry (``exposition.py``). The
-  instrument stores them, never the poller. A measurement that one cheap read can make is better
-  as the scaffold's ``measure`` (the ``[[collect]]`` entry runs the program with ``measure``)."""
+- **Counters**: ``counter`` adds to a count kept with the cursor (``cursor.json``) after each
+  good poll; the scaffold's ``measure`` (the ``[[collect]]`` entry runs the program with
+  ``measure``) prints them beside what it reads itself. The instrument stores them, never the
+  poller."""
 
 from __future__ import annotations
 
@@ -49,6 +53,7 @@ from typing import Any
 
 from orchestra.events import Events
 
+from ..identity import People, people_file
 from . import notes as note
 from .exposition import Registry
 from .pollstate import PollState
@@ -89,22 +94,19 @@ def stamp_of(type: str, data: Any) -> str:
 
 class Poller:
     def __init__(self, name: str, every_s: float = 300.0, state_dir: str | Path | None = None, *,
-                 events: Events | None = None, metrics_path: str | Path | None = None, project=None,
-                 package: str | None = None, log=None, notes: dict[str, str] | None = None):
+                 events: Events | None = None, project=None,
+                 package: str | None = None, log=None, people: People | None = None,
+                 notes: dict[str, str] | None = None):
         if not NAME.match(name):
             raise ValueError(f"{name!r}: a poller's name is lower case letters, digits and _ (2 to 41)")
         if every_s <= 0:
             raise ValueError("every_s must be positive")
-        self.name, self.every_s, self.package = name, float(every_s), package or name
+        self.name, self.every_s, self.package = name, float(every_s), package or "bridges"
         self.notes = note.check(notes)
         self._project = project
-        if state_dir:
-            root, default_metrics = Path(state_dir), Path(state_dir) / "metrics.prom"
-        else:
-            project = self._load_project()
-            root, default_metrics = poll_dir(name, None, project), project.state_dir / "kits" / "metrics" / f"{name}.prom"
+        root = Path(state_dir) if state_dir else poll_dir(name, None, self._load_project())
         self.state = PollState(root)
-        self.metrics_path = metrics_path if metrics_path is not None else default_metrics
+        self.people = people if people is not None else self._people()
         self.events = events
         self.series = Registry()
         self.series.load_counters(self.state.counters)
@@ -119,6 +121,23 @@ class Poller:
             from orchestra.config import load_project
             self._project = load_project()
         return self._project
+
+    def _people(self) -> People:
+        """The project's identity map, when there is a project and it names one; else nobody."""
+        if self._project is None:
+            return People()
+        return People.load(people_file(self._project.config.raw, self._project.repo_root))
+
+    def resolve(self, source: str) -> tuple[str, dict]:
+        """The source an actor is published as, and what its announcement adds: the identity map's
+        ``person.<key>`` (with its name and team) for an account it lists on the system, else the
+        source as given."""
+        kind, _, rest = source.partition(".")
+        system, _, account = rest.partition(".")
+        if kind in ("person", "bot") and system and account and self.people.listed(system, account):
+            a = self.people.actor(system, account)
+            return a.source, {k: v for k, v in (("name", a.name), ("team", a.team)) if v}
+        return source, {}
 
     def _events(self) -> Events:
         if self.events is None:
@@ -145,6 +164,10 @@ class Poller:
     def announce(self, source: str, time: str | None = None, **about: Any) -> dict | None:
         """``orchestra.machine.started`` for an actor, once (once more after the notes change): None
         when it was announced before. ``about`` (a name, a team) and the notes go to its card unread."""
+        source, mapped = self.resolve(source)
+        return self._announce(source, time, {**mapped, **about})
+
+    def _announce(self, source: str, time: str | None, about: dict) -> dict | None:
         notes = note.check(self.notes)
         eid = f"{self.name}:announce:{source}" + (f"#{note.stamp(notes)}" if notes else "")
         if self.state.seen(eid):
@@ -162,28 +185,25 @@ class Poller:
                              f"(person.<system>.<account>, bot.<system>), never as {source!r}")
         if type == STARTED:
             raise RelayError("announcements are the poller's own (announce), made once per actor")
+        source, mapped = self.resolve(source)
         k = key if key is not None else subject
         if k is None:
             raise ValueError(f"{type}: an event needs the item's id (subject or key) to be emitted once")
         eid = self.event_id(type, str(k), str(stamp) if stamp is not None else stamp_of(type, data))
         if self.state.seen(eid):
             return None
-        self.announce(source, time)
+        self._announce(source, time, mapped)
         ext = {"subject": str(subject)} if subject is not None else {}
         if time is not None:
             ext["time"] = time
         return self._publish(eid, type, data, source, **ext)
 
-    def gauge(self, name: str, value: float, labels: dict[str, str] | None = None, help: str | None = None) -> None:
-        self.series.gauge(name, value, labels, help)
-
     def counter(self, name: str, by: float = 1.0, labels: dict[str, str] | None = None, help: str | None = None) -> None:
         self.series.counter(name, by, labels, help)
 
     def poll_once(self, poll: Callable[[Poller], Any]) -> bool:
-        """One poll: True when it succeeded (its cursor, counters and series saved)."""
+        """One poll: True when it succeeded (its cursor and counters saved)."""
         self.published = []
-        self.series.clear_gauges()
         before_cursor, before_counters = self.state.cursor, self.series.counters_state()
         try:
             poll(self)
@@ -197,8 +217,6 @@ class Poller:
         self.polls += 1
         self.state.counters = self.series.counters_state()
         self.state.save()
-        if self.series.gauges or self.series.counters:
-            self.series.write(self.metrics_path)
         self._log(f"poll {self.polls}: {len(self.published)} events")
         return True
 

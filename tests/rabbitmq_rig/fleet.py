@@ -4,7 +4,7 @@ four consume, and one consumer is too slow at peak.
     uv run --no-project --with pika python tests/rabbitmq_rig/fleet.py --port 5682
 
 It is a test system, not a bridge: it never touches Orchestra. Orchestra sees it only through
-RabbitMQ's own per-queue counts (``preset.toml``), never a message.
+RabbitMQ's own per-queue counts (``orchestra_bridges/rabbitmq/preset.toml``), never a message.
 
 | Service | Does | Exchange (fanout) → queues |
 |---|---|---|

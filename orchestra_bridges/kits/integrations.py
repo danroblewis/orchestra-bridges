@@ -1,9 +1,11 @@
 """``orchestra bridges integrations [--json]``: read-only, the kits there are and the machines
 scaffolded from them under the project's roots (``scaffold.ROOTS``: the state directory, beside the
 private overlay, the repository's ``.orchestra/``), each with its kit, clearance and data class, the
-NAME of its token's variable (never a value; ``token_file`` is shown as ``file``), whether the
-``[[machines]]`` and ``[[collect]]`` entries that schedule it are in the configuration, and how many
-values in its ``machine.toml`` are still marked ``# guess``. It changes nothing."""
+NAME of its token's variable (never a value; ``token_file`` is shown as ``file``), what schedules
+its poller (``[[machines]]``; ``every``: a Workflows ``workflows.every.<item>`` whose role is the
+poller's name, with the ``machine.json`` the floor runs it from beside its ``machine.toml``; or
+``no``), whether its ``[[collect]]`` entry is in the configuration, and how many values in its
+``machine.toml`` are still marked ``# guess``. It changes nothing."""
 
 from __future__ import annotations
 
@@ -28,7 +30,7 @@ class Integration:
     clearance: str
     data_class: str
     token: str                          # $NAME, "file", or "none"
-    machines_entry: bool | None         # None: the kit has no poller, so no [[machines]] entry is wanted
+    schedule: str | None                # "[[machines]]", "every" (Workflows) or "no"; None: the kit has no poller
     collect_entry: bool
     guesses: int
     error: str | None = None
@@ -36,6 +38,19 @@ class Integration:
 
 def _names(raw: dict, table: str) -> set[str]:
     return {str(e.get("name")) for e in raw.get(table) or [] if isinstance(e, dict)}
+
+
+def every_roles(raw: dict) -> set[str]:
+    """The roles of the Workflows plugin's clock items (``[workflows.every.<item>]``, ``role``)."""
+    every = (raw.get("workflows") or {}).get("every") if isinstance(raw.get("workflows"), dict) else None
+    return {str(v.get("role")) for v in (every or {}).values() if isinstance(v, dict) and v.get("role")} \
+        if isinstance(every, dict) else set()
+
+
+def schedule(name: str, folder: Path, machines: set[str], roles: set[str]) -> str:
+    if name in machines:
+        return "[[machines]]"
+    return "every" if name in roles and (folder / "machine.json").is_file() else "no"
 
 
 def scaffolded(machine_toml: Path) -> bool:
@@ -52,7 +67,7 @@ def listing(project) -> list[Integration]:
         tokens = read_settings(raw).tokens
     except ValueError:
         tokens = {}
-    machines, collect = _names(raw, "machines"), _names(raw, "collect")
+    machines, collect, roles = _names(raw, "machines"), _names(raw, "collect"), every_roles(raw)
     out, seen = [], set()
     for root in ROOTS:
         base = root_dir(project, root) / "machines"
@@ -74,7 +89,8 @@ def listing(project) -> list[Integration]:
             token = f"${env}" if env else "file" if m.token_file else "none"
             poller = KINDS[m.kit].poller if m.kit in KINDS else True
             out.append(Integration(m.name, m.kit or "?", root, str(f.parent), m.clearance, m.data_class, token,
-                                   (m.name in machines) if poller else None, m.name in collect, guesses))
+                                   schedule(m.name, f.parent, machines, roles) if poller else None, m.name in collect,
+                                   guesses))
     return out
 
 
@@ -87,8 +103,8 @@ def render(items: list[Integration]) -> str:
     if not items:
         lines.append("no machines scaffolded from a kit under the state directory, the overlay or .orchestra/")
         return "\n".join(lines)
-    head = ("name", "kit", "root", "clearance", "data_class", "token", "[[machines]]", "[[collect]]", "guesses")
-    rows = [head] + [(i.name, i.kit, i.root, i.clearance, i.data_class, i.token, _yes(i.machines_entry),
+    head = ("name", "kit", "root", "clearance", "data_class", "token", "scheduled", "[[collect]]", "guesses")
+    rows = [head] + [(i.name, i.kit, i.root, i.clearance, i.data_class, i.token, i.schedule or "-",
                       _yes(i.collect_entry), str(i.guesses)) for i in items]
     widths = [max(len(r[c]) for r in rows) for c in range(len(head))]
     lines += ["  ".join(v.ljust(w) for v, w in zip(r, widths, strict=True)).rstrip() for r in rows]

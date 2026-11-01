@@ -1,6 +1,6 @@
 # Integration examples
 
-Four machines built from the kits (`orchestra_bridges/kits/`, SPEC §8; Orchestra's
+Four pollers built from the kits (`orchestra_bridges/kits/`, SPEC §7; Orchestra's
 `docs/INTEGRATING.md`), each written by `orchestra bridges scaffold <kit> <name>` and then completed.
 They are examples to copy, not part of the plugin: nothing here is installed or declared by it.
 

@@ -1,11 +1,13 @@
 """The kits' CachedClient against a kit fake: the cache (hit, miss, expiry, keep, dry run), the
 per-host rate limit, retries with Retry-After, and the token kept out of logs, keys, files and errors."""
 
+import json
 import logging
 import shutil
 import ssl
 import subprocess
 import threading
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
@@ -201,10 +203,50 @@ def test_redact_and_retry_after():
     assert retry_after(None, 0) is None
 
 
+def test_a_kit_only_reads(make):
+    api = make()
+    for method, ctype in (("PUT", None), ("DELETE", None), ("POST", "application/json"), ("PATCH", "application/json")):
+        with pytest.raises(KitError, match="outbox"):
+            api.request(method, "/incidents", body=b"{}", content_type=ctype)
+    assert api.sent == 0
+    with pytest.raises(TypeError):
+        api.post("/incidents", {"title": "x"})              # no JSON body: a form only
+
+
+def test_a_token_file_inside_the_repository_is_refused(tmp_path, monkeypatch):
+    monkeypatch.delenv("PD_TOKEN", raising=False)
+    repo = tmp_path / "repo"
+    (repo / "secrets").mkdir(parents=True)
+    f = repo / "secrets" / "tok"
+    f.write_text(TOKEN)
+    f.chmod(0o600)
+    with pytest.raises(TokenMissing, match="inside the repository"):
+        CachedClient("https://api.example.com", token_file=f, cache_dir=tmp_path, rate_dir=tmp_path, repo_root=repo)
+    monkeypatch.setenv("PD_TOKEN_FILE", str(tmp_path / "missing"))         # the bridges' reader: $NAME_FILE too
+    with pytest.raises(TokenMissing, match="no PD_TOKEN and no token file"):
+        CachedClient("https://api.example.com", token_env="PD_TOKEN", cache_dir=tmp_path, rate_dir=tmp_path)
+
+
+def test_no_cache_outside_a_project(tmp_path, monkeypatch):
+    monkeypatch.setenv("ORCHESTRATOR_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("ORCHESTRA_REPO", str(tmp_path / "not-a-project"))
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(KitError, match="no project to keep the cache in"):
+        CachedClient("https://api.example.com", rate_dir=tmp_path)
+    assert not (tmp_path / "home" / "kits").exists()
+
+
+def test_one_is_local_and_one_env_name():
+    from orchestra_bridges.kits import client, machinefile, settings
+    from orchestra_bridges.local import ENV_NAME, is_local
+    assert settings.ENV_NAME is ENV_NAME and machinefile.is_local is is_local and client.is_local is is_local
+    assert is_local("http://127.0.0.1:9/x") and is_local("localhost") and is_local("http://[::1]:8/") and not is_local("https://example.com")
+
+
 def test_basic_auth_joins_the_account_and_the_token(tmp_path):
     """``Basic {basic}``: the token file holds the token as issued (Jira Cloud's API token) and the
-    account (its email) comes apart from it; the fake checks base64 of ``account:token``. PUT reaches
-    a fake too."""
+    account (its email) comes apart from it; the fake checks base64 of ``account:token``. The fake
+    accepts PUT too (a kit never sends one: the outbox's)."""
     from orchestra_bridges.kits.fakes import FakeServer
 
     class Fake(FakeServer):
@@ -220,7 +262,10 @@ def test_basic_auth_joins_the_account_and_the_token(tmp_path):
         api = CachedClient(f.url, token_file=tfile, auth_format="Basic {basic}", basic_user="me@example.invalid",
                            cache_dir=tmp_path / "c", rate_dir=tmp_path / "r", per_minute=6000)
         assert api.get("/x") == {"method": "GET"}
-        assert api.request("PUT", "/x", body=b"{}", content_type="application/json") == {"method": "PUT"}
+        req = urllib.request.Request(f.url + "/x", data=b"{}", method="PUT",
+                                     headers={"Authorization": "Basic " + api._basic, "Content-Type": "application/json"})
+        with urllib.request.urlopen(req) as r:
+            assert json.loads(r.read()) == {"method": "PUT"}
         assert all(r.authorized for r in f.requests) and len(f.requests) == 2
         wrong = CachedClient(f.url, token_file=tfile, auth_format="Basic {basic}", basic_user="other@example.invalid",
                              cache_dir=tmp_path / "c", rate_dir=tmp_path / "r", per_minute=6000, retries=0)

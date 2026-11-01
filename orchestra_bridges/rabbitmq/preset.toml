@@ -6,15 +6,15 @@
 #   [[sources]]
 #   name = "rabbit"
 #   url = "http://127.0.0.1:8441"          # the Prometheus-compatible store that scrapes RabbitMQ
-#   preset = "~/orchestra-bridges/tests/rabbitmq_rig/preset.toml"
+#   preset = "PRESET"     # where the package is installed: python -c "import importlib.resources as r; print(r.files('orchestra_bridges') / 'rabbitmq/preset.toml')"
 #   [sources.producers]                    # who publishes into which exchange: RabbitMQ cannot say
 #   orders = "orders-api"
 #
 # What RabbitMQ must expose: the rabbitmq_prometheus plugin's /metrics/detailed endpoint, scraped
-# with these families (scrape.yml beside it does it):
+# with these families (the test rig's tests/rabbitmq_rig/scrape.yml does it):
 #   queue_coarse_metrics, queue_consumer_count, queue_delivery_metrics, queue_exchange_metrics,
 #   channel_exchange_metrics
-# A lower collect_statistics_interval (rabbitmq.conf beside it: 1 s) makes the counts and the backlogs
+# A lower collect_statistics_interval (the test rig's rabbitmq.conf: 1 s) makes the counts and the backlogs
 # agree more closely from one scrape to the next.
 #
 # How it reads RabbitMQ:

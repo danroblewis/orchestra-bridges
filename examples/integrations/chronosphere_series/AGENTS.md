@@ -1,4 +1,4 @@
-# chronosphere_series: a poller for a Prometheus API (Prometheus, Chronosphere, Mimir) (kit `promql`)
+# chronosphere_series: a measurement of a Prometheus API (Prometheus, Chronosphere, Mimir) (kit `promql`)
 
 You are a coding tool working on this directory. Read this first; it is the whole contract.
 
@@ -19,15 +19,10 @@ Two ways to bring Chronosphere's series in, in order of preference:
 The fallback was built with `orchestra bridges scaffold promql chronosphere_series` from the orchestra-bridges kits, then completed
 (`orchestra_bridges.kits`: `CachedClient`, `Prometheus`, `Poller`, `runner`).
 
-**The poller is a relay, never a machine** (Orchestra's rule 2, decision D19: the provider is never
-the machine). Every event's `source` is who acted in a Prometheus API (Prometheus, Chronosphere, Mimir): `person.promql.<account>` for a
-person, `bot.promql` for the system's own act (`actor_source`). The kit announces each actor once
-(`orchestra.machine.started`, kind `person` or `program`) before their first event; the poller
-never announces itself, never publishes as `chronosphere_series`, and `Poller.emit` refuses any other source.
 The measurement is an instrument: it measures, never publishes.
 
 Files: `machine.toml` (its settings, clearance and the events it publishes), `chronosphere_series.py` (what it
-reads, keeps and publishes: `meta`/`keep_*`, `make_poll`, `measure`), `test_chronosphere_series.py` (its test
+reads and prints: `measure`), `test_chronosphere_series.py` (its test
 against the kit's fake), this file.
 
 ## What it may do
@@ -35,12 +30,9 @@ against the kit's fake), this file.
 - **Read** a Prometheus API (Prometheus, Chronosphere, Mimir) through `CachedClient` only (rate-limited per host, retried with backoff,
   `Retry-After` honoured, cached on disk: only what `keep` returns). Keep `per_minute` low and
   `ttl` a little under `every`; read changes fresh (`ttl_s=0`) when a stale answer would hide one.
-- **Publish** through `Poller.emit(type, subject, data, source=actor, stamp=...)` only: types
-  `promql.<thing>.<verb>`, the item's own id as the subject, the actor as the source, and a stamp
-  that changes when the item does (an updated time, a version), so a re-read never publishes twice.
 - **Print series** in `measure` through `series.gauge` and `series.counter`, named for what they
   measure (`pagerduty_incidents_open`, never `chronosphere_series_metric`), with few label values.
-- **Write** only under its state: the cursor in `<state>/kits/pollers/chronosphere_series/`, the cache in
+- **Write** only under its state: the cache in
   `<state>/kits/cache/` (the runner chooses these; don't hard-code others).
 
 ## What it must not do
@@ -68,17 +60,16 @@ against the kit's fake), this file.
 uv run python -m pytest examples/integrations/chronosphere_series/test_chronosphere_series.py -q
 ```
 
-The test starts `FakePrometheus` from `orchestra_bridges.kits.fakes` on a random port, runs the poller
-`--once` against it twice (a restart between), runs `measure`, and checks the events (types,
-subjects, sources), the series, that nothing was published twice, and that no text or token left.
+The test starts `FakePrometheus` from `orchestra_bridges.kits.fakes` on a random port, runs `measure`
+against it, and checks the series and that no text or token left.
 Add a case to the fake's fixture (or the test's own) for anything new you read. Try the real API
 only after the owner's approval, and first with `--dry-run` (answers only from the cache).
 
 ## How to run it
 
-By hand, once: `python examples/integrations/chronosphere_series/chronosphere_series.py --once` (in the project, `ORCHESTRA_REPO` set). For
-good, the Supervisor adds two entries (through `config_edit`, the overlay by default): the poller's
-process, and the instrument that stores its measurement:
+By hand, once: `python examples/integrations/chronosphere_series/chronosphere_series.py measure` (in the project, `ORCHESTRA_REPO` set). For
+good, the Supervisor adds one entry (through `config_edit`, the overlay by default): the
+instrument that stores its measurement:
 
 ```toml
 [[collect]]                       # the instrument that stores its measurement
@@ -88,6 +79,5 @@ every = "60s"
 timeout = "30s"
 ```
 
-Then the Instruments page lists `chronosphere_series` (its rounds, points and last error), `orchestra events info`
-shows the events arriving on the bus, and the Machines page shows the people and bots it relays
-once they act (for a `[[sources]]` store, `orchestra sources check` probes it).
+Then the Instruments page lists `chronosphere_series` (its rounds, points and last error) (for a
+`[[sources]]` store, `orchestra sources check` probes it).

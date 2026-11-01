@@ -40,7 +40,8 @@ def test_a_retired_readers_section_is_refused_with_its_kit(section, kit):
 
 def test_the_check():
     assert check({}) == [] and check({"bridges": {"kits": {"ttl": "2m"}}}) == []
-    assert "retired" in check({"bridges": {"people": "people.toml"}})[0]
+    assert check({"bridges": {"people": "people.toml"}}) == []                # the identity map stays
+    assert check({"bridges": {"people": 3}}) == ["[bridges] people must be the path of the identity map (a string)"]
     assert "no setting" in check({"bridges": {"other": {}}})[0]
     assert check({"bridges": {"kits": {"token": "x"}}})
     assert check({"bridges": 3}) == ["[bridges] must be a table"]

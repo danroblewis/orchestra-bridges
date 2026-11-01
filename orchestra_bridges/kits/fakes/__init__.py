@@ -31,6 +31,4 @@ from .pagerduty import FakePagerDuty
 from .prometheus import FakePrometheus
 from .slack import FakeSlack
 
-FAKES = {"github": FakeGitHub, "jira": FakeJira, "slack": FakeSlack, "pagerduty": FakePagerDuty, "promql": FakePrometheus}
-
-__all__ = ["CANARY", "FAKES", "FakeGitHub", "FakeJira", "FakePagerDuty", "FakePrometheus", "FakeServer", "FakeSlack", "Request"]
+__all__ = ["CANARY", "FakeGitHub", "FakeJira", "FakePagerDuty", "FakePrometheus", "FakeServer", "FakeSlack", "Request"]

@@ -14,7 +14,7 @@ from orchestra.metrics import for_project
 from orchestra.sources.catalogue import Catalogue
 from orchestra.sources.spec import for_project as specs_for
 
-PRESET = Path(__file__).resolve().parents[1] / "rabbitmq_rig" / "preset.toml"
+PRESET = Path(__file__).resolve().parents[2] / "orchestra_bridges" / "rabbitmq" / "preset.toml"
 T0 = 1_800_000_000.0
 SCRAPE = 15.0
 STEPS = 320                               # 80 minutes of scrapes; the test reads the last hour

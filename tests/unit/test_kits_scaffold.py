@@ -185,7 +185,8 @@ def test_the_runner_reads_credentials_only_for_the_real_host(tmp_path, monkeypat
     m = read(d / "machine.toml")
     assert credentials(m, "http://127.0.0.1:9999") == {"token": FAKE_TOKEN, "basic_user": FAKE_USER}
     real = credentials(m, "https://jira.example.com")
-    assert real == {"token_env": "JIRA_API_TOKEN", "token_file": str(secret), "basic_user": "owner@example.com"}
+    assert real == {"token_env": "JIRA_API_TOKEN", "token_file": str(secret), "basic_user": "owner@example.com",
+                    "repo_root": None}
     (d / "machine.toml").write_text((d / "machine.toml").read_text().replace(
         "\n[settings]\n", '\n[settings]\nfake_token = "the-fakes-own"\n'))
     assert credentials(read(d / "machine.toml"), "http://localhost:1")["token"] == "the-fakes-own"
@@ -327,3 +328,17 @@ def test_an_uncleared_poller_stops_cleanly_while_waiting(tmp_path):
                 proc.kill()
                 proc.wait()
     assert log.read_text().count("waiting for approval") == 1 and not (tmp_path / "e.jsonl").exists()
+
+
+def test_a_measurement_only_kit_says_nothing_of_a_poller_and_refuses_to_poll(tmp_path):
+    d = scaffold("promql", "prom_series", tmp_path / "root")
+    doc = (d / "AGENTS.md").read_text()
+    assert "a measurement of" in doc and "Poller.emit" not in doc and "--once" not in doc and "{{" not in doc
+    assert "[[machines]]" not in doc and "make_poll" not in (d / "prom_series.py").read_text()
+    r = subprocess.run([sys.executable, str(d / "prom_series.py"), "--state-dir", str(tmp_path / "st")],
+                       capture_output=True, text=True, timeout=60, check=False)
+    assert r.returncode == 2 and "polls nothing" in r.stderr, r.stderr
+    poller = (scaffold("pagerduty", "pd_doc", tmp_path / "root") / "AGENTS.md").read_text()
+    assert "Poller.emit" in poller and "person.pagerduty.<account>" in poller and "{{" not in poller
+    http = (scaffold("http", "api_doc", tmp_path / "root") / "AGENTS.md").read_text()
+    assert "person.<system>.<account>" in http and "person.http." not in http

@@ -119,7 +119,7 @@ def test_orchestra_run_shows_the_actors_as_machines(tmp_path, monkeypatch):
         m = seen[a]
         assert not m.get("unseen") and m["kind"] == ("program" if a.startswith("bot.") else "person"), m
         assert m["publishes"] and m["mode"] == "ad hoc"
-    assert seen["person.jira.bob"]["package"] == "jira_poller"
+    assert seen["person.jira.bob"]["package"] == "bridges"            # the package, never the poller's name
     assert not set(POLLERS) & set(seen)                             # a relay is never a machine
     assert {"jira_issues", "jira_issue_age_seconds", "slack_mentions_open", "slack_messages_total",
             "pagerduty_incidents_open", "pagerduty_incidents_triggered_total"} <= stored, sorted(stored)

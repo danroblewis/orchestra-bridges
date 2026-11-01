@@ -19,7 +19,7 @@ from orchestra.sources.catalogue import Catalogue
 
 URL = os.environ.get("ORCHESTRA_RABBIT_RIG_URL")
 pytestmark = pytest.mark.skipif(not URL, reason="set ORCHESTRA_RABBIT_RIG_URL to the rig's VictoriaMetrics (tests/rabbitmq_rig/rig.sh up)")
-PRESET = Path(__file__).resolve().parents[1] / "rabbitmq_rig" / "preset.toml"
+PRESET = Path(__file__).resolve().parents[2] / "orchestra_bridges" / "rabbitmq" / "preset.toml"
 CONSUMED = {"billing.orders": ("orders", "billing"), "billing.payments": ("payments", "billing"), "shipping.orders": ("orders", "shipping"),
             "notifier.payments": ("payments", "notifier"), "analytics.orders": ("orders", "analytics"),
             "analytics.clicks": ("clicks", "analytics")}

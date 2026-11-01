@@ -28,8 +28,17 @@ URL the runner reads neither the token nor the account and sends placeholders in
 starts its fake with the same, ``testing.fake_token``), so a real token is sent only to the real
 host. Anywhere else a missing token is an error, as ever. Against a fake the poller's notes say so
 (``notes.FAKE``, on each actor's announcement), beside ``machine.toml``'s ``[notes]``. ``ca_file``
-is passed to the client (a corporate CA); ``HTTPS_PROXY``/``NO_PROXY`` are the client's. ``measure`` finds the poller's directory in ``MachineFile.poll_dir``, so it can print the counters the poller keeps
-(``pollstate.counters_at``) beside what it reads itself."""
+is passed to the client (a corporate CA); ``HTTPS_PROXY``/``NO_PROXY`` are the client's. ``measure``
+finds the poller's directory in ``MachineFile.poll_dir``, so it can print the counters the poller
+keeps (``pollstate.counters_at``) beside what it reads itself.
+
+A measurement-only program (a metrics store has no item events to relay) passes no ``make_poll``;
+running it without ``measure`` refuses, exit 2.
+
+**Exit codes**, the same for every scaffolded program: 0 done (a poll run that ended, a stop while
+waiting, a measurement printed); 1 a measurement that failed (its read raised); 2 refused before any
+read (a ``machine.toml`` that cannot be read, no project, not cleared for ``--once``/``--rounds``/
+``measure``, a missing token, a poll asked of a measurement-only program)."""
 
 from __future__ import annotations
 
@@ -101,13 +110,14 @@ def cleared(m: MachineFile, base_url: str) -> bool:
     return is_local(base_url) or m.clearance == "approved"
 
 
-def credentials(m: MachineFile, base_url: str) -> dict:
+def credentials(m: MachineFile, base_url: str, repo_root: Path | None = None) -> dict:
     """What the client is given to authenticate: against a fake on this machine the placeholders
-    (never a credential read from anywhere), else the token's and the account's references."""
+    (never a credential read from anywhere), else the token's and the account's references (a file
+    inside ``repo_root`` is refused)."""
     if is_local(base_url):
         return {"token": m.fake_token or FAKE_TOKEN, "basic_user": m.fake_user or FAKE_USER}
-    user = read_token(m.user_env, m.user_file) if m.user_env or m.user_file else None
-    return {"token_env": m.token_env, "token_file": m.token_file, "basic_user": user}
+    user = read_token(m.user_env, m.user_file, repo_root) if m.user_env or m.user_file else None
+    return {"token_env": m.token_env, "token_file": m.token_file, "basic_user": user, "repo_root": repo_root}
 
 
 def _log(name: str, msg: str) -> None:
@@ -140,7 +150,8 @@ def _until_stopped() -> threading.Event:
     return stop
 
 
-def main(here: str | Path, make_poll: Callable[[CachedClient, MachineFile], Poll], argv: list[str] | None = None, *,
+def main(here: str | Path, make_poll: Callable[[CachedClient, MachineFile], Poll] | None = None,
+         argv: list[str] | None = None, *,
          measure: Measure | None = None, auth_format: str | Callable[[MachineFile], str] = "Bearer {token}",
          headers: dict[str, str] | None = None) -> int:
     here = Path(here)
@@ -150,6 +161,9 @@ def main(here: str | Path, make_poll: Callable[[CachedClient, MachineFile], Poll
         print(e, file=sys.stderr)
         return 2
     a = parser(m.name).parse_args(argv)
+    if a.what == "poll" and make_poll is None:
+        print(f"{m.name}: polls nothing (a measurement only): run it with measure", file=sys.stderr)
+        return 2
     if a.what == "poll" and not a.once and a.rounds is None and not cleared(m, a.base_url or m.base_url):
         m = wait_for_clearance(here / "machine.toml", m, a.base_url, a.every or m.every_s, _until_stopped())
         if m is None:
@@ -169,7 +183,7 @@ def main(here: str | Path, make_poll: Callable[[CachedClient, MachineFile], Poll
             m.ttl_s = a.ttl
         m.extra.update(overrides(a.set))
         m.poll_dir = poll_dir(m.name, a.state_dir, project)
-        common = {**credentials(m, base_url), "auth_format": auth_format(m) if callable(auth_format) else auth_format,
+        common = {**credentials(m, base_url, project.repo_root if project is not None else None), "auth_format": auth_format(m) if callable(auth_format) else auth_format,
                   "headers": headers, "dry_run": a.dry_run, "ca_file": m.ca_file}
         rate = FAKE_RATE if is_local(base_url) else m.per_minute     # a fake on this machine has no rate to keep
         if a.state_dir:
