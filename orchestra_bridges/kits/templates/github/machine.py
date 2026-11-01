@@ -14,7 +14,8 @@ subject (``<owner>/<name>#<number>``) and who acted as the source (``person.gith
 | ``github.pr.opened`` | opened since the poller began | the author | ``opened`` |
 | ``github.pr.synchronize`` | its head moved since the last poll | the author (GitHub does not say who pushed) | the new head |
 | ``github.pr.labeled``, ``.unlabeled`` | a label added or taken off | who did it | the event's id |
-| ``github.pr.reviewed`` | a review submitted (``state``: approved, changes_requested, commented) | the reviewer | the review's id |
+| ``github.pr.review_requested`` | a review asked of someone (``reviewer``) | who asked | the event's id |
+| ``github.pr.approved``, ``.changes_requested``, ``.commented`` | a review submitted, by its verdict | the reviewer | the review's id |
 | ``github.checks.completed`` | every check run on the head completed (``outcome`` success unless one failed); with none, a final commit status (``via: status``) | the app, or who set the status | the head |
 | ``github.pr.merged``, ``.closed``, ``.reopened`` | merged; closed unmerged; reopened | who did it | the event's id |
 | ``github.issue.opened`` | an issue opened since the poller began (``[settings] issues``) | the author | ``opened`` |
@@ -47,6 +48,9 @@ HEADERS = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "202
 PAGE = 50
 OK = {"success", "neutral", "skipped"}
 REVIEWS = ("awaiting_review", "approved", "changes_requested")
+EVENTS = ("labeled", "unlabeled", "closed", "reopened", "merged", "review_requested")
+VERDICTS = {"approved": "github.pr.approved", "changes_requested": "github.pr.changes_requested",
+            "commented": "github.pr.commented"}     # a review's state, as the event type (a dismissed one: none)
 
 
 def iso(t: float) -> str:
@@ -78,8 +82,9 @@ def keep_issues(body: list) -> list[dict]:
 
 def keep_events(body: list) -> list[dict]:
     return [{"id": e["id"], "event": e.get("event"), "label": (e.get("label") or {}).get("name"),
-             "actor": _who(e.get("actor")), "at": e.get("created_at")}
-            for e in body or [] if e.get("event") in ("labeled", "unlabeled", "closed", "reopened", "merged")]
+             "actor": _who(e.get("actor")), "at": e.get("created_at"),
+             "reviewer": (e.get("requested_reviewer") or {}).get("login")}
+            for e in body or [] if e.get("event") in EVENTS]
 
 
 def keep_reviews(body: list) -> list[dict]:
@@ -143,11 +148,12 @@ def checks(api, repo: str, sha: str) -> dict | None:
 def relay_events(p, api, repo: str, n: int, kind: str, began: str, merged: bool = False) -> None:
     base = {"repository": repo, "number": n}
     for e in api.get(f"/repos/{repo}/issues/{n}/events", {"per_page": 100}, keep=keep_events, ttl_s=0):
-        if (e["at"] or "") < began or (kind == "issue" and e["event"] == "merged"):
+        if (e["at"] or "") < began or (kind == "issue" and e["event"] in ("merged", "review_requested")):
             continue
         if e["event"] == "closed" and merged:
             continue                    # a merge closes too: github.pr.merged says it
-        data = {**base, "label": e["label"]} if e["event"] in ("labeled", "unlabeled") else base
+        data = ({**base, "label": e["label"]} if e["event"] in ("labeled", "unlabeled") else
+                {**base, "reviewer": e["reviewer"]} if e["event"] == "review_requested" else base)
         p.emit(f"github.{kind}.{e['event']}", f"{repo}#{n}", data, source=actor(e["actor"]), stamp=str(e["id"]),
                time=e["at"])
 
@@ -165,8 +171,8 @@ def relay_pr(p, api, repo: str, pr: dict, began: str, heads: dict) -> None:
     heads[str(n)] = pr["head"]
     relay_events(p, api, repo, n, "pr", began, merged=bool(pr["merged"]))
     for r in api.get(f"/repos/{repo}/pulls/{n}/reviews", {"per_page": 100}, keep=keep_reviews, ttl_s=0):
-        if (r["at"] or "") >= began:
-            p.emit("github.pr.reviewed", subject, {**base, "state": r["state"], "commit_id": r["commit"]},
+        if (r["at"] or "") >= began and r["state"] in VERDICTS:
+            p.emit(VERDICTS[r["state"]], subject, {**base, "state": r["state"], "commit_id": r["commit"]},
                    source=actor(r["user"]), stamp=str(r["id"]), time=r["at"])
 
 

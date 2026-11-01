@@ -49,9 +49,12 @@ class Kind:
 
 KINDS = {
     "github": Kind("GitHub", "GITHUB_TOKEN", "FakeGitHub",
-                   "`github.pr.opened`, `.synchronize`, `.labeled`, `.reviewed`, `.merged`, `.closed`, "
-                   "`github.checks.completed` and `github.issue.opened`, `.labeled`, `.closed`, `.reopened` (subject: "
-                   "`<owner>/<name>#<number>`; source: `person.github.<login>`, or `bot.github.<app>` for a bot or app)",
+                   "one vocabulary, the one the Workflows plugin's examples wait on: `github.pr.opened`, "
+                   "`.synchronize`, `.labeled`, `.unlabeled`, `.review_requested`, `.approved`, `.changes_requested`, "
+                   "`.commented`, `.merged` (and `.closed`, `.reopened`), `github.checks.completed` (data: outcome), "
+                   "and `github.issue.opened`, `.labeled`, `.unlabeled`, `.closed`, `.reopened` (subject: "
+                   "`<owner>/<name>#<number>`; data: repository, number; source: `person.github.<login>`, or "
+                   "`bot.github.<app>` for a bot or app). Keep these names: workflows wait on them",
                    "`github_issues_open` and `github_prs_open{review}` (the open pull requests followed, by review state)"),
     "pagerduty": Kind("PagerDuty", "PAGERDUTY_TOKEN", "FakePagerDuty",
                       "`pagerduty.incident.triggered`, `.acknowledged`, `.resolved` (subject: the incident's id; "

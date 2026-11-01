@@ -52,10 +52,14 @@ still passes once the owner's values are in), this file.
   name. `keep`/`meta` in `{{name}}.py` decides what is cached and returned: keep it that strict.
   The test checks the fake's canary text appears in no output and no file.
 - **Never write to {{system}}.** Read-only: no comments, no transitions, no acknowledgements.
-- **Credentials by environment name only.** The token is read from `${{token_env}}` (the name is
-  `[settings] token_env`), kept in memory, sent only to `base_url`'s host. Never put a token in
-  `machine.toml`, `orchestra.toml`, a test, a log line or a commit; never print it or ask for it in
-  a chat. If it is missing, say which variable to set, and stop. How it is sent is `auth_format` in
+- **Credentials by reference only, a file first.** The first answer is a file: `[settings]
+  token_file` (and `user_file` for an account), a `chmod 600` file outside any repository, which
+  only this program reads. The second is an environment variable's NAME, `[settings] token_env`
+  (`${{token_env}}` here; `user_env`): every program `orchestra run` starts inherits its
+  environment, so a token there reaches them all. Either way the token is kept in memory and sent
+  only to `base_url`'s host. Never put a token in `machine.toml`, `orchestra.toml`, a test, a log
+  line or a commit; never print it or ask for it in a chat. If it is missing, say which file or
+  variable the owner should provide, and stop. How it is sent is `auth_format` in
   `{{name}}.py`'s `runner.main(...)`: `"Bearer {token}"` (the default: Jira Data Center, Slack,
   most APIs), `"Token token={token}"` (PagerDuty), `"Basic {token}"` (Basic auth: the variable
   holds base64 of `user:api_token`, as Jenkins wants), `"Basic {basic}"` (an account and a token

@@ -62,13 +62,16 @@ def test_polls_relay_each_change_once(fake, tmp_path):
     assert sorted(first) == sorted([
         ("github.pr.opened", pr1, "person.github.alice"), ("github.pr.labeled", pr1, "person.github.alice"),
         ("github.checks.completed", pr1, "bot.github.github-actions"),
-        ("github.pr.opened", pr2, "person.github.bob"), ("github.pr.reviewed", pr2, "person.github.carol"),
+        ("github.pr.opened", pr2, "person.github.bob"), ("github.pr.approved", pr2, "person.github.carol"),
         ("github.issue.opened", i3, "person.github.carol"), ("github.issue.labeled", i3, "person.github.carol"),
         ("github.issue.opened", i4, "bot.github.dependabot"), ("github.issue.closed", i4, "person.github.bob")])
     fake.push(1, "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3")
     fake.check("c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3", "failure")
     fake.check("b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2", "success")      # PR 2's checks finish
     fake.label(2, "SAIL", by="bob")
+    fake.request_review(1, "carol", by="alice")
+    fake.review(1, "CHANGES_REQUESTED", by="carol")
+    fake.review(1, "COMMENTED", by="bob")
     fake.close(3, by="alice")
     events = poll_once(fake, tmp_path)                                  # a restart: the cursor is read back
     second = changes(events)[len(first):]
@@ -76,7 +79,10 @@ def test_polls_relay_each_change_once(fake, tmp_path):
         ("github.pr.synchronize", pr1, "person.github.alice"),
         ("github.checks.completed", pr1, "bot.github.github-actions"),
         ("github.checks.completed", pr2, "bot.github.github-actions"),
-        ("github.pr.labeled", pr2, "person.github.bob"), ("github.issue.closed", i3, "person.github.alice")])
+        ("github.pr.labeled", pr2, "person.github.bob"), ("github.issue.closed", i3, "person.github.alice"),
+        ("github.pr.review_requested", pr1, "person.github.alice"),
+        ("github.pr.changes_requested", pr1, "person.github.carol"), ("github.pr.commented", pr1, "person.github.bob")])
+    assert next(e for e in events if e["type"] == "github.pr.review_requested")["data"]["reviewer"] == "carol"
     fake.merge(2, by="carol")
     events = poll_once(fake, tmp_path)
     assert changes(events)[len(first) + len(second):] == [("github.pr.merged", pr2, "person.github.carol")]

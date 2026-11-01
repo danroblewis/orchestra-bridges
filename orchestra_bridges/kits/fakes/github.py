@@ -7,7 +7,7 @@ what a poller reads and what a test changes:
   with 422, as GitHub does), ``PUT /pulls/<n>/merge``;
 - issues: ``GET /repos/<r>/issues`` (pull requests included, each with ``pull_request``, as GitHub
   lists them; ``state``, ``since`` on the update time, ``sort``, ``direction``, paging), ``GET
-  /issues/<n>``, ``GET /issues/<n>/events`` (labeled, unlabeled, closed, reopened, merged);
+  /issues/<n>``, ``GET /issues/<n>/events`` (labeled, unlabeled, closed, reopened, merged, review_requested);
 - labels: ``GET``/``POST``/``PUT /issues/<n>/labels`` (add; ``PUT`` replaces), ``DELETE
   /issues/<n>/labels/<name>``, ``POST /repos/<r>/labels`` (create one);
 - checks: ``GET /commits/<sha>/check-runs`` and ``GET /commits/<sha>/status`` (the combined
@@ -17,7 +17,7 @@ what a poller reads and what a test changes:
 The token goes as ``Bearer``. Every title, body, name and check output carries the canary.
 Pull requests and issues share one numbering, as on GitHub. A fixture's time may be relative
 (``"-3h"``: three hours before the fake started), so a test's world is always recent. The test's
-controls (``open_pr``, ``push``, ``label``, ``review``, ``check``, ``merge``, ``close``,
+controls (``open_pr``, ``push``, ``label``, ``request_review``, ``review``, ``check``, ``merge``, ``close``,
 ``open_issue``, ``reopen``) change the world between polls, each by someone (a login; a ``[bot]``
 suffix makes a bot). Paging is by ``page`` only: a page shorter than ``per_page`` is the last
 (GitHub's ``Link`` header is not served)."""
@@ -122,6 +122,8 @@ class FakeGitHub(FakeServer):
             g = {"id": e["id"], "event": e["event"], "actor": user(e["actor"]), "created_at": e["at"]}
             if e.get("label"):
                 g["label"] = {"name": e["label"], "color": "ededed"}
+            if e.get("reviewer"):
+                g["requested_reviewer"] = user(e["reviewer"])
             out.append(g)
         return out
 
@@ -169,6 +171,11 @@ class FakeGitHub(FakeServer):
             else:
                 return
             self._event(n, "labeled" if add else "unlabeled", by, name)
+
+    def request_review(self, n: int, reviewer: str, by: str = "alice") -> None:
+        with self._lock:
+            self._event(n, "review_requested", by)
+            self.data["events"][str(n)][-1]["reviewer"] = reviewer
 
     def review(self, n: int, state: str, by: str, commit: str | None = None) -> None:
         """``state``: APPROVED, CHANGES_REQUESTED or COMMENTED."""
