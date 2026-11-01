@@ -55,7 +55,7 @@ PAGE = 100
 
 def flavour(settings) -> str:
     """``cloud`` or ``datacenter``: ``[settings] flavour``, or for ``auto`` the configured site's host
-    (machine.toml's ``base_url``, never a test's fake)."""
+    (poller.toml's ``base_url``, never a test's fake)."""
     f = str(settings.extra.get("flavour") or "auto")
     if f in ("cloud", "datacenter"):
         return f

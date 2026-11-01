@@ -20,7 +20,7 @@ def test_lists_scaffolded_machines_with_clearance_token_name_schedule_and_guesse
     other = proj.state_dir / "machines" / "pipeline_manager"            # an orchestra-agents spec: not ours
     other.mkdir(parents=True)
     (other / "machine.toml").write_text('name = "pipeline_manager"\nkind = "agent"\n')
-    toml = pd / "machine.toml"
+    toml = pd / "poller.toml"
     toml.write_text(toml.read_text().replace('clearance = "needs approval"', 'clearance = "approved"')
                     .replace('token_env = "PAGERDUTY_TOKEN"', 'token_env = "PD_READONLY"'))
     (proj.repo_root / "orchestra.toml").write_text(entries("pd_alerts", pd) + "\n")
@@ -55,7 +55,7 @@ def test_an_empty_project_says_how_to_start(tmp_path, monkeypatch, capsys):
 def test_a_broken_machine_file_is_listed_with_its_error(tmp_path, monkeypatch):
     proj = new_project(tmp_path, monkeypatch, "")
     d = scaffold("slack", "chat", proj.state_dir)
-    (d / "machine.toml").write_text((d / "machine.toml").read_text().replace("\n[settings]\n",
+    (d / "poller.toml").write_text((d / "poller.toml").read_text().replace("\n[settings]\n",
                                                                            '\n[settings]\ntoken = "x"\n'))
     [i] = listing(proj)
     assert i.name == "chat" and "token" in i.error and i.token == "?"
@@ -69,3 +69,17 @@ def test_a_poller_the_workflows_floor_runs_is_scheduled_by_every(tmp_path, monke
     assert listing(proj)[0].schedule == "no"                     # the clock item, but no machine.json the floor runs it from
     (d / "machine.json").write_text('{"id": "jira_poll"}\n')
     assert listing(proj)[0].schedule == "every"
+
+
+def test_a_poller_scaffolded_as_machine_toml_is_still_read(tmp_path, monkeypatch):
+    """Before 2026-11-01 the scaffold wrote ``machine.toml``: a folder holding one with a ``kit`` key
+    (and no ``poller.toml``) is still a poller's, listed and run; one without is an agent's spec."""
+    from orchestra_bridges.kits.machinefile import locate
+
+    proj = new_project(tmp_path, monkeypatch, "")
+    d = scaffold("jira", "old_jira", proj.state_dir)
+    (d / "poller.toml").rename(d / "machine.toml")
+    assert locate(d) == d / "machine.toml"
+    assert [i.name for i in listing(proj)] == ["old_jira"]
+    (d / "machine.toml").write_text('name = "old_jira"\nkind = "agent"\n')
+    assert locate(d) == d / "poller.toml" and listing(proj) == []

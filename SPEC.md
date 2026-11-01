@@ -34,7 +34,7 @@ Each actor is announced once, just before their first event (`orchestra.machine.
 `person` or `program`, `mode` `ad hoc`, `package` `bridges`, the map's `name` and `team`), and
 again when what is announced changes. The announcement also carries the poller's **notes**
 (`kits/notes.py`): `fake` (relayed from a fake on this machine, added by the runner), `stand_in`
-and `disabled` (`machine.toml`'s `[notes]`), one line each, so the actor's own card can say what
+and `disabled` (`poller.toml`'s `[notes]`), one line each, so the actor's own card can say what
 it is not. The poller never announces itself, never publishes as its own name, and is never
 declared as a machine. Its measurement is an instrument (`[[collect]]`), which publishes nothing.
 
@@ -80,16 +80,16 @@ that writes one (Orchestra's `docs/INTEGRATING.md`). One module each:
   `python <name>.py measure` prints one measurement for its `[[collect]]` entry (an instrument,
   which publishes nothing); both run the compliance check first. The poller run for good (no
   `--once`/`--rounds`) and not cleared waits instead of exiting: one `waiting for approval` line,
-  nothing read, `machine.toml` re-read on its interval until approved (so an early `[[machines]]`
+  nothing read, `poller.toml` re-read on its interval until approved (so an early `[[machines]]`
   entry does not crash-loop). `--set KEY=VALUE` gives one run the kit's own settings (a test's
   scope); never the URL or the credentials. A measurement-only program (`promql`) passes no
   `make_poll`, and refuses to poll. **Against a fake on this machine** (a loopback URL) it reads no
   credential: it sends `[settings] fake_token`/`fake_user` or `FAKE_TOKEN`/`FAKE_USER`, keeps no
   rate, and adds the note `fake`. **Exit codes**, the one statement of them: 0 done (a poll run
   that ended, a stop while waiting, a measurement printed); 1 a measurement whose read failed; 2
-  refused before any read (`machine.toml` unreadable, no project, not cleared for `--once`,
+  refused before any read (`poller.toml` unreadable, no project, not cleared for `--once`,
   `--rounds` or `measure`, a missing token, a poll asked of a measurement-only program).
-- `testing.py`: what a scaffolded test reads from its `machine.toml` (the token's variable, the
+- `testing.py`: what a scaffolded test reads from its `poller.toml` (the token's variable, the
   scope, the placeholders its fake checks), so it passes after the owner's values are set.
 - `notes.py`: `fake`, `stand_in`, `disabled`, one line each, on each actor's announcement (§2).
 - `integrations.py`, `orchestra bridges integrations [--json]`: read-only, the kits and the machines
@@ -97,7 +97,7 @@ that writes one (Orchestra's `docs/INTEGRATING.md`). One module each:
   what schedules the poller (`[[machines]]`, `every`: a Workflows `workflows.every.<item>` whose role is
   its name with a `machine.json` beside it, or `no`), whether its `[[collect]]` entry is configured,
   and the `# guess` marks left.
-- `machinefile.py`: a poller's `machine.toml` (`[settings]`: `base_url`, `token_env`, `every`,
+- `machinefile.py`: a poller's `poller.toml` (`[settings]`: `base_url`, `token_env`, `every`,
   `per_minute`, `ttl` and the kit's own keys; never a token) and its **clearance**: until
   `clearance = "approved"` (the owner's say), it reads only a fake on a loopback host.
 - `fakes/`: stdlib HTTP fakes of GitHub (pulls, issues, issue events, reviews, merge, check runs,
@@ -110,7 +110,7 @@ that writes one (Orchestra's `docs/INTEGRATING.md`). One module each:
 - `scaffold.py`, `orchestra bridges scaffold <kind> <name> [--root repo|state|overlay]`: a collector
   from a template (`github`, `jira`, `slack`, `pagerduty`; `http`, any JSON API no kit knows: a list endpoint, items
   mapped to events by a key and a change stamp, one gauge; `promql`, a measurement only) as
-  `<root>/machines/<name>/{machine.toml, <name>.py, test_<name>.py, AGENTS.md}`: `.orchestra/` in
+  `<root>/machines/<name>/{poller.toml, <name>.py, test_<name>.py, AGENTS.md}`: `.orchestra/` in
   the repository by default, the state directory, or beside the private overlay. It writes no
   configuration: it prints the test command (Orchestra's own Python) and the `[[machines]]` and
   `[[collect]]` entries for `config_edit` (`python <path from the repository's root>`, `every` the

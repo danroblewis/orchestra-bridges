@@ -14,7 +14,7 @@ from orchestra_bridges.kits.testing import fake_token, set_args, token_env
 HERE = Path(__file__).resolve().parent
 TOKEN = fake_token(HERE)        # the placeholder the runner sends a fake on this machine
 REAL = "real-token-never-sent-to-a-fake"   # in the environment, yet never read for a fake
-TOKEN_ENV = token_env(HERE, "PROMETHEUS_TOKEN")      # machine.toml's, so the owner's variable works too
+TOKEN_ENV = token_env(HERE, "PROMETHEUS_TOKEN")      # poller.toml's, so the owner's variable works too
 # The queries the fake's series answer (the owner's own queries are theirs to try against the store).
 SCOPE = set_args(aliases={"k8s_cluster": "cluster"}, max_series=200, queries=[
     {"name": "http_requests", "query": 'sum by (service) (http_requests_total{k8s_cluster="prod-1"})',

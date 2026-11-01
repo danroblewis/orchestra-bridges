@@ -19,10 +19,10 @@ no system itself, runs no process and declares no instrument or machine. It give
   `FakePagerDuty`, `FakePrometheus`, and `FakeServer` for a system no kit knows), in the systems'
   real shapes, with a canary in every text so a test shows none of it leaves;
 - **the templates and the scaffold**: `orchestra bridges scaffold <kit> <name>` writes a collector
-  (`machine.toml`, `<name>.py`, `test_<name>.py`, `AGENTS.md`) that a coding tool adapts.
+  (`poller.toml`, `<name>.py`, `test_<name>.py`, `AGENTS.md`) that a coding tool adapts.
   `examples/integrations/scaffolded/` in this repository is exactly what each kit writes;
 - **the clearance gate**: a scaffolded script reads only a fake on this machine until its
-  `machine.toml` says the owner approved;
+  `poller.toml` says the owner approved;
 - **`orchestra bridges integrations`**: every scaffolded collector, its clearance, where its token
   is (by name), whether its entries are written and the guesses left. Read-only.
 
@@ -87,7 +87,7 @@ owner's word.
   their DMs, their groups) need a user token (`search:read`), since a bot cannot search; posting is
   a bot token's (`chat:write`) and an Outbox draft, never the kit. An app-configuration token
   (`xoxe.`) reads nothing. `channels` are ids (`C0123`), not names.
-- **Values marked `# guess`** in `machine.toml` (the site, the repository, the scope) are the
+- **Values marked `# guess`** in `poller.toml` (the site, the repository, the scope) are the
   template's placeholders: each is the owner's to give, and `integrations` counts what is left.
 
 ## The fake first
@@ -115,7 +115,7 @@ twice and that no text or token left.
   variable second**: `token_env` names it (never holds it), and it must be in the environment
   `orchestra run` starts with; every program `orchestra run` starts inherits that environment, so a
   token there reaches them all.
-- `approve_integration` records the references the owner named in `machine.toml`; a path inside a
+- `approve_integration` records the references the owner named in `poller.toml`; a path inside a
   repository, or a value that looks like a token, is refused. It reports whether the file is there
   and `chmod 600`, never what is in it.
 - Never ask for a token, never accept one pasted into the chat, never write one anywhere. Tell the
@@ -129,7 +129,7 @@ twice and that no text or token left.
 machine and refuses the real system before any request. The owner's quoted yes, through
 `approve_integration`, writes `clearance = "approved"` and the `data_class` (metadata only, by the
 kits' rules). You never write the clearance yourself, and a poller started before it does no harm:
-it logs `waiting for approval` once, reads nothing, and starts the moment `machine.toml` says
+it logs `waiting for approval` once, reads nothing, and starts the moment `poller.toml` says
 approved.
 
 ## What runs it: the entries `approve_integration` writes

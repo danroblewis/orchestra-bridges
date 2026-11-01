@@ -1,4 +1,4 @@
-"""A scaffolded machine's ``machine.toml``: what its own program reads (``[settings]``) and the
+"""A scaffolded machine's ``poller.toml``: what its own program reads (``[settings]``) and the
 compliance check it runs before any read.
 
 ``[settings]`` holds the API's base URL, the NAME of the environment variable with its token (never
@@ -9,9 +9,14 @@ placeholders sent to a fake on this machine instead of any credential: ``runner.
 ``[notes]`` table holds what the machine says of itself on its card (``notes.py``: ``stand_in``,
 ``disabled``). The
 compliance check (``require_clearance``): reading another system's data is the owner's to approve.
-Until ``clearance = "approved"`` is in ``machine.toml`` (the Supervisor writes it on the owner's
+Until ``clearance = "approved"`` is in ``poller.toml`` (the Supervisor writes it on the owner's
 word, with ``data_class``), the machine reads only a fake on this machine (a loopback host) and
-refuses anything else before a request is made (machine-design.md §2.2, "Company systems")."""
+refuses anything else before a request is made (machine-design.md §2.2, "Company systems").
+
+The file is ``poller.toml`` (``FILE``), so that in ``machines/<name>/``, which the bridges share with
+the agents' specs (``machine.toml``) and the Workflows program host (``machine.json``), one filename
+means one thing. A poller scaffolded before the name changed (2026-11-01) still has a
+``machine.toml`` with a top-level ``kit`` key (``LEGACY``); ``locate`` reads it until it is renamed."""
 
 from __future__ import annotations
 
@@ -27,6 +32,31 @@ from ..local import ENV_NAME, is_local
 from . import notes as note
 
 CLEARANCES = ("needs approval", "approved")
+FILE = "poller.toml"
+LEGACY = "machine.toml"
+
+
+def is_poller_file(path: Path) -> bool:
+    """Whether ``path`` is a poller's settings: a ``poller.toml``, or a legacy ``machine.toml`` with a
+    top-level ``kit`` key (one without is an agent's spec, never ours)."""
+    if path.name == FILE:
+        return True
+    if path.name != LEGACY:
+        return False
+    try:
+        return "kit" in tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        return False
+
+
+def locate(here: str | Path) -> Path:
+    """The settings file of the poller in ``here``: its ``poller.toml``, else a legacy ``machine.toml``
+    that is a poller's; ``poller.toml`` when neither is (reading it then says it is missing)."""
+    here = Path(here)
+    legacy = here / LEGACY
+    if not (here / FILE).exists() and legacy.exists() and is_poller_file(legacy):
+        return legacy
+    return here / FILE
 
 
 class MachineFileError(ValueError):
@@ -102,6 +132,6 @@ def require_clearance(m: MachineFile, base_url: str) -> None:
     if is_local(base_url) or m.clearance == "approved":
         return
     raise MachineFileError(
-        f"{m.name}: reading {urllib.parse.urlsplit(base_url).hostname} is not cleared (machine.toml clearance = "
+        f"{m.name}: reading {urllib.parse.urlsplit(base_url).hostname} is not cleared (poller.toml clearance = "
         f"{m.clearance!r}, data_class = {m.data_class!r}). The owner approves reading a company system; then "
         "clearance = \"approved\". Until then it runs only against its fake.")

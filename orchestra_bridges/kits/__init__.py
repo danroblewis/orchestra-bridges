@@ -11,8 +11,8 @@ small parts a coding tool or the Supervisor builds a poller from, and a scaffold
 - ``scaffold``: ``orchestra bridges scaffold <kind> <name> [--root repo|state|overlay]``, the
   repository's ``.orchestra/machines/`` by default;
 - ``notes``: what a machine says of itself on its card (``fake``, ``stand_in``, ``disabled``);
-- ``settings``: ``[bridges.kits]``; ``machinefile``: a machine's ``machine.toml`` and its clearance;
-- ``testing``: what a scaffolded test reads from its ``machine.toml`` (the token's variable, the scope);
+- ``settings``: ``[bridges.kits]``; ``machinefile``: a machine's ``poller.toml`` and its clearance;
+- ``testing``: what a scaffolded test reads from its ``poller.toml`` (the token's variable, the scope);
 - ``integrations``: ``orchestra bridges integrations``, the scaffolded machines and their clearance.
 
 A poller built from a kit is a relay, never a machine (Orchestra's rule 2, D19; the bridges' SPEC §2):

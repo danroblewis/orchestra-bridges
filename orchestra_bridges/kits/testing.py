@@ -1,4 +1,4 @@
-"""What a scaffolded machine's own test reads from its ``machine.toml``, so the test still passes
+"""What a scaffolded machine's own test reads from its ``poller.toml``, so the test still passes
 after the owner's values are set (another token variable, their JQL, their channels): the token's
 variable is the one the program will read, and the scope the fake holds is given to the run with
 ``--set`` (``runner.overrides``) instead of being whatever the template guessed. A fake is started
@@ -13,13 +13,15 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
+from .machinefile import locate
 
-def machine_toml(here: str | Path) -> dict[str, Any]:
-    return tomllib.loads((Path(here) / "machine.toml").read_text(encoding="utf-8"))
+
+def poller_toml(here: str | Path) -> dict[str, Any]:
+    return tomllib.loads(locate(here).read_text(encoding="utf-8"))
 
 
 def settings(here: str | Path) -> dict[str, Any]:
-    return machine_toml(here).get("settings") or {}
+    return poller_toml(here).get("settings") or {}
 
 
 def token_env(here: str | Path, default: str) -> str:
@@ -59,12 +61,13 @@ def set_args(**values: Any) -> list[str]:
 
 
 def uncleared(here: str | Path, into: str | Path, program: str) -> Path:
-    """A copy of the program and its ``machine.toml`` with ``clearance = "needs approval"``, for the
+    """A copy of the program and its ``poller.toml`` with ``clearance = "needs approval"``, for the
     test that the compliance check refuses a company system: it holds after the owner's approval too."""
     here, into = Path(here), Path(into)
     into.mkdir(parents=True, exist_ok=True)
-    text = (here / "machine.toml").read_text(encoding="utf-8")
+    src = locate(here)
+    text = src.read_text(encoding="utf-8")
     text = re.sub(r'(?m)^clearance\s*=.*$', 'clearance = "needs approval"', text)
-    (into / "machine.toml").write_text(text, encoding="utf-8")
+    (into / src.name).write_text(text, encoding="utf-8")
     (into / program).write_text((here / program).read_text(encoding="utf-8"), encoding="utf-8")
     return into

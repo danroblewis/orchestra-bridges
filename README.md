@@ -36,12 +36,12 @@ orchestra bridges scaffold jira jira_poll        # into .orchestra/machines/jira
 orchestra bridges integrations                   # each one's clearance, token reference, entries, guesses left
 ```
 
-It writes `machine.toml` (the settings: the site, the scope, where the token is by reference,
+It writes `poller.toml` (the settings: the site, the scope, where the token is by reference,
 `every = "5m"`; the clearance; the events it publishes), `jira_poll.py` (what it reads, keeps and
 publishes), `test_jira_poll.py` (against the kit's fake) and an `AGENTS.md` with the rules for
 whoever edits it. Values the template guessed are marked `# guess`: they are the owner's to give.
 Once the owner approved, `approve_integration` writes the clearance and the credentials' references
-into `machine.toml` and two entries into the owner's overlay:
+into `poller.toml` and two entries into the owner's overlay:
 
 ```toml
 [[machines]]                      # the poller's process (a relay: its actors are the machines)

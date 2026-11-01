@@ -17,8 +17,8 @@ from orchestra_bridges.kits.testing import fake_token, set_args, settings, token
 HERE = Path(__file__).resolve().parent
 TOKEN = fake_token(HERE)        # the placeholder the runner sends a fake on this machine
 REAL = "real-token-never-sent-to-a-fake"   # in the environment, yet never read for a fake
-TOKEN_ENV = token_env(HERE, "SLACK_TOKEN")           # machine.toml's, so the owner's variable works too
-CHANNEL = (settings(HERE).get("channels") or ["C001"])[0]   # the fake holds machine.toml's first channel
+TOKEN_ENV = token_env(HERE, "SLACK_TOKEN")           # poller.toml's, so the owner's variable works too
+CHANNEL = (settings(HERE).get("channels") or ["C001"])[0]   # the fake holds poller.toml's first channel
 SCOPE = set_args(channels=[CHANNEL])
 
 

@@ -17,7 +17,7 @@ compliance check (``machinefile.require_clearance``).
 **Waiting for approval.** The poller that runs for good (no ``--once``, no ``--rounds``) and is not
 cleared to read its system does not exit, so a ``[[machines]]`` entry written before the owner's
 approval does not crash-loop under ``restart = "always"``: it logs once ``waiting for approval``,
-reads nothing, and re-reads ``machine.toml`` on its interval until ``clearance = "approved"`` (then
+reads nothing, and re-reads ``poller.toml`` on its interval until ``clearance = "approved"`` (then
 it polls) or it is stopped (SIGTERM, SIGINT: exit 0). Against a fake on this machine it is cleared
 and polls at once. ``--once``, ``--rounds`` and ``measure`` still refuse (exit 2) before any read.
 
@@ -27,7 +27,7 @@ URL the runner reads neither the token nor the account and sends placeholders in
 ``[settings] fake_token`` and ``fake_user`` when set, else ``FAKE_TOKEN`` and ``FAKE_USER`` (a test
 starts its fake with the same, ``testing.fake_token``), so a real token is sent only to the real
 host. Anywhere else a missing token is an error, as ever. Against a fake the poller's notes say so
-(``notes.FAKE``, on each actor's announcement), beside ``machine.toml``'s ``[notes]``. ``ca_file``
+(``notes.FAKE``, on each actor's announcement), beside ``poller.toml``'s ``[notes]``. ``ca_file``
 is passed to the client (a corporate CA); ``HTTPS_PROXY``/``NO_PROXY`` are the client's. ``measure``
 finds the poller's directory in ``MachineFile.poll_dir``, so it can print the counters the poller
 keeps (``pollstate.counters_at``) beside what it reads itself.
@@ -37,7 +37,7 @@ running it without ``measure`` refuses, exit 2.
 
 **Exit codes**, the same for every scaffolded program: 0 done (a poll run that ended, a stop while
 waiting, a measurement printed); 1 a measurement that failed (its read raised); 2 refused before any
-read (a ``machine.toml`` that cannot be read, no project, not cleared for ``--once``/``--rounds``/
+read (a ``poller.toml`` that cannot be read, no project, not cleared for ``--once``/``--rounds``/
 ``measure``, a missing token, a poll asked of a measurement-only program)."""
 
 from __future__ import annotations
@@ -57,7 +57,7 @@ from orchestra.events import Events
 from . import notes as note
 from .client import CachedClient, KitError, read_token
 from .exposition import Registry
-from .machinefile import MachineFile, MachineFileError, is_local, read, require_clearance
+from .machinefile import MachineFile, MachineFileError, is_local, locate, read, require_clearance
 from .poller import Poller, poll_dir
 
 FAKE_TOKEN = "fake-token-for-a-local-fake"     # what a run against a fake sends instead of a token
@@ -73,11 +73,11 @@ def parser(name: str) -> argparse.ArgumentParser:
                     help="poll (the default: relay events on an interval) or measure (print series once)")
     ap.add_argument("--once", action="store_true", help="poll once and exit")
     ap.add_argument("--rounds", type=int, help="poll this many times and exit")
-    ap.add_argument("--every", type=float, help="seconds between polls (machine.toml's every otherwise)")
+    ap.add_argument("--every", type=float, help="seconds between polls (poller.toml's every otherwise)")
     ap.add_argument("--base-url", help="the API to read (a fake's, in a test)")
     ap.add_argument("--state-dir", help="where the cursor and the cache go (the project's state directory otherwise)")
     ap.add_argument("--events-file", help="publish to this JSONL file instead of the project's bus")
-    ap.add_argument("--ttl", type=float, help="seconds a cached answer is served (machine.toml's ttl otherwise)")
+    ap.add_argument("--ttl", type=float, help="seconds a cached answer is served (poller.toml's ttl otherwise)")
     ap.add_argument("--dry-run", action="store_true", help="answer only from the cache; send nothing")
     ap.add_argument("--set", action="append", default=[], metavar="KEY=VALUE",
                     help="this run only: one of the kit's own [settings] (a TOML value, jql='\"project = ABC\"'), "
@@ -98,7 +98,7 @@ def overrides(pairs: list[str]) -> dict:
         if not eq or not key:
             raise ValueError(f"--set {key or pair!r}: KEY=VALUE, the value in TOML")
         if key in FIXED:
-            raise ValueError(f"--set {key}: not settable here (--base-url, --every, --ttl, or machine.toml)")
+            raise ValueError(f"--set {key}: not settable here (--base-url, --every, --ttl, or poller.toml)")
         try:
             out[key] = tomllib.loads(f"v = {value}")["v"]
         except tomllib.TOMLDecodeError:
@@ -129,8 +129,8 @@ def wait_for_clearance(path: Path, m: MachineFile, base_url: str | None, every_s
     """Sleep on ``every_s`` until ``path`` says ``clearance = "approved"`` (return it, read again) or
     ``stop`` is set (return None). Says so once; reads nothing but the file."""
     host = urllib.parse.urlsplit(base_url or m.base_url).hostname
-    _log(m.name, f"waiting for approval: reading {host} is not cleared (machine.toml clearance = {m.clearance!r}); "
-                 f"reading nothing, checking machine.toml every {every_s:g}s")
+    _log(m.name, f"waiting for approval: reading {host} is not cleared (poller.toml clearance = {m.clearance!r}); "
+                 f"reading nothing, checking poller.toml every {every_s:g}s")
     while not stop.wait(every_s):
         try:
             m = read(path)
@@ -156,7 +156,7 @@ def main(here: str | Path, make_poll: Callable[[CachedClient, MachineFile], Poll
          headers: dict[str, str] | None = None) -> int:
     here = Path(here)
     try:
-        m = read(here / "machine.toml")
+        m = read(locate(here))
     except MachineFileError as e:
         print(e, file=sys.stderr)
         return 2
@@ -165,7 +165,7 @@ def main(here: str | Path, make_poll: Callable[[CachedClient, MachineFile], Poll
         print(f"{m.name}: polls nothing (a measurement only): run it with measure", file=sys.stderr)
         return 2
     if a.what == "poll" and not a.once and a.rounds is None and not cleared(m, a.base_url or m.base_url):
-        m = wait_for_clearance(here / "machine.toml", m, a.base_url, a.every or m.every_s, _until_stopped())
+        m = wait_for_clearance(locate(here), m, a.base_url, a.every or m.every_s, _until_stopped())
         if m is None:
             return 0
     base_url = a.base_url or m.base_url

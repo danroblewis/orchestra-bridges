@@ -19,7 +19,7 @@ They are examples to copy, not part of the plugin: nothing here is installed or 
 | [`chronosphere_series`](chronosphere_series/README.md) | promql | nothing (a store has no item events) | a `[[sources]]` entry (preferred), or a few PromQL answers as gauges |
 
 Every one keeps the kits' rules: the token by environment name only (or a `chmod 600` file outside
-any repository), never logged; `clearance = "needs approval"` in `machine.toml` reads only a fake on
+any repository), never logged; `clearance = "needs approval"` in `poller.toml` reads only a fake on
 this machine until the owner approves; each event published once, across restarts too (its id is
 the item's id and its change's stamp; the poller's counters are kept with its cursor); metadata
 only, never text. The fakes need no credentials.

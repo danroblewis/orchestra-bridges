@@ -6,7 +6,7 @@ You are a coding tool working on this directory. Read this first; it is the whol
 
 `pagerduty_example.py` is a small program with two halves:
 
-- **the poller** (`python pagerduty_example.py`): every few minutes (`machine.toml`, `[settings] every`; 5
+- **the poller** (`python pagerduty_example.py`): every few minutes (`poller.toml`, `[settings] every`; 5
   minutes by default) it reads what changed in PagerDuty and relays it as events on the project's
   Orchestra bus: `pagerduty.incident.triggered`, `.acknowledged`, `.resolved` (subject: the incident's id; source: `person.pagerduty.<user id>`, or `bot.pagerduty` when the service changed it);
 - **the measurement** (`python pagerduty_example.py measure`): one read, printed as Prometheus text, which a
@@ -23,14 +23,14 @@ identity map names (`[bridges] people`). The kit announces each actor once
 never announces itself, never publishes as `pagerduty_example`, and `Poller.emit` refuses any other source.
 The measurement is an instrument: it measures, never publishes.
 
-**Values marked `# guess` in `machine.toml`** (the site, the scope: a JQL, channels, queries, an
+**Values marked `# guess` in `poller.toml`** (the site, the scope: a JQL, channels, queries, an
 API's shape) are the template's placeholders: ask the owner for each, or read it from the API's
 own docs, and remove the mark once it is theirs. `orchestra bridges integrations` counts the guesses
 left.
 
-Files: `machine.toml` (its settings, clearance and the events it publishes), `pagerduty_example.py` (what it
+Files: `poller.toml` (its settings, clearance and the events it publishes), `pagerduty_example.py` (what it
 reads, keeps and publishes: `meta`/`keep_*`, `make_poll`, `measure`), `test_pagerduty_example.py` (its test
-against the kit's fake: it reads the token's variable and the scope from `machine.toml`, so it
+against the kit's fake: it reads the token's variable and the scope from `poller.toml`, so it
 still passes once the owner's values are in), this file.
 
 ## What it may do
@@ -58,7 +58,7 @@ still passes once the owner's values are in), this file.
   only this program reads. The second is an environment variable's NAME, `[settings] token_env`
   (`$PAGERDUTY_TOKEN` here; `user_env`): every program `orchestra run` starts inherits its
   environment, so a token there reaches them all. Either way the token is kept in memory and sent
-  only to `base_url`'s host. Never put a token in `machine.toml`, `orchestra.toml`, a test, a log
+  only to `base_url`'s host. Never put a token in `poller.toml`, `orchestra.toml`, a test, a log
   line or a commit; never print it or ask for it in a chat. If it is missing, say which file or
   variable the owner should provide, and stop. How it is sent is `auth_format` in
   `pagerduty_example.py`'s `runner.main(...)`: `"Bearer {token}"` (the default: Jira Data Center, Slack,
@@ -73,12 +73,12 @@ still passes once the owner's values are in), this file.
   honoured (a fake on this machine never goes through a proxy); a proxy that re-signs TLS needs its
   CA: `[settings] ca_file` (a PEM bundle, trusted beside the system's), or `[bridges.kits] ca_file`
   for every collector.
-- **The compliance check.** `clearance = "needs approval"` in `machine.toml` means the program
+- **The compliance check.** `clearance = "needs approval"` in `poller.toml` means the program
   reads only a fake on this machine (a loopback URL); it refuses PagerDuty itself before any
   request. Only the owner approves reading a company system (then `clearance = "approved"` and
   `data_class`); you never change it on your own. Until then the poller that runs for good
   (no `--once`) does not exit: it logs `waiting for approval` once, reads nothing, and re-reads
-  `machine.toml` on its interval, polling as soon as it says `approved`.
+  `poller.toml` on its interval, polling as soon as it says `approved`.
 - **No other writes.** Not to the repository's base branch (a change to the repository goes
   through a pull request), not to `orchestra.toml` by hand (the Supervisor changes configuration
   through `config_edit`, the overlay by default).
@@ -96,7 +96,7 @@ which may have neither.
 The test starts `FakePagerDuty` from `orchestra_bridges.kits.fakes` on a random port, runs the poller
 `--once` against it twice (a restart between), runs `measure`, and checks the events (types,
 subjects, sources), the series, that nothing was published twice, and that no text or token left.
-The fake holds the scope the test gives the run (`--set`, from `machine.toml` where it can: the
+The fake holds the scope the test gives the run (`--set`, from `poller.toml` where it can: the
 JQL's first project, the first channel), so the owner's own scope needs no change to the test.
 Add a case to the fake's fixture (or the test's own) for anything new you read. Try the real API
 only after the owner's approval, and first with `--dry-run` (answers only from the cache).
@@ -122,7 +122,7 @@ timeout = "60s"
 ```
 
 Against a fake, each actor's announcement says so (`fake`, shown with the machine), and a
-`[notes]` table in `machine.toml` adds what else the owner should know on each card: `stand_in`
+`[notes]` table in `poller.toml` adds what else the owner should know on each card: `stand_in`
 (it acts for someone who cannot here), `disabled` (it runs and does nothing, and why). One line
 each, the program's own words, never text from PagerDuty.
 

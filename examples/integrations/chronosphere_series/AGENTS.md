@@ -12,7 +12,7 @@ Two ways to bring Chronosphere's series in, in order of preference:
   first (accepted, the store answers, the declared series come back, the aliases apply); the
   Supervisor then adds the two tables through `config_edit`, the overlay by default;
 - **the fallback** (`python chronosphere_series.py measure`), when a series must be computed or
-  stored here: each query in `machine.toml` once, printed as Prometheus text for a `[[collect]]`
+  stored here: each query in `poller.toml` once, printed as Prometheus text for a `[[collect]]`
   entry: one gauge per query, named by its `name`, with the answer's labels (aliases applied). A
   metrics store has no item events, so it has no poller and no `[[machines]]` entry.
 
@@ -21,7 +21,7 @@ The fallback was built with `orchestra bridges scaffold promql chronosphere_seri
 
 The measurement is an instrument: it measures, never publishes.
 
-Files: `machine.toml` (its settings, clearance and the events it publishes), `chronosphere_series.py` (what it
+Files: `poller.toml` (its settings, clearance and the events it publishes), `chronosphere_series.py` (what it
 reads and prints: `measure`), `test_chronosphere_series.py` (its test
 against the kit's fake), this file.
 
@@ -44,9 +44,9 @@ against the kit's fake), this file.
 - **Never write to a Prometheus API (Prometheus, Chronosphere, Mimir).** Read-only: no comments, no transitions, no acknowledgements.
 - **Credentials by environment name only.** The token is read from `$CHRONOSPHERE_TOKEN` (the name is
   `[settings] token_env`), kept in memory, sent only to `base_url`'s host. Never put a token in
-  `machine.toml`, `orchestra.toml`, a test, a log line or a commit; never print it or ask for it in
+  `poller.toml`, `orchestra.toml`, a test, a log line or a commit; never print it or ask for it in
   a chat. If it is missing, say which variable to set, and stop.
-- **The compliance check.** `clearance = "needs approval"` in `machine.toml` means the program
+- **The compliance check.** `clearance = "needs approval"` in `poller.toml` means the program
   reads only a fake on this machine (a loopback URL); it refuses a Prometheus API (Prometheus, Chronosphere, Mimir) itself before any
   request. Only the owner approves reading a company system (then `clearance = "approved"` and
   `data_class`); you never change it on your own.

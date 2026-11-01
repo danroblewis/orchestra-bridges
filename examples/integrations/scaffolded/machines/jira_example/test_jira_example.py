@@ -1,4 +1,4 @@
-"""jira_example against the kit's Jira fake, in the flavour machine.toml names (Data Center or Cloud):
+"""jira_example against the kit's Jira fake, in the flavour poller.toml names (Data Center or Cloud):
 two polls (a restart between them) relay each creation, assignment, status change and comment once, as who
 made it; the first run starts now (or at ``since``: then only the issues not yet done), never at the
 beginning of history; ``measure`` prints the issues by status; the fake gets only the runner's placeholders,
@@ -23,8 +23,8 @@ from orchestra_bridges.kits.testing import fake_token, fake_user, set_args, sett
 HERE = Path(__file__).resolve().parent
 TOKEN = fake_token(HERE)        # the placeholder the runner sends a fake on this machine
 REAL = "real-token-never-sent-to-a-fake"   # in the environment, yet never read for a fake
-TOKEN_ENV = token_env(HERE, "JIRA_API_TOKEN")        # machine.toml's, so the owner's variable works too
-# The fake holds one project: the first machine.toml's JQL names (ABC when it names none), and the
+TOKEN_ENV = token_env(HERE, "JIRA_API_TOKEN")        # poller.toml's, so the owner's variable works too
+# The fake holds one project: the first poller.toml's JQL names (ABC when it names none), and the
 # run is given `project = <it>` (the rest of the owner's JQL is theirs; the fake knows only projects).
 _named = re.search(r'(?i)\bproject\s*(?:=|in\s*\()\s*"?([A-Z][A-Z0-9_]*)', settings(HERE).get("jql", ""))
 PROJECT = _named.group(1) if _named and _named.group(1) != "OPS" else "ABC"   # OPS: the fixture's out-of-scope one
@@ -39,7 +39,7 @@ def program(here=HERE):
     return mod
 
 
-FLAVOUR = program().flavour(read(HERE / "machine.toml"))     # the owner's site decides: cloud or datacenter
+FLAVOUR = program().flavour(read(HERE / "poller.toml"))     # the owner's site decides: cloud or datacenter
 
 
 def recent_world() -> dict:

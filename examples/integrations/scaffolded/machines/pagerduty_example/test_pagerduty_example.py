@@ -16,7 +16,7 @@ from orchestra_bridges.kits.testing import fake_token, set_args, token_env, uncl
 HERE = Path(__file__).resolve().parent
 TOKEN = fake_token(HERE)        # the placeholder the runner sends a fake on this machine
 REAL = "real-token-never-sent-to-a-fake"   # in the environment, yet never read for a fake
-TOKEN_ENV = token_env(HERE, "PAGERDUTY_TOKEN")       # machine.toml's, so the owner's variable works too
+TOKEN_ENV = token_env(HERE, "PAGERDUTY_TOKEN")       # poller.toml's, so the owner's variable works too
 SCOPE = set_args(open_statuses=["triggered", "acknowledged"])   # what the fake's incidents are in
 
 
