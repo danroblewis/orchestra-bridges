@@ -23,9 +23,9 @@ POLLING = {"every", "lookback", "max_catchup", "overlap", "host", "port"}
 KEYS = {
     "github": POLLING | {"repos", "bots_answer", "api"},
     "github_prs": POLLING | {"repos", "branches", "labels", "label_results", "checks", "api"},
-    "jira": POLLING | {"api", "deployment", "projects", "jql", "email", "token_file", "sprint_field", "done_every",
+    "jira": POLLING | {"api", "deployment", "projects", "jql", "email", "token_env", "token_file", "sprint_field", "done_every",
                        "bots_ask"},
-    "slack": POLLING | {"answered", "reactions", "groups", "dms", "expire", "token_file", "queries", "api"},
+    "slack": POLLING | {"answered", "reactions", "groups", "dms", "expire", "token_env", "token_file", "queries", "api"},
 }
 
 

@@ -1,0 +1,56 @@
+"""What a scaffolded machine's own test reads from its ``machine.toml``, so the test still passes
+after the owner's values are set (another token variable, their JQL, their channels): the token's
+variable is the one the program will read, and the scope the fake holds is given to the run with
+``--set`` (``runner.overrides``) instead of being whatever the template guessed."""
+
+from __future__ import annotations
+
+import json
+import re
+import tomllib
+from pathlib import Path
+from typing import Any
+
+
+def machine_toml(here: str | Path) -> dict[str, Any]:
+    return tomllib.loads((Path(here) / "machine.toml").read_text(encoding="utf-8"))
+
+
+def settings(here: str | Path) -> dict[str, Any]:
+    return machine_toml(here).get("settings") or {}
+
+
+def token_env(here: str | Path, default: str) -> str:
+    """The NAME of the variable the program reads its token from (``[settings] token_env``)."""
+    return settings(here).get("token_env") or default
+
+
+def toml_value(v: Any) -> str:
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, int | float):
+        return repr(v)
+    if isinstance(v, str):
+        return json.dumps(v)            # a JSON string is a TOML basic string
+    if isinstance(v, list | tuple):
+        return "[" + ", ".join(toml_value(x) for x in v) + "]"
+    if isinstance(v, dict):
+        return "{" + ", ".join(f"{json.dumps(str(k))} = {toml_value(x)}" for k, x in v.items()) + "}"
+    raise TypeError(f"no TOML for {type(v).__name__}")
+
+
+def set_args(**values: Any) -> list[str]:
+    """``--set`` arguments that give the run these settings (the scope the fake holds)."""
+    return [x for k, v in values.items() for x in ("--set", f"{k}={toml_value(v)}")]
+
+
+def uncleared(here: str | Path, into: str | Path, program: str) -> Path:
+    """A copy of the program and its ``machine.toml`` with ``clearance = "needs approval"``, for the
+    test that the compliance check refuses a company system: it holds after the owner's approval too."""
+    here, into = Path(here), Path(into)
+    into.mkdir(parents=True, exist_ok=True)
+    text = (here / "machine.toml").read_text(encoding="utf-8")
+    text = re.sub(r'(?m)^clearance\s*=.*$', 'clearance = "needs approval"', text)
+    (into / "machine.toml").write_text(text, encoding="utf-8")
+    (into / program).write_text((here / program).read_text(encoding="utf-8"), encoding="utf-8")
+    return into

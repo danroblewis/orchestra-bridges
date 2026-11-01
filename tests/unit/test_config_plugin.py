@@ -88,7 +88,21 @@ def test_the_jira_bridge_settings():
     assert (cloud.deployment, cloud.scope()) == ("cloud", "project = ABC")
     fed = cfg.jira(proj('[bridges.jira_fedramp]\napi = "https://jira.fed.acme.com"\nprojects = ["CUST"]\nport = 9468\n'
                         ).config.raw, Path("/repo"), "jira_fedramp")
-    assert (fed.env, fed.port) == ("JIRA_FEDRAMP", 9468)
+    assert (fed.env, fed.port, fed.token_env, c.token_env) == ("JIRA_FEDRAMP", 9468, "JIRA_FEDRAMP_API_TOKEN",
+                                                              "JIRA_API_TOKEN")
+
+
+def test_the_readers_token_variable_is_configurable_and_never_a_token():
+    j = cfg.jira(proj('[bridges.jira]\napi = "https://j.acme.com"\nprojects = ["ABC"]\ntoken_env = "JIRA_PAT"\n'
+                      ).config.raw, Path("/repo"))
+    assert j.token_env == "JIRA_PAT" and j.token_file is None          # the file default stays (secret.py)
+    s = cfg.slack(proj('[bridges.slack]\ntoken_env = "SLACK_PAT"\n').config.raw, Path("/repo"))
+    assert (s.token_env, cfg.slack(proj("[bridges.slack]\n").config.raw, Path("/repo")).token_env) == (
+        "SLACK_PAT", "SLACK_USER_TOKEN")
+    for toml in ('[bridges.slack]\ntoken_env = "xoxp-1234-secret"\n', '[bridges.slack]\ntoken_env = 3\n'):
+        with pytest.raises(ConfigError, match="NAME of an environment variable") as e:
+            cfg.slack(proj(toml).config.raw, Path("/repo"))
+        assert "xoxp" not in str(e.value)
 
 
 @pytest.mark.parametrize("name,toml", [
@@ -146,3 +160,21 @@ def test_config_edit_runs_the_bridges_check(tmp_path, monkeypatch):
         project.config_edit.set("bridges.github.interval", "1m")
     project.config_edit.unset("bridges")                                   # removing the section: allowed
     assert "bridges" not in project.config.raw
+
+
+def test_the_readers_read_the_variable_token_env_names(monkeypatch):
+    from orchestra_bridges import __main__ as entry
+    from orchestra_bridges.secret import TokenError
+    asked = []
+
+    def read_token(name, default_file, repo_root, token_file=None):
+        asked.append((name, default_file))
+        raise TokenError("stop here")
+
+    monkeypatch.setattr(entry, "read_token", read_token)
+    p = proj('[bridges.jira]\napi = "https://j.acme.com"\nprojects = ["ABC"]\ntoken_env = "JIRA_PAT"\n'
+             '[bridges.slack]\ntoken_env = "SLACK_PAT"\n')
+    for make in (lambda: entry._jira(p, "jira", None), lambda: entry._slack(p, None)):
+        with pytest.raises(TokenError):
+            make()
+    assert asked == [("JIRA_PAT", "jira-token"), ("SLACK_PAT", "slack-token")]

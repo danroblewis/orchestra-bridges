@@ -15,16 +15,16 @@ clearance = "needs approval"
 data_class = "unknown"
 
 [settings]
-base_url = "https://ci.example.com"      # the API's root
+base_url = "https://ci.example.com"      # guess: ask the owner (the API's root)
 token_env = "{{token_env}}"              # the NAME of the variable holding the token; never the token
 # token_file = "~/.config/orchestra-bridges/{{name}}-token"   # instead: a chmod 600 file outside any repository
 every = "5m"
 per_minute = 20
 ttl = "4m"
-system = "example"                # the event types' and the series' first word (jenkins, argo, ...)
-thing = "item"                    # what one item is (build, job, ticket): <system>.<thing>.<state>
-list_path = "/api/items"          # the list endpoint, under base_url
-params = {}                       # its query parameters (a page size, a filter)
+system = "example"                # guess: ask the owner. The event types' and the series' first word (jenkins, argo, ...)
+thing = "item"                    # guess: ask the owner. What one item is (build, job, ticket): <system>.<thing>.<state>
+list_path = "/api/items"          # guess: from the API's docs. The list endpoint, under base_url
+params = {}                       # guess: ask the owner (the filter is the scope). Its query parameters (a page size, a filter)
 items = "items"                   # where the list is in the answer: a dotted path ("" for an answer that is the list)
 key = "id"                        # each item's own id (dotted path): the event's subject
 stamp = "updated_at"              # what changes when the item does (an updated time, a version): emitted once per stamp

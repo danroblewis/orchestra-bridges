@@ -42,6 +42,7 @@
     max_catchup = "48h"
     overlap = "10m"
     email = "me@acme.com"             # Cloud only: the account the API token belongs to (or JIRA_EMAIL)
+    token_env = "JIRA_API_TOKEN"      # the NAME of the variable holding the token (default <SECTION>_API_TOKEN)
     token_file = "~/.config/orchestra-bridges/jira-token"   # never the token itself
     sprint_field = "customfield_10020"   # found from /field when not set
     done_every = "1h"                 # how often done issues are counted (0: never)
@@ -61,6 +62,7 @@
     expire = "168h"                   # a ping unanswered this long stops waiting
     host = "127.0.0.1"                # where /metrics listens: local only unless you change it
     port = 9465                       # where /metrics is served; the plugin scrapes it (0: any port, no scrape)
+    token_env = "SLACK_USER_TOKEN"    # the NAME of the variable holding the token (the default)
     token_file = "~/.config/orchestra-bridges/slack-token"   # never the token itself
     queries = ["<@{me}>", "to:<@{me}>"]   # replaces the default searches (slack/search.py); {me} is your member id
     api = "https://slack.com/api"     # https on slack.com, or a local fake (loopback) in tests
@@ -70,7 +72,8 @@ it is the kits' settings (``kits/settings.py``).
 
 A bridge runs only where its section exists (``plugin.py``). No token is ever in orchestra.toml:
 the GitHub bridges use the owner's ``gh`` login (``github/api.py``), the Jira and Slack bridges an
-environment variable or a file outside the repository (``secret.py``), and a ``token`` key is refused."""
+environment variable (``token_env`` names it, never holds it) or a file outside the repository
+(``secret.py``), and a ``token`` key is refused."""
 
 from __future__ import annotations
 
@@ -116,6 +119,7 @@ class SlackConfig:
     host: str = "127.0.0.1"
     port: int = 9465
     token_file: Path | None = None
+    token_env: str = "SLACK_USER_TOKEN"   # [bridges.slack] token_env: the NAME of the variable
     api: str = "https://slack.com/api"
     people: Path | None = None
     queries: list[str] | None = None             # the searches, when the defaults (search.py) are not right
@@ -262,6 +266,7 @@ class JiraConfig:
     overlap: float = 600.0
     email: str | None = None
     token_file: Path | None = None
+    token_env_name: str | None = None   # [bridges.jira] token_env; None: <SECTION>_API_TOKEN
     sprint_field: str | None = None
     done_every: float = 3600.0
     bots_ask: bool = False
@@ -273,6 +278,11 @@ class JiraConfig:
     def env(self) -> str:
         """The prefix of this instance's environment variables: JIRA, or JIRA_FEDRAMP for jira_fedramp."""
         return self.name.upper()
+
+    @property
+    def token_env(self) -> str:
+        """The NAME of the variable holding this instance's token."""
+        return self.token_env_name or f"{self.env}_API_TOKEN"
 
     @property
     def site(self) -> str:
@@ -293,6 +303,21 @@ def _loopback(host: str) -> bool:
         return host == "localhost"
 
 
+ENV_NAME = re.compile(r"^[A-Z][A-Z0-9_]{1,63}$")
+
+
+def token_env(s: dict[str, Any], where: str) -> str | None:
+    """``token_env``: the NAME of the environment variable holding the token, or None for the default."""
+    v = s.get("token_env")
+    if v is None:
+        return None
+    if not isinstance(v, str) or not ENV_NAME.match(v):
+        # never echo the value: it may be the token itself, pasted by mistake
+        raise ConfigError(f"{where} token_env must be the NAME of an environment variable (upper case, digits, _), "
+                          "never the token")
+    return v
+
+
 def jira_api(name: str, url: str) -> str:
     """``api`` when the token may go there: https anywhere (Data Center is the company's own host), or
     plain http only to a fake on this machine."""
@@ -309,7 +334,7 @@ def jira(raw: dict[str, Any], repo_root: Path, name: str = "jira") -> JiraConfig
     where = f"[bridges.{name}]"
     if "token" in s:
         raise ConfigError(f"{where} token: the token never goes in orchestra.toml; set {name.upper()}_API_TOKEN "
-                          "or put it in a file outside the repository (token_file)")
+                          "(or the variable token_env names) or put it in a file outside the repository (token_file)")
     if not isinstance(s.get("api"), str) or not s["api"]:
         raise ConfigError(f"{where} api is required: your Jira site, e.g. https://acme.atlassian.net")
     api = jira_api(name, s["api"])
@@ -345,6 +370,7 @@ def jira(raw: dict[str, Any], repo_root: Path, name: str = "jira") -> JiraConfig
         overlap=parse_duration(s.get("overlap"), 600.0),
         email=email if isinstance(email, str) and email else None,
         token_file=Path(tf).expanduser() if isinstance(tf, str) and tf else None,
+        token_env_name=token_env(s, where),
         sprint_field=sprint,
         done_every=parse_duration(s.get("done_every"), 3600.0),
         bots_ask=bool(s.get("bots_ask", False)),
@@ -358,6 +384,7 @@ def jira(raw: dict[str, Any], repo_root: Path, name: str = "jira") -> JiraConfig
 
 
 GROUP = re.compile(r"^S[A-Z0-9]+$")
+SLACK_TOKEN_ENV = "SLACK_USER_TOKEN"
 RULES = ("reaction", "reply")
 
 
@@ -380,7 +407,7 @@ def slack(raw: dict[str, Any], repo_root: Path) -> SlackConfig:
         raise ConfigError("orchestra.toml has no [bridges.slack] section")
     if "token" in s:
         raise ConfigError("[bridges.slack] token: the token never goes in orchestra.toml; set SLACK_USER_TOKEN "
-                          "or put it in a file outside the repository (token_file)")
+                          "(or the variable token_env names) or put it in a file outside the repository (token_file)")
     answered = _names(s, "slack", "answered", ["reaction"])
     if not answered:
         raise ConfigError(f"[bridges.slack] answered must name at least one of {RULES}: with none, nothing answers a ping")
@@ -406,6 +433,7 @@ def slack(raw: dict[str, Any], repo_root: Path) -> SlackConfig:
         host=str(s.get("host") or "127.0.0.1"),
         port=port,
         token_file=Path(tf).expanduser() if isinstance(tf, str) and tf else None,
+        token_env=token_env(s, "[bridges.slack]") or SLACK_TOKEN_ENV,
         api=slack_api(str(s.get("api") or "https://slack.com/api")),
         people=people_file(raw, repo_root),
         queries=_names(s, "slack", "queries", []) or None,

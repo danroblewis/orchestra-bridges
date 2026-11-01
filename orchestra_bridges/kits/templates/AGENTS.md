@@ -22,9 +22,15 @@ person, `bot.{{kind}}` for the system's own act (`actor_source`). The kit announ
 never announces itself, never publishes as `{{name}}`, and `Poller.emit` refuses any other source.
 The measurement is an instrument: it measures, never publishes.
 
+**Values marked `# guess` in `machine.toml`** (the site, the scope: a JQL, channels, queries, an
+API's shape) are the template's placeholders: ask the owner for each, or read it from the API's
+own docs, and remove the mark once it is theirs. `orchestra bridges integrations` counts the guesses
+left.
+
 Files: `machine.toml` (its settings, clearance and the events it publishes), `{{name}}.py` (what it
 reads, keeps and publishes: `meta`/`keep_*`, `make_poll`, `measure`), `test_{{name}}.py` (its test
-against the kit's fake), this file.
+against the kit's fake: it reads the token's variable and the scope from `machine.toml`, so it
+still passes once the owner's values are in), this file.
 
 ## What it may do
 
@@ -57,7 +63,9 @@ against the kit's fake), this file.
 - **The compliance check.** `clearance = "needs approval"` in `machine.toml` means the program
   reads only a fake on this machine (a loopback URL); it refuses {{system}} itself before any
   request. Only the owner approves reading a company system (then `clearance = "approved"` and
-  `data_class`); you never change it on your own.
+  `data_class`); you never change it on your own. Until then the poller that runs for good
+  (no `--once`) does not exit: it logs `waiting for approval` once, reads nothing, and re-reads
+  `machine.toml` on its interval, polling as soon as it says `approved`.
 - **No other writes.** Not to the repository's base branch (a change to the repository goes
   through a pull request), not to `orchestra.toml` by hand (the Supervisor changes configuration
   through `config_edit`, the overlay by default).
@@ -71,13 +79,16 @@ uv run python -m pytest {{dir}}/test_{{name}}.py -q
 The test starts `{{fake}}` from `orchestra_bridges.kits.fakes` on a random port, runs the poller
 `--once` against it twice (a restart between), runs `measure`, and checks the events (types,
 subjects, sources), the series, that nothing was published twice, and that no text or token left.
+The fake holds the scope the test gives the run (`--set`, from `machine.toml` where it can: the
+JQL's first project, the first channel), so the owner's own scope needs no change to the test.
 Add a case to the fake's fixture (or the test's own) for anything new you read. Try the real API
 only after the owner's approval, and first with `--dry-run` (answers only from the cache).
 
 ## How to run it
 
 By hand, once: `python {{dir}}/{{name}}.py --once` (in the project, `ORCHESTRA_REPO` set). For
-good, the Supervisor adds two entries (through `config_edit`, the overlay by default): the poller's
+good, after the owner's approval (scaffold, test against the fake, `clearance` and the token's
+variable name set, then the entries), the Supervisor adds two entries (through `config_edit`, the overlay by default): the poller's
 process, and the instrument that stores its measurement:
 
 ```toml

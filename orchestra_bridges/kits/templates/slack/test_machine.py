@@ -12,9 +12,13 @@ import pytest
 
 from orchestra_bridges.kits.fakes import CANARY, FakeSlack
 from orchestra_bridges.kits.fakes.base import load_fixture
+from orchestra_bridges.kits.testing import set_args, settings, token_env
 
 HERE = Path(__file__).resolve().parent
 TOKEN = "test-token-not-real"
+TOKEN_ENV = token_env(HERE, "SLACK_TOKEN")           # machine.toml's, so the owner's variable works too
+CHANNEL = (settings(HERE).get("channels") or ["C001"])[0]   # the fake holds machine.toml's first channel
+SCOPE = set_args(channels=[CHANNEL])
 
 
 def program():
@@ -27,7 +31,8 @@ def program():
 def recent_world() -> dict:
     """The kit's fixture, its messages moved to the last minutes (the poller reads back a day)."""
     world, now = load_fixture(None, "slack.json"), time.time()
-    msgs = world["channels"]["C001"]
+    msgs = world["channels"].pop("C001")
+    world["channels"][CHANNEL] = msgs
     stamps = {m["ts"]: f"{now - 600 + 60 * n:.6f}" for n, m in enumerate(msgs)}
     for m in msgs:
         m["ts"] = stamps[m["ts"]]
@@ -39,13 +44,13 @@ def recent_world() -> dict:
 @pytest.fixture
 def fake(tmp_path, monkeypatch):
     monkeypatch.setenv("ORCHESTRATOR_HOME", str(tmp_path / "home"))
-    monkeypatch.setenv("SLACK_TOKEN", TOKEN)
+    monkeypatch.setenv(TOKEN_ENV, TOKEN)
     with FakeSlack(recent_world(), token=TOKEN) as f:
         yield f
 
 
 def args(fake, tmp, *extra):
-    return [*extra, "--base-url", fake.url, "--state-dir", str(tmp / "state"), "--ttl", "0"]
+    return [*extra, "--base-url", fake.url, "--state-dir", str(tmp / "state"), "--ttl", "0", *SCOPE]
 
 
 def poll_once(fake, tmp):
@@ -60,7 +65,7 @@ def posted(events):
 def test_two_polls_relay_each_message_once(fake, tmp_path):
     assert posted(poll_once(fake, tmp_path)) == [("person.slack.u001", False), ("person.slack.u002", True),
                                                  ("bot.slack.b001", False)]
-    fake.post("C001", "U002")
+    fake.post(CHANNEL, "U002")
     events = poll_once(fake, tmp_path)
     assert posted(events)[3:] == [("person.slack.u002", False)]
     assert all(r.authorized for r in fake.requests)
@@ -68,7 +73,7 @@ def test_two_polls_relay_each_message_once(fake, tmp_path):
 
 def test_measure_counts_the_last_hour(fake, tmp_path, capsys):
     assert program().main(args(fake, tmp_path, "measure")) == 0
-    assert 'slack_channel_messages_last_hour{channel="C001"} 3' in capsys.readouterr().out
+    assert f'slack_channel_messages_last_hour{{channel="{CHANNEL}"}} 3' in capsys.readouterr().out
 
 
 def test_no_text_or_token_leaves(fake, tmp_path, capsys):

@@ -7,7 +7,8 @@ file must not be inside the repository (where it could be committed) and must be
 owner only (``chmod 600``), as ssh asks of a key. The token is never in orchestra.toml (each
 bridge's config refuses a ``token`` key), and it is read once at start and kept in memory only. The
 Jira bridge reads ``JIRA_API_TOKEN`` (``jira-token``), the Slack bridge ``SLACK_USER_TOKEN``
-(``slack-token``)."""
+(``slack-token``), unless the bridge's section names another variable in ``token_env``
+(``[bridges.jira] token_env = "JIRA_PAT"``); the file default stays."""
 
 from __future__ import annotations
 

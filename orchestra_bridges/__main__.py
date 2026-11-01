@@ -1,7 +1,8 @@
 """Run a bridge for the project at ORCHESTRA_REPO, else the working directory, until SIGTERM or SIGINT.
 
 ``orchestra bridges github|github_prs|slack|jira[_<name>] [--once]`` (or ``orchestra bridges scaffold
-<kind> <name>``, which writes a new machine from a kit: ``kits/scaffold.py``) (``orchestra --repo PATH bridges
+<kind> <name>``, which writes a new machine from a kit: ``kits/scaffold.py``; ``orchestra bridges
+integrations``, which lists them: ``kits/integrations.py``) (``orchestra --repo PATH bridges
 ...`` sets ORCHESTRA_REPO), or ``python -m orchestra_bridges ...``, which the launcher runs and gives
 ORCHESTRA_REPO. A bridge publishes only as the people and bots who acted (``relay.py``), so its bus has no
 source of its own."""
@@ -47,7 +48,7 @@ def _github_prs(project, stop: threading.Event):
 
 def _jira(project, name: str, stop: threading.Event):
     conf = cfg.jira(project.config.raw, project.repo_root, name)
-    token = read_token(f"{conf.env}_API_TOKEN", f"{conf.name}-token", project.repo_root, conf.token_file)
+    token = read_token(conf.token_env, f"{conf.name}-token", project.repo_root, conf.token_file)
     email = os.environ.get(f"{conf.env}_EMAIL") or conf.email
     api = Jira(conf.api, token, deployment=conf.deployment, email=email, sleep=stop.wait)
     return jira.Bridge(conf, api, Events.for_project(project),
@@ -57,7 +58,7 @@ def _jira(project, name: str, stop: threading.Event):
 def _slack(project, stop: threading.Event):
     """A Retry-After is waited out on ``stop`` (so SIGTERM ends it) and for no longer than a poll."""
     conf = cfg.slack(project.config.raw, project.repo_root)
-    token = read_token("SLACK_USER_TOKEN", "slack-token", project.repo_root, conf.token_file)
+    token = read_token(conf.token_env, "slack-token", project.repo_root, conf.token_file)
     api = Slack(token, conf.api, sleep=stop.wait, max_wait=conf.every)
     return slack.Bridge(conf, api, Events.for_project(project),
                         ProjectStore(for_project(project), project.key))
@@ -75,8 +76,11 @@ def main(argv: list[str] | None = None) -> int:
     if argv[:1] == ["scaffold"]:                  # a new Programmatic Machine from a kit (kits/scaffold.py)
         from .kits.scaffold import main as scaffold
         return scaffold(argv[1:])
+    if argv[:1] == ["integrations"]:              # read-only: the scaffolded machines (kits/integrations.py)
+        from .kits.integrations import main as integrations
+        return integrations(argv[1:])
     ap = argparse.ArgumentParser(prog="orchestra bridges")
-    ap.add_argument("bridge", help=f"{', '.join(sorted(BRIDGES))}, jira, or jira_<name> (or: scaffold <kind> <name>)")
+    ap.add_argument("bridge", help=f"{', '.join(sorted(BRIDGES))}, jira, or jira_<name> (or: scaffold <kind> <name>, integrations)")
     ap.add_argument("--once", action="store_true", help="poll once and exit")
     args = ap.parse_args(argv)
     if args.bridge not in BRIDGES and not cfg.JIRA_SECTION.match(args.bridge):

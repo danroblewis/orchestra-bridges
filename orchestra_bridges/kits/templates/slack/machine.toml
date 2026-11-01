@@ -22,7 +22,7 @@ token_env = "SLACK_TOKEN"         # the NAME of the variable holding the token; 
 every = "5m"
 per_minute = 20                   # conversations.history is Tier 3 (50 a minute); stay under it
 ttl = "4m"
-channels = ["C001"]               # channel ids, not names
+channels = ["C001"]               # guess: ask the owner (channel ids, not names)
 lookback_s = 86400                # how far back the first poll reads
 
 [[publishes]]

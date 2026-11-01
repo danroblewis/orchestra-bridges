@@ -8,7 +8,9 @@ small parts a coding tool or the Supervisor builds a poller from, and a scaffold
   ``[[collect]]`` entry reads, the announcement, a clean stop;
 - ``fakes``: HTTP fakes of Jira, Slack, PagerDuty and a Prometheus API for tests;
 - ``scaffold``: ``orchestra bridges scaffold <kind> <name> [--root state|overlay|repo]``;
-- ``settings``: ``[bridges.kits]``; ``machinefile``: a machine's ``machine.toml`` and its clearance.
+- ``settings``: ``[bridges.kits]``; ``machinefile``: a machine's ``machine.toml`` and its clearance;
+- ``testing``: what a scaffolded test reads from its ``machine.toml`` (the token's variable, the scope);
+- ``integrations``: ``orchestra bridges integrations``, the scaffolded machines and their clearance.
 
 A poller built from a kit is a relay, never a machine (Orchestra's rule 2, D19; the bridges' SPEC §2):
 it publishes only as the people and bots who acted (``person.<system>.<account>``, ``bot.<system>``),
