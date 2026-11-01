@@ -336,7 +336,8 @@ It runs as its own process and instrument, `bridges.jira_fedramp`, and its token
 receives the other's token.
 
 **The token** is never in `orchestra.toml` (a `token` key is refused). The bridge reads it once at
-start, in this order: the variable `JIRA_API_TOKEN` (`JIRA_<NAME>_API_TOKEN` for `jira_<name>`);
+start, in this order: the variable `JIRA_API_TOKEN` (`JIRA_<NAME>_API_TOKEN` for `jira_<name>`;
+`token_env = "JIRA_PAT"` in the section names another variable);
 the file `JIRA_API_TOKEN_FILE` names; the file `token_file` names; `~/.config/orchestra-bridges/jira-token`.
 A file must be outside the repository and `chmod 600`. On Data Center it is a personal access token
 (your profile, Personal Access Tokens; read access is all it needs) sent as `Authorization: Bearer`.
@@ -496,7 +497,7 @@ the metrics, the log or any file.
    `SLACK_USER_TOKEN_FILE`, names another. The bridge refuses a file inside the repository or one
    others can read.
 
-   The environment variable `SLACK_USER_TOKEN` also works, and suits a poll run by hand
+   The environment variable `SLACK_USER_TOKEN` (or the one `token_env` in the section names) also works, and suits a poll run by hand
    (`--once`, below). Do not set it where `orchestra run` runs: `orchestra run` passes its
    environment to every process it starts, so every machine would get your token.
 
@@ -605,6 +606,7 @@ Prometheus API such as Chronosphere), `orchestra_bridges.kits` has the parts and
 ```bash
 orchestra bridges scaffold pagerduty pd_alerts            # into <state>/machines/pd_alerts/ (--root overlay|repo)
 uv run python -m pytest ~/.orchestrator/<key>/machines/pd_alerts/test_pd_alerts.py -q   # against the fake
+orchestra bridges integrations                            # read-only: each one's clearance, token variable, schedule
 ```
 
 It writes `machine.toml` (settings, the token's environment variable NAME, clearance),
@@ -612,7 +614,10 @@ It writes `machine.toml` (settings, the token's environment variable NAME, clear
 `AGENTS.md` for a coding tool, and prints the `[[machines]]` and `[[collect]]` entries that run it.
 Like a bridge, a poller is a relay (its events' sources are who acted, each announced once), keeps
 only metadata (its disk cache holds only what `keep` returns), reads only, and keeps the token in
-memory. Until `clearance = "approved"` it reads only a fake on this machine. The kits are `jira`,
+memory. Until `clearance = "approved"` it reads only a fake on this machine (run for good, it
+waits: `waiting for approval`, nothing read, until `machine.toml` says approved). Values the
+template guessed are marked `# guess: ask the owner`; its test reads the token's variable and the
+scope from `machine.toml`, so it still passes once the owner's are in. The kits are `jira`,
 `slack`, `pagerduty`, `promql` and `http` (any JSON API no kit knows). Four complete examples built
 from them, with their tests, are in `examples/integrations/` (`jira_poller`, `slack_watcher`,
 `pagerduty_alerts`, `chronosphere_series`, the last a `[[sources]]` entry with its check script).

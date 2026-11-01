@@ -60,8 +60,8 @@ relays are, and they appear on the Machines page only once they act.
 | Bridge | What it uses, in order |
 |---|---|
 | github, github_prs | `GH_TOKEN` or `GITHUB_TOKEN` (for an Enterprise `api`: `GH_ENTERPRISE_TOKEN` or `GITHUB_ENTERPRISE_TOKEN`), else `gh auth token --hostname <api's host>`: the owner's `gh` login is enough |
-| jira | `JIRA_API_TOKEN`, else the file `JIRA_API_TOKEN_FILE` names, else `token_file`, else `~/.config/orchestra-bridges/jira-token`. `jira_<name>` reads `JIRA_<NAME>_API_TOKEN`, `.../jira_<name>-token` |
-| slack | `SLACK_USER_TOKEN`, else `SLACK_USER_TOKEN_FILE`, else `token_file`, else `~/.config/orchestra-bridges/slack-token` |
+| jira | `JIRA_API_TOKEN`, else the file `JIRA_API_TOKEN_FILE` names, else `token_file`, else `~/.config/orchestra-bridges/jira-token`. `jira_<name>` reads `JIRA_<NAME>_API_TOKEN`, `.../jira_<name>-token`. `token_env` in the section names another variable |
+| slack | `SLACK_USER_TOKEN`, else `SLACK_USER_TOKEN_FILE`, else `token_file`, else `~/.config/orchestra-bridges/slack-token`. `token_env` in the section names another variable |
 
 - A token file must be **outside the repository** and **`chmod 600`**, or the bridge refuses it.
 - Prefer files to environment variables: `orchestra run` passes its environment to every process
@@ -295,12 +295,16 @@ orders = "orders-api"
 
 ## A system no bridge reads: the kits (`orchestra bridges scaffold`)
 
-For PagerDuty, a Slack channel's history, a Jira query the bridge does not cover, or series from a
-Prometheus API, write a poller from a kit: `orchestra bridges scaffold <jira|slack|pagerduty|promql>
-<name>` writes `<state>/machines/<name>/` (`--root overlay` beside the private overlay, `--root repo`
+For PagerDuty, a Slack channel's history, a Jira query the bridge does not cover, series from a
+Prometheus API, or any JSON API (`http`), write a poller from a kit: `orchestra bridges scaffold
+<jira|slack|pagerduty|promql|http> <name>` writes `<state>/machines/<name>/` (`--root overlay` beside the private overlay, `--root repo`
 for a pull request only). Run its test against the fake first; read its `AGENTS.md` for what it may
-do. Then add the two entries it prints (`[[machines]]` for the poller, `[[collect]]` for its
-`measure`) with `config_edit`, target overlay. Its `machine.toml` says `clearance = "needs
+do; values marked `# guess` in `machine.toml` are the owner's to give. After the owner's approval
+(clearance and the token's variable name written), add the two entries it prints (`[[machines]]`
+for the poller, `[[collect]]` for its `measure`) with `config_edit`, target overlay. An entry
+written early does no harm: an uncleared poller logs `waiting for approval` once and reads nothing
+until approved. `orchestra bridges integrations` lists every scaffolded machine, its clearance,
+its token's variable name, whether it is scheduled and the guesses left. Its `machine.toml` says `clearance = "needs
 approval"`: it reads only a fake until the human approves reading the system; you never change that
 yourself. Its token is named by environment variable (`[settings] token_env`), never written.
 `[bridges.kits]` (`per_minute`, `hosts`, `tokens`, `ttl`, `cache_dir`) is checked like the rest.

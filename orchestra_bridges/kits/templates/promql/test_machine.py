@@ -9,9 +9,16 @@ from pathlib import Path
 import pytest
 
 from orchestra_bridges.kits.fakes import FakePrometheus
+from orchestra_bridges.kits.testing import set_args, token_env
 
 HERE = Path(__file__).resolve().parent
 TOKEN = "test-token-not-real"
+TOKEN_ENV = token_env(HERE, "PROMETHEUS_TOKEN")      # machine.toml's, so the owner's variable works too
+# The queries the fake's series answer (the owner's own queries are theirs to try against the store).
+SCOPE = set_args(aliases={"k8s_cluster": "cluster"}, max_series=200, queries=[
+    {"name": "http_requests", "query": 'sum by (service) (http_requests_total{k8s_cluster="prod-1"})',
+     "help": "Requests served, by service."},
+    {"name": "queue_depth", "query": "queue_depth", "help": "Messages waiting, by queue."}])
 
 
 def program():
@@ -24,13 +31,13 @@ def program():
 @pytest.fixture
 def fake(tmp_path, monkeypatch):
     monkeypatch.setenv("ORCHESTRATOR_HOME", str(tmp_path / "home"))
-    monkeypatch.setenv("PROMETHEUS_TOKEN", TOKEN)
+    monkeypatch.setenv(TOKEN_ENV, TOKEN)
     with FakePrometheus(token=TOKEN) as f:
         yield f
 
 
 def measure(fake, tmp):
-    return program().main(["measure", "--base-url", fake.url, "--state-dir", str(tmp / "state"), "--ttl", "0"])
+    return program().main(["measure", "--base-url", fake.url, "--state-dir", str(tmp / "state"), "--ttl", "0", *SCOPE])
 
 
 def test_measure_prints_the_queries(fake, tmp_path, capsys):

@@ -16,13 +16,13 @@ clearance = "needs approval"
 data_class = "unknown"
 
 [settings]
-base_url = "https://jira.example.com"   # your Data Center site
+base_url = "https://jira.example.com"   # guess: ask the owner (their Data Center site)
 token_env = "JIRA_API_TOKEN"      # the NAME of the variable holding a personal access token; never the token
 # token_file = "~/.config/orchestra-bridges/{{kind}}-token"   # instead: a chmod 600 file outside any repository
 every = "5m"
 per_minute = 20
 ttl = "4m"
-jql = "project = ABC"             # the issues in scope; no ORDER BY (the poller adds its own)
+jql = "project = ABC"             # guess: ask the owner (the issues in scope; no ORDER BY, the poller adds its own)
 lookback = "1d"                   # how far back the first poll reads
 overlap = "10m"                   # each poll re-reads this much before the last one
 

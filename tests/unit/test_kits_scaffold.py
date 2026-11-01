@@ -18,7 +18,7 @@ from orchestra_bridges.__main__ import main as bridges_main
 from orchestra_bridges.check import check
 from orchestra_bridges.kits.fakes import CANARY, FakePagerDuty
 from orchestra_bridges.kits.machinefile import MachineFileError, read, require_clearance
-from orchestra_bridges.kits.scaffold import KINDS, ScaffoldError, root_dir, scaffold
+from orchestra_bridges.kits.scaffold import KINDS, TEMPLATES, ScaffoldError, root_dir, scaffold
 from orchestra_bridges.kits.settings import read as read_settings
 
 TOKEN = "scaffold-test-token-not-real"
@@ -180,3 +180,98 @@ def test_a_fake_needs_no_token(tmp_path, monkeypatch):
     with FakePagerDuty() as fake:                     # a fake that checks no token
         r = _measure(d, fake, tmp_path)
     assert r.returncode == 0 and 'pagerduty_incidents_open{service="PSVC001",urgency="high"} 1' in r.stdout, r.stderr
+
+
+OWNERS = {     # what the owner's answers look like once filled in: another variable, their own scope
+    "jira": [('jql = "project = ABC"', 'jql = "project = XYZ AND assignee = currentUser()"')],
+    "slack": [('channels = ["C001"]', 'channels = ["C777", "C888"]')],
+    "pagerduty": [('open_statuses = ["triggered", "acknowledged"]', 'open_statuses = ["triggered"]')],
+    "promql": [("query = \"queue_depth\"", "query = 'sum(rate(orders_total[5m]))'")],
+    "http": [('system = "example"', 'system = "jenkins"'), ('list_path = "/api/items"', 'list_path = "/api/json"')],
+}
+
+
+@pytest.mark.parametrize("kind", sorted(KINDS))
+def test_each_kinds_own_test_still_passes_with_the_owners_values(kind, tmp_path):
+    """The scaffolded test reads the token's variable and the scope from machine.toml: after the
+    owner's values and approval are written (as approve_integration does), it still passes."""
+    d = scaffold(kind, f"my_{kind}", tmp_path / "root")
+    toml = (d / "machine.toml").read_text()
+    for old, new in [*OWNERS[kind], (f'token_env = "{KINDS[kind].token_env}"', 'token_env = "OWNERS_OWN_TOKEN"'),
+                     ('clearance = "needs approval"', 'clearance = "approved"')]:
+        assert old in toml, old
+        toml = toml.replace(old, new, 1)
+    (d / "machine.toml").write_text(toml)
+    r = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", str(d / f"test_my_{kind}.py")],
+                       capture_output=True, text=True, timeout=300, cwd=tmp_path, env=checkout_env(), check=False)
+    assert r.returncode == 0, r.stdout[-3000:] + r.stderr[-2000:]
+
+
+def test_guessed_values_are_marked():
+    """A tool reading a template knows which values to ask the owner for."""
+    for kind, keys in {"jira": ["base_url", "jql"], "slack": ["channels"], "promql": ["base_url", "aliases"],
+                       "http": ["base_url", "system", "thing", "list_path"]}.items():
+        lines = (TEMPLATES / kind / "machine.toml").read_text().splitlines()
+        for key in keys:
+            [line] = [x for x in lines if x.startswith(f"{key} =")]
+            assert "# guess:" in line, (kind, line)
+
+
+def test_the_runner_set_overrides_only_the_kits_own_settings(tmp_path, monkeypatch):
+    from orchestra_bridges.kits.runner import overrides
+    assert overrides(['jql="project = A"', "channels=['C1']", "n=3"]) == {"jql": "project = A", "channels": ["C1"],
+                                                                            "n": 3}
+    for bad in ["token_env=\"X\"", "base_url=\"http://x\"", "jql=project = A", "nokey"]:
+        with pytest.raises(ValueError):
+            overrides([bad])
+
+
+def test_an_uncleared_poller_waits_for_approval_instead_of_exiting(tmp_path):
+    """A [[machines]] entry written before the owner's approval does not crash-loop: the poller logs
+    once, reads nothing, re-reads machine.toml on its interval, and polls once it is cleared."""
+    d = scaffold("pagerduty", "pd_alerts", tmp_path / "root")
+    ev = tmp_path / "events.jsonl"
+    env = checkout_env(PAGERDUTY_TOKEN=TOKEN, ORCHESTRATOR_HOME=str(tmp_path / "home"))
+    with FakePagerDuty(token=TOKEN) as fake:
+        proc = subprocess.Popen([sys.executable, str(d / "pd_alerts.py"), "--every", "0.2", "--events-file", str(ev),
+                                 "--state-dir", str(tmp_path / "state"), "--ttl", "0"], env=env,
+                                stderr=subprocess.PIPE, text=True)
+        try:
+            time.sleep(2.0)
+            assert proc.poll() is None and not ev.exists() and not fake.requests     # alive, reading nothing
+            toml = (d / "machine.toml").read_text()                                   # the fake is configured:
+            (d / "machine.toml").write_text(toml.replace('"https://api.pagerduty.com"', f'"{fake.url}"'))
+            deadline = time.time() + 30
+            while time.time() < deadline and len(events_of(ev)) < 2:
+                time.sleep(0.05)
+            proc.send_signal(signal.SIGTERM)
+            assert proc.wait(timeout=15) == 0
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+        log = proc.stderr.read()
+    assert log.count("waiting for approval") == 1 and "approved: polling" in log, log
+    assert [e["subject"] for e in events_of(ev) if e["type"].startswith("pagerduty.incident.")][:2] == [
+        "PINC001", "PINC002"]
+
+
+def test_an_uncleared_poller_stops_cleanly_while_waiting(tmp_path):
+    d = scaffold("pagerduty", "pd_alerts", tmp_path / "root")
+    log = tmp_path / "log"
+    with log.open("w") as err:
+        proc = subprocess.Popen([sys.executable, str(d / "pd_alerts.py"), "--every", "60", "--events-file",
+                                 str(tmp_path / "e.jsonl"), "--state-dir", str(tmp_path / "state")],
+                                env=checkout_env(ORCHESTRATOR_HOME=str(tmp_path / "home")), stderr=err)
+        try:
+            deadline = time.time() + 30
+            while time.time() < deadline and "waiting for approval" not in log.read_text():
+                time.sleep(0.05)
+            assert proc.poll() is None, log.read_text()
+            proc.send_signal(signal.SIGTERM)
+            assert proc.wait(timeout=15) == 0
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+    assert log.read_text().count("waiting for approval") == 1 and not (tmp_path / "e.jsonl").exists()

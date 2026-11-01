@@ -11,13 +11,16 @@ from pathlib import Path
 import pytest
 
 from orchestra_bridges.kits.fakes import CANARY, FakePagerDuty
+from orchestra_bridges.kits.testing import set_args, token_env, uncleared
 
 HERE = Path(__file__).resolve().parent
 TOKEN = "test-token-not-real"
+TOKEN_ENV = token_env(HERE, "PAGERDUTY_TOKEN")       # machine.toml's, so the owner's variable works too
+SCOPE = set_args(open_statuses=["triggered", "acknowledged"])   # what the fake's incidents are in
 
 
-def program():
-    spec = importlib.util.spec_from_file_location("{{name}}", HERE / "{{name}}.py")
+def program(here=HERE):
+    spec = importlib.util.spec_from_file_location("{{name}}", here / "{{name}}.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -26,13 +29,13 @@ def program():
 @pytest.fixture
 def fake(tmp_path, monkeypatch):
     monkeypatch.setenv("ORCHESTRATOR_HOME", str(tmp_path / "home"))     # the rate bucket's file goes here
-    monkeypatch.setenv("PAGERDUTY_TOKEN", TOKEN)
+    monkeypatch.setenv(TOKEN_ENV, TOKEN)
     with FakePagerDuty(token=TOKEN) as f:
         yield f
 
 
 def args(fake, tmp, *extra):
-    return [*extra, "--base-url", fake.url, "--state-dir", str(tmp / "state"), "--ttl", "0"]
+    return [*extra, "--base-url", fake.url, "--state-dir", str(tmp / "state"), "--ttl", "0", *SCOPE]
 
 
 def poll_once(fake, tmp):
@@ -78,7 +81,8 @@ def test_no_text_or_token_leaves(fake, tmp_path, capsys):
 
 
 def test_refuses_an_uncleared_system(tmp_path, monkeypatch):
-    monkeypatch.setenv("PAGERDUTY_TOKEN", TOKEN)
-    rc = program().main(["--once", "--base-url", "https://api.pagerduty.com", "--state-dir", str(tmp_path / "s"),
+    monkeypatch.setenv(TOKEN_ENV, TOKEN)
+    copy = uncleared(HERE, tmp_path / "copy", "{{name}}.py")      # holds after the owner's approval too
+    rc = program(copy).main(["--once", "--base-url", "https://api.pagerduty.com", "--state-dir", str(tmp_path / "s"),
                          "--events-file", str(tmp_path / "e.jsonl")])
     assert rc == 2 and not (tmp_path / "e.jsonl").exists()

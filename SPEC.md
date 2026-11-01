@@ -225,7 +225,7 @@ the Supervisor can configure them (README).
 | `waits.py` | The waiting pings, their expiry, and the counters, as Prometheus text |
 | `bridge.py` | Identify, resume, read, publish, count gaps, the loop |
 
-It shares with the other bridges the token reading (`secret.py`: `SLACK_USER_TOKEN`, else a
+It shares with the other bridges the token reading (`secret.py`: `SLACK_USER_TOKEN`, or the variable `token_env` names, else a
 `chmod 600` file outside the repository, by default `~/.config/orchestra-bridges/slack-token`),
 the `/metrics` server (`serve.py`), the announcer (`announce.py`) and the identity map.
 
@@ -371,7 +371,16 @@ that writes one (Orchestra's `docs/INTEGRATING.md`, strategy (c); task I2 of M6)
   --max-age S` for a `[[collect]]` entry over a poller's file (nothing printed when it is stale).
 - `runner.py`: the command line each scaffolded poller shares: `python <name>.py` polls,
   `python <name>.py measure` prints one measurement for its `[[collect]]` entry (an instrument,
-  which publishes nothing); both run the compliance check first.
+  which publishes nothing); both run the compliance check first. The poller run for good (no
+  `--once`/`--rounds`) and not cleared waits instead of exiting: one `waiting for approval` line,
+  nothing read, `machine.toml` re-read on its interval until approved (so an early `[[machines]]`
+  entry does not crash-loop). `--set KEY=VALUE` gives one run the kit's own settings (a test's
+  scope); never the URL or the credentials.
+- `testing.py`: what a scaffolded test reads from its `machine.toml` (the token's variable, the
+  scope), so it passes after the owner's values are set.
+- `integrations.py`, `orchestra bridges integrations [--json]`: read-only, the kits and the machines
+  scaffolded under the three roots, with kit, clearance, data class, the token's variable NAME,
+  whether the `[[machines]]`/`[[collect]]` entries are configured, and the `# guess` marks left.
 - `machinefile.py`: a poller's `machine.toml` (`[settings]`: `base_url`, `token_env`, `every`,
   `per_minute`, `ttl` and the kit's own keys; never a token) and its **clearance**: until
   `clearance = "approved"` (the owner's say), it reads only a fake on a loopback host.

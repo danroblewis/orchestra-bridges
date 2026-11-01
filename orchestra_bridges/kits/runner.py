@@ -2,7 +2,8 @@
 what it publishes:
 
 - ``python <name>.py [--once | --rounds N] [--every S] [--base-url URL] [--state-dir DIR]
-  [--events-file FILE] [--ttl S] [--dry-run]``: the poller, relaying events (``Poller``);
+  [--events-file FILE] [--ttl S] [--dry-run] [--set KEY=VALUE ...]``: the poller, relaying events
+  (``Poller``);
 - ``python <name>.py measure [--base-url URL] [--state-dir DIR] [--ttl S]``: one measurement,
   printed as Prometheus text on standard output, for the ``[[collect]]`` entry that stores it (an
   instrument: it measures and never publishes).
@@ -12,6 +13,13 @@ sets it; else the working directory): events on the project's bus, the cursor un
 ``<state>/kits/pollers/<name>/`` and the cache under ``[bridges.kits] cache_dir``
 (``<state>/kits/cache``). A test gives both, and a fake's URL. Before anything is read, the
 compliance check (``machinefile.require_clearance``).
+
+**Waiting for approval.** The poller that runs for good (no ``--once``, no ``--rounds``) and is not
+cleared to read its system does not exit, so a ``[[machines]]`` entry written before the owner's
+approval does not crash-loop under ``restart = "always"``: it logs once ``waiting for approval``,
+reads nothing, and re-reads ``machine.toml`` on its interval until ``clearance = "approved"`` (then
+it polls) or it is stopped (SIGTERM, SIGINT: exit 0). Against a fake on this machine it is cleared
+and polls at once. ``--once``, ``--rounds`` and ``measure`` still refuse (exit 2) before any read.
 
 The token comes from ``[settings] token_env`` (an environment variable's name) or ``token_file`` (a
 ``chmod 600`` file outside any repository). A fake on this machine needs neither: against a
@@ -23,7 +31,12 @@ from __future__ import annotations
 
 import argparse
 import os
+import signal
 import sys
+import threading
+import time
+import tomllib
+import urllib.parse
 from collections.abc import Callable
 from pathlib import Path
 
@@ -50,7 +63,64 @@ def parser(name: str) -> argparse.ArgumentParser:
     ap.add_argument("--events-file", help="publish to this JSONL file instead of the project's bus")
     ap.add_argument("--ttl", type=float, help="seconds a cached answer is served (machine.toml's ttl otherwise)")
     ap.add_argument("--dry-run", action="store_true", help="answer only from the cache; send nothing")
+    ap.add_argument("--set", action="append", default=[], metavar="KEY=VALUE",
+                    help="this run only: one of the kit's own [settings] (a TOML value, jql='\"project = ABC\"'), "
+                         "as a test sets the scope its fake holds")
     return ap
+
+
+FIXED = {"base_url", "token", "token_env", "token_file", "every", "per_minute", "ttl"}
+
+
+def overrides(pairs: list[str]) -> dict:
+    """``--set`` pairs as settings; never the URL or the credentials (those have their own paths)."""
+    out = {}
+    for pair in pairs:
+        key, eq, value = pair.partition("=")
+        key = key.strip()
+        if not eq or not key:
+            raise ValueError(f"--set {key or pair!r}: KEY=VALUE, the value in TOML")
+        if key in FIXED:
+            raise ValueError(f"--set {key}: not settable here (--base-url, --every, --ttl, or machine.toml)")
+        try:
+            out[key] = tomllib.loads(f"v = {value}")["v"]
+        except tomllib.TOMLDecodeError:
+            raise ValueError(f"--set {key}: the value is not TOML (a string is quoted)") from None
+    return out
+
+
+def cleared(m: MachineFile, base_url: str) -> bool:
+    return is_local(base_url) or m.clearance == "approved"
+
+
+def _log(name: str, msg: str) -> None:
+    print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {name}: {msg}", file=sys.stderr, flush=True)
+
+
+def wait_for_clearance(path: Path, m: MachineFile, base_url: str | None, every_s: float,
+                       stop: threading.Event) -> MachineFile | None:
+    """Sleep on ``every_s`` until ``path`` says ``clearance = "approved"`` (return it, read again) or
+    ``stop`` is set (return None). Says so once; reads nothing but the file."""
+    host = urllib.parse.urlsplit(base_url or m.base_url).hostname
+    _log(m.name, f"waiting for approval: reading {host} is not cleared (machine.toml clearance = {m.clearance!r}); "
+                 f"reading nothing, checking machine.toml every {every_s:g}s")
+    while not stop.wait(every_s):
+        try:
+            m = read(path)
+        except MachineFileError:
+            continue                    # being edited: look again next time
+        if cleared(m, base_url or m.base_url):
+            _log(m.name, "approved: polling")
+            return m
+    return None
+
+
+def _until_stopped() -> threading.Event:
+    stop = threading.Event()
+    if threading.current_thread() is threading.main_thread():
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            signal.signal(sig, lambda *_: stop.set())
+    return stop
 
 
 def main(here: str | Path, make_poll: Callable[[CachedClient, MachineFile], Poll], argv: list[str] | None = None, *,
@@ -63,6 +133,10 @@ def main(here: str | Path, make_poll: Callable[[CachedClient, MachineFile], Poll
         print(e, file=sys.stderr)
         return 2
     a = parser(m.name).parse_args(argv)
+    if a.what == "poll" and not a.once and a.rounds is None and not cleared(m, a.base_url or m.base_url):
+        m = wait_for_clearance(here / "machine.toml", m, a.base_url, a.every or m.every_s, _until_stopped())
+        if m is None:
+            return 0
     base_url = a.base_url or m.base_url
     project = None
     if not a.state_dir or (a.what == "poll" and not a.events_file):
@@ -76,6 +150,7 @@ def main(here: str | Path, make_poll: Callable[[CachedClient, MachineFile], Poll
         require_clearance(m, base_url)
         if a.ttl is not None:
             m.ttl_s = a.ttl
+        m.extra.update(overrides(a.set))
         token_env, token_file = m.token_env, m.token_file
         if is_local(base_url) and not (token_env and os.environ.get(token_env)) and not (
                 token_file and Path(token_file).expanduser().is_file()):

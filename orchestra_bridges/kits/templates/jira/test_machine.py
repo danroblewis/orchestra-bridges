@@ -5,6 +5,7 @@ Run: ``uv run python -m pytest {{dir}}/test_{{name}}.py`` (in an environment wit
 
 import importlib.util
 import json
+import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -13,9 +14,16 @@ import pytest
 from orchestra_bridges.kits.fakes import CANARY, FakeJira
 from orchestra_bridges.kits.fakes.base import load_fixture
 from orchestra_bridges.kits.fakes.jira import stamp
+from orchestra_bridges.kits.testing import set_args, settings, token_env
 
 HERE = Path(__file__).resolve().parent
 TOKEN = "test-token-not-real"
+TOKEN_ENV = token_env(HERE, "JIRA_API_TOKEN")        # machine.toml's, so the owner's variable works too
+# The fake holds one project: the first machine.toml's JQL names (ABC when it names none), and the
+# run is given `project = <it>` (the rest of the owner's JQL is theirs; the fake knows only projects).
+_named = re.search(r'(?i)\bproject\s*(?:=|in\s*\()\s*"?([A-Z][A-Z0-9_]*)', settings(HERE).get("jql", ""))
+PROJECT = _named.group(1) if _named and _named.group(1) != "OPS" else "ABC"   # OPS: the fixture's out-of-scope one
+SCOPE = set_args(jql=f"project = {PROJECT}")
 
 
 def program():
@@ -29,6 +37,8 @@ def recent_world() -> dict:
     """The kit's fixture, its times moved to the last hours (the poller reads back a day)."""
     world, now = load_fixture(None, "jira.json"), datetime.now(UTC)
     for n, issue in enumerate(world["issues"]):
+        if issue["project"] == "ABC":                # the fixture's project in scope (OPS stays out)
+            issue["key"], issue["project"] = f"{PROJECT}-{issue['key'].split('-')[1]}", PROJECT
         t = stamp(now - timedelta(hours=3 - n))
         issue["updated"] = t
         for h in issue.get("history") or []:
@@ -39,13 +49,13 @@ def recent_world() -> dict:
 @pytest.fixture
 def fake(tmp_path, monkeypatch):
     monkeypatch.setenv("ORCHESTRATOR_HOME", str(tmp_path / "home"))
-    monkeypatch.setenv("JIRA_API_TOKEN", TOKEN)
+    monkeypatch.setenv(TOKEN_ENV, TOKEN)
     with FakeJira(recent_world(), token=TOKEN) as f:
         yield f
 
 
 def args(fake, tmp, *extra):
-    return [*extra, "--base-url", fake.url, "--state-dir", str(tmp / "state"), "--ttl", "0"]
+    return [*extra, "--base-url", fake.url, "--state-dir", str(tmp / "state"), "--ttl", "0", *SCOPE]
 
 
 def poll_once(fake, tmp):
@@ -59,10 +69,12 @@ def changes(events):
 
 
 def test_two_polls_relay_each_change_once(fake, tmp_path):
-    assert changes(poll_once(fake, tmp_path)) == [("jira.issue.transitioned", "ABC-2", "person.jira.bob", "In Progress")]
-    fake.move("ABC-1", "In Progress", by="alice")
+    assert changes(poll_once(fake, tmp_path)) == [("jira.issue.transitioned", f"{PROJECT}-2", "person.jira.bob",
+                                                    "In Progress")]
+    fake.move(f"{PROJECT}-1", "In Progress", by="alice")
     events = poll_once(fake, tmp_path)
-    assert changes(events)[1:] == [("jira.issue.transitioned", "ABC-1", "person.jira.alice", "In Progress")]
+    assert changes(events)[1:] == [("jira.issue.transitioned", f"{PROJECT}-1", "person.jira.alice",
+                                                  "In Progress")]
     assert {e["source"] for e in events if e["type"] == "orchestra.machine.started"} == {"person.jira.bob",
                                                                                      "person.jira.alice"}
     assert all(r.authorized for r in fake.requests)
