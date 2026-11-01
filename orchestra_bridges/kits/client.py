@@ -18,13 +18,17 @@ standard library.
   ``Retry-After`` is honoured (and holds the host's bucket for every reader) up to ``max_wait_s``.
 - **The token stays in memory**: read once, by the bridges' one reader (``secret.read_token``),
   from the environment variable ``token_env`` or the file ``token_file`` (outside the repository,
-  ``chmod 600``), sent as ``auth_format`` in
-  ``Authorization``. It is never logged, never in a cache key or file, never in an error or repr.
+  ``chmod 600``), sent as ``auth_format`` in ``Authorization``. ``{basic}`` in ``auth_format`` is
+  HTTP Basic's base64 of ``basic_user:token`` (Jira Cloud: the account's email and its API token,
+  ``"Basic {basic}"``), so the token file holds the token as issued and the account comes from
+  elsewhere (``machine.toml``'s ``user_env`` or ``user_file``). It is never logged, never in a
+  cache key or file, never in an error or repr.
 - **``dry_run``**: answers only from the cache, of any age, and raises ``NotCached`` on a miss: a
   rehearsal that sends nothing."""
 
 from __future__ import annotations
 
+import base64
 import email.utils
 import json
 import logging
@@ -122,7 +126,7 @@ class CachedClient:
                  backoff_s: float = 1.0, max_wait_s: float = 300.0, timeout_s: float = 30.0,
                  rate_dir: str | Path | None = None, repo_root: Path | None = None,
                  sleep: Callable[[float], None] = time.sleep,
-                 clock: Callable[[], float] = time.time):
+                 clock: Callable[[], float] = time.time, basic_user: str | None = None):
         u = urllib.parse.urlsplit(base_url)
         if u.scheme not in ("http", "https") or not u.hostname:
             raise ValueError(f"base_url must be an http(s) URL, not {base_url!r}")
@@ -133,6 +137,11 @@ class CachedClient:
         if self._token and u.scheme != "https" and not is_local(self.host):
             raise ValueError(f"{self.origin}: a token goes only over https (or to a fake on this machine)")
         self.auth_format = auth_format
+        if "{basic}" in auth_format and self._token:
+            pair = f"{basic_user}:{self._token}" if basic_user else self._token
+            self._basic: str | None = base64.b64encode(pair.encode()).decode()
+        else:
+            self._basic = None
         self.headers = dict(headers or {})
         self.keep, self.dry_run, self.ttl_s = keep, dry_run, ttl_s
         self.retries, self.backoff_s, self.max_wait_s, self.timeout_s = retries, backoff_s, max_wait_s, timeout_s
@@ -213,7 +222,7 @@ class CachedClient:
         if content_type:
             h["Content-Type"] = content_type
         if self._token:
-            h["Authorization"] = self.auth_format.format(token=self._token)
+            h["Authorization"] = self.auth_format.format(token=self._token, basic=self._basic)
         return h
 
     def _send(self, method: str, url: str, body: bytes | None, content_type: str | None,

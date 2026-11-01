@@ -50,7 +50,7 @@ from pathlib import Path
 
 from orchestra.events import Events
 
-from .client import CachedClient, KitError
+from .client import CachedClient, KitError, read_token
 from .exposition import Registry
 from .machinefile import MachineFile, MachineFileError, is_local, read, require_clearance
 from .poller import Poller, poll_dir
@@ -77,7 +77,7 @@ def parser(name: str) -> argparse.ArgumentParser:
     return ap
 
 
-FIXED = {"base_url", "token", "token_env", "token_file", "every", "per_minute", "ttl"}
+FIXED = {"base_url", "token", "token_env", "token_file", "user_env", "user_file", "every", "per_minute", "ttl"}
 
 
 def overrides(pairs: list[str]) -> dict:
@@ -168,7 +168,9 @@ def main(here: str | Path, make_poll: Callable[[CachedClient, MachineFile], Poll
                 token_file and Path(token_file).expanduser().is_file()):
             token_env = token_file = None       # a fake on this machine: no credentials needed
         m.poll_dir = poll_dir(m.name, a.state_dir, project)
-        common = {"token_env": token_env, "token_file": token_file, "auth_format": auth_format, "headers": headers, "dry_run": a.dry_run}
+        user = read_token(m.user_env, m.user_file) if (token_env or token_file) and (m.user_env or m.user_file) else None
+        common = {"token_env": token_env, "token_file": token_file, "auth_format": auth_format, "headers": headers,
+                  "dry_run": a.dry_run, "basic_user": user}
         if a.state_dir:
             client = CachedClient(base_url, per_minute=m.per_minute, cache_dir=Path(a.state_dir) / "cache",
                                   ttl_s=m.ttl_s, **common)

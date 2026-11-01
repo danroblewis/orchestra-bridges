@@ -1,7 +1,9 @@
 """The kits' CachedClient against a kit fake: the cache (hit, miss, expiry, keep, dry run), the
 per-host rate limit, retries with Retry-After, and the token kept out of logs, keys, files and errors."""
 
+import json
 import logging
+import urllib.request
 
 import pytest
 
@@ -234,3 +236,34 @@ def test_one_is_local_and_one_env_name():
     from orchestra_bridges.local import ENV_NAME, is_local
     assert settings.ENV_NAME is ENV_NAME is config.ENV_NAME and machinefile.is_local is is_local
     assert is_local("http://127.0.0.1:9/x") and is_local("localhost") and is_local("http://[::1]:8/") and not is_local("https://example.com")
+
+
+def test_basic_auth_joins_the_account_and_the_token(tmp_path):
+    """``Basic {basic}``: the token file holds the token as issued (Jira Cloud's API token) and the
+    account (its email) comes apart from it; the fake checks base64 of ``account:token``. The fake
+    accepts PUT too (a kit never sends one: the outbox's)."""
+    from orchestra_bridges.kits.fakes import FakeServer
+
+    class Fake(FakeServer):
+        auth_format = "Basic {basic}"
+
+        def route(self, method, path, query, body):
+            return 200, {"method": method}
+
+    tfile = tmp_path / "token"
+    tfile.write_text(TOKEN + "\n")
+    tfile.chmod(0o600)
+    with Fake({}, token=TOKEN, basic_user="me@example.invalid") as f:
+        api = CachedClient(f.url, token_file=tfile, auth_format="Basic {basic}", basic_user="me@example.invalid",
+                           cache_dir=tmp_path / "c", rate_dir=tmp_path / "r", per_minute=6000)
+        assert api.get("/x") == {"method": "GET"}
+        req = urllib.request.Request(f.url + "/x", data=b"{}", method="PUT",
+                                     headers={"Authorization": "Basic " + api._basic, "Content-Type": "application/json"})
+        with urllib.request.urlopen(req) as r:
+            assert json.loads(r.read()) == {"method": "PUT"}
+        assert all(r.authorized for r in f.requests) and len(f.requests) == 2
+        wrong = CachedClient(f.url, token_file=tfile, auth_format="Basic {basic}", basic_user="other@example.invalid",
+                             cache_dir=tmp_path / "c", rate_dir=tmp_path / "r", per_minute=6000, retries=0)
+        with pytest.raises(HTTPFailure):
+            wrong.get("/x")
+        assert TOKEN not in repr(api)
