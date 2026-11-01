@@ -1,333 +1,216 @@
 # Bridges: an operator's guide
 
-For the AI operator (the Supervisor) that configures this plugin in a user's project. Decision
-knowledge, not a procedure: what each setting does, how to choose it, what goes wrong, and which
-choices are the human's. Every key named here is read by `orchestra_bridges/config.py`; nothing
-else is.
+For the AI operator (the Supervisor) that brings an outside system into a user's project. Decision
+knowledge, not a procedure: what the plugin gives you, where a collector lives, how to choose a
+kit and its settings, what goes wrong, and which choices are the human's. The steps themselves
+are your `integrate_system` and `approve_integration` tools and Orchestra's `docs/INTEGRATING.md`.
 
 ## What the plugin is
 
-The bridges are relays. Each one polls another system (GitHub issues, GitHub pull requests, Jira,
-Slack) with the owner's credentials and publishes what people did there on the project's bus, as
-the people who did it, metadata only (never titles, bodies or messages). They only read: none
-comments, labels, reacts or transitions. A bridge is never a machine; the people and bots it
-relays are, and they appear on the Machines page only once they act.
+A library, never a reader (the owner, 2026-11-01: "a library or framework so that AI agents within
+my repo could write scripts in the target repo to do the metrics and event collection"). It reads
+no system itself, runs no process and declares no instrument or machine. It gives you:
 
-- A bridge runs **only where its section exists**: `[bridges.github]`, `[bridges.github_prs]`,
-  `[bridges.jira]` (and `[bridges.jira_<name>]` for a second Jira site), `[bridges.slack]`. For
-  each, `orchestra run` keeps the process `bridges.<section>` running and scrapes its `/metrics`
-  every 30 s as the instrument `bridges.<section>`. No section, nothing runs.
-- The sections are read from the merged configuration: `orchestra.toml` with the private overlay
-  over it. Orchestra itself ignores `[bridges]`; only this plugin reads it, and only if the
-  `orchestra-bridges` package is installed in Orchestra's environment (installing it is the human's).
-- RabbitMQ is not a bridge: it is a preset for Orchestra's own `[[sources]]` (last section).
+- **the kits** (`orchestra_bridges.kits`): `CachedClient` (read-only HTTP with a disk cache of only
+  what the script keeps, a per-host rate limit shared by every process, retries, the token in
+  memory), `Poller` (the interval loop, the cursor, each event published once, the series for a
+  `[[collect]]`), `Prometheus`, and the runner every scaffolded script shares;
+- **the fakes** (`kits.fakes`: `FakeGitHub`, `FakeJira` in both flavours, `FakeSlack`,
+  `FakePagerDuty`, `FakePrometheus`, and `FakeServer` for a system no kit knows), in the systems'
+  real shapes, with a canary in every text so a test shows none of it leaves;
+- **the templates and the scaffold**: `orchestra bridges scaffold <kit> <name>` writes a collector
+  (`machine.toml`, `<name>.py`, `test_<name>.py`, `AGENTS.md`) that a coding tool adapts.
+  `examples/integrations/scaffolded/` in this repository is exactly what each kit writes;
+- **the clearance gate**: a scaffolded script reads only a fake on this machine until its
+  `machine.toml` says the owner approved;
+- **`orchestra bridges integrations`**: every scaffolded collector, its clearance, where its token
+  is (by name), whether its entries are written and the guesses left. Read-only.
 
-## How a change takes effect
+The kits are installed only if the `orchestra-bridges` package is in Orchestra's environment
+(installing it is the human's). The direct readers this plugin once had (`[bridges.github]`,
+`[bridges.github_prs]`, `[bridges.jira]`, `[bridges.slack]`, `[bridges] people`) were retired on
+2026-11-01: a section of theirs is refused by the plugin's check, with the kit that replaces it.
 
-- Change settings only through `project.config_edit`. It runs the plugin's check
-  (`Plugin.check`, `orchestra_bridges.check.check`) by itself; pass no `check=`. The check runs
-  every configured section through the bridge's own reader, and also reports a key no bridge reads
-  (a misspelt key is otherwise silently ignored), a `[bridges.<x>]` that is no bridge, and two
-  bridges on one `/metrics` port. config_edit refuses a change that makes it say something new,
-  with `bridges:` before what it said.
-- Set a new section's required keys in **one** change (`set_many`): `[bridges.jira]` without
-  `api` and one of `projects`/`jql`, or `[bridges.github]` or `[bridges.github_prs]` without `repos`, is refused.
-- Adding a section starts its bridge at once; removing it stops it; changing a setting in it (or
-  `[bridges] people`) restarts it with the new value within seconds. A changed identity map file
-  (`people.toml` itself) is read only when the bridge next starts.
-- What the check cannot see (tokens, network, a repository the token cannot read) shows only when
-  the bridge runs. One that cannot start (no token, port taken) exits with code 2 and is retried
-  with backoff; after 5 failures in a row, each within 60 s of starting, the launcher gives up until
-  its section changes (fixing the setting is enough) or `orchestra run` restarts. A token fixed
-  outside the configuration needs a change to the section or that restart. Its log:
-  `<state>/logs/machines/bridges.<section>.log`.
+## A poller is a relay, never a machine
 
-## Where each setting goes
+A scaffolded poller publishes what people and bots did in the other system, as them:
+`person.<system>.<account>`, `bot.<system>.<app>`, or `bot.<system>` for the system's own act.
+It announces each of them once and never announces itself or publishes as its own name; those
+actors appear on the Machines page once they act. Its measurement is an instrument (the
+`[[collect]]` entry that runs `<name>.py measure`). So never declare the poller as a machine, and
+never schedule it as a role or a workflow item: the system itself is what you declare (managed
+elsewhere, heard as `bot.<system>`), with its expected effect on the stock it fills.
 
-- **Never a credential, in either file.** Tokens come from `gh`, the environment or a token file
-  (next section). The Jira, Slack and GitHub PR readers refuse a `token` key; the check refuses it
-  everywhere.
-- **The repository's `orchestra.toml`** (committed, shared with the team): what the team agrees to
-  watch: `[bridges.github]` and `[bridges.github_prs]` repositories, branch globs, labels.
-- **The private overlay** (never committed): what is the owner's own. `[bridges.slack]` belongs
-  there: it reads the owner's pings with the owner's token, and in the repository it would start a
-  Slack bridge for every teammate who runs `orchestra run`. So do Jira `email`, `token_file`, and
-  a Jira section whose levels are about "mine" (the token's owner). A table merges key by key, so
-  the overlay can also change one key of a section the repository has.
+## Where a collector lives
+
+- **The owner's repository**, `.orchestra/machines/<name>/` (the scaffold's default, `--root repo`;
+  `integrate_system`'s `root: repository`). A coding tool or the Coordinator's worker edits it
+  there and a pull request lands it, like any other code. The scaffold writes files and never
+  commits.
+- **The state directory**, `~/.orchestrator/<key>/machines/<name>/` (`--root state`), only when
+  the owner says their repository must stay clean. It is then nobody's code review: say so.
+- **Beside the private overlay** (`--root overlay`), only when the overlay lives in a private
+  repository of the owner's.
+
+An existing directory is never overwritten: pick another name, or remove the old one on the
+owner's word.
+
+## Choosing a kit
+
+| The system | Kit | What the template relays and measures |
+|---|---|---|
+| GitHub issues and pull requests | `github` | `github.pr.opened`, `.synchronize`, `.labeled`, `.unlabeled`, `.review_requested`, `.approved`, `.changes_requested`, `.commented`, `.merged` (`.closed`, `.reopened`), `github.checks.completed`, `github.issue.opened`, `.labeled`, `.closed`, `.reopened`; `github_issues_open`, `github_prs_open{review}` |
+| Jira, Data Center or Cloud | `jira` | `jira.issue.created`, `.assigned`, `.transitioned`; `jira_issues{status, category}` |
+| A Slack channel's history | `slack` | `slack.message.posted`; `slack_channel_messages_last_hour{channel}` |
+| PagerDuty | `pagerduty` | `pagerduty.incident.triggered`, `.acknowledged`, `.resolved`; `pagerduty_incidents_open` |
+| A Prometheus API (Chronosphere, Mimir) | `promql` | a few PromQL answers as gauges; prefer Orchestra's own `[[sources]]`, which reads in place with no code |
+| Any other JSON API | `http` | a guess at an API no kit knows, for a coding tool to adapt |
+
+- **GitHub's names are one vocabulary**: the Workflows plugin's examples wait on exactly these
+  (`team_review`, `delivery_sail`). A script that renames them breaks every workflow that waits on
+  GitHub. The subject is `<owner>/<name>#<number>`; a workflow whose item is a ticket maps the
+  branch to the ticket key in the script. `branches` (globs, `agent/*`) and `labels` (`SAIL`) narrow
+  the pull requests followed; with neither, all. Infer `repo` from `git remote -v`; GitHub
+  Enterprise is `base_url = "https://<host>/api/v3"`. Cost: a page of each list a poll, about two
+  requests per pull request updated and one or two per open one awaiting its checks; the 5,000 an
+  hour is per token, shared with the owner's own `gh`.
+- **Jira's flavour** (`[settings] flavour`): `cloud` speaks REST API v3 (`/rest/api/3/search/jql`,
+  paged by `nextPageToken`; Cloud removed `/search`), names people by account id and logs in with
+  the account's email and an API token (HTTP Basic: `user_file` or `user_env` names the email);
+  `datacenter` speaks REST API v2 (`/rest/api/2/search`), names people by user name and sends a
+  personal access token as Bearer. `auto` (the template's) is `cloud` on `*.atlassian.net` and
+  `datacenter` anywhere else; a Cloud site on its own domain needs `cloud` said. The owner's work
+  Jira is Data Center. `jql` is the scope, without `ORDER BY` (the script adds its own); infer the
+  project keys from branch names and commit messages (`ABC-123`), and confirm them.
+- **Slack**: reading a channel's history needs a token with `channels:history` (a bot added to the
+  channel, `xoxb-`, or the owner's user token, `xoxp-`); the owner's own pings (mentions of them,
+  their DMs, their groups) need a user token (`search:read`), since a bot cannot search; posting is
+  a bot token's (`chat:write`) and an Outbox draft, never the kit. An app-configuration token
+  (`xoxe.`) reads nothing. `channels` are ids (`C0123`), not names.
+- **Values marked `# guess`** in `machine.toml` (the site, the repository, the scope) are the
+  template's placeholders: each is the owner's to give, and `integrations` counts what is left.
+
+## The fake first
+
+The scaffold prints the test command with Orchestra's own Python
+(`<orchestra's python> -m pytest .orchestra/machines/<name>/test_<name>.py -q`): that Python has
+the kits and pytest; `uv run` in the owner's repository uses their environment, which may have
+neither. `integrate_system` runs it for you. The test starts the kit's fake, polls it twice with a
+restart between, runs `measure`, and checks the events, the series, that nothing was published
+twice and that no text or token left.
+
+- **A fake never gets a credential.** Against a loopback URL the runner reads no token and no
+  account and sends placeholders (`[settings] fake_token`, `fake_user`, else the kit's), so a real
+  token in the environment or a file is sent only to the real host.
+- **The cards say it is a fake.** Each actor relayed from a fake is announced with `fake` (and a
+  script's `[notes]` add `stand_in` or `disabled`): one line on that machine, the program's own
+  words. A demo against fakes is honest about it.
+- A failing test, or a system the kits have no template for, is code: `integrate_system` hands it
+  to the Coordinator, and a worker adapts the script until its test passes. Never write it yourself.
 
 ## Credentials: the human's to create, yours to point at
 
-| Bridge | What it uses, in order |
-|---|---|
-| github, github_prs | `GH_TOKEN` or `GITHUB_TOKEN` (for an Enterprise `api`: `GH_ENTERPRISE_TOKEN` or `GITHUB_ENTERPRISE_TOKEN`), else `gh auth token --hostname <api's host>`: the owner's `gh` login is enough |
-| jira | `JIRA_API_TOKEN`, else the file `JIRA_API_TOKEN_FILE` names, else `token_file`, else `~/.config/orchestra-bridges/jira-token`. `jira_<name>` reads `JIRA_<NAME>_API_TOKEN`, `.../jira_<name>-token`. `token_env` in the section names another variable |
-| slack | `SLACK_USER_TOKEN`, else `SLACK_USER_TOKEN_FILE`, else `token_file`, else `~/.config/orchestra-bridges/slack-token`. `token_env` in the section names another variable |
+- **A file first**: `token_file` (and `user_file`), a `chmod 600` file outside any repository
+  (`~/.config/orchestra-bridges/<system>-token`), read only by this script. **An environment
+  variable second**: `token_env` names it (never holds it), and it must be in the environment
+  `orchestra run` starts with; every program `orchestra run` starts inherits that environment, so a
+  token there reaches them all.
+- `approve_integration` records the references the owner named in `machine.toml`; a path inside a
+  repository, or a value that looks like a token, is refused. It reports whether the file is there
+  and `chmod 600`, never what is in it.
+- Never ask for a token, never accept one pasted into the chat, never write one anywhere. Tell the
+  owner where the file goes and that it must be `chmod 600`.
+- `[bridges.kits] tokens = { jira = "JIRA_API_TOKEN" }` names a variable per kit for the whole
+  project, when a script names none.
 
-- A token file must be **outside the repository** and **`chmod 600`**, or the bridge refuses it.
-- Prefer files to environment variables: `orchestra run` passes its environment to every process
-  it starts, so a token in it reaches every machine.
-- Jira Data Center: a personal access token (read access is enough), sent as Bearer. Jira Cloud:
-  an API token plus the account's email (`email`, or `JIRA_EMAIL` / `JIRA_<NAME>_EMAIL`).
-- Slack: a **user** token (`xoxp-`), from a Slack app the owner creates, with user scopes
-  `search:read` (always) and `reactions:read` (for the default checkmark rule). A bot token cannot
-  search. A workspace may require an admin to approve the app.
-- Never ask the human to paste a token to you, and never write one anywhere. Tell them where the
-  file goes and that it must be `chmod 600`.
+## Clearance
 
-## Settings every bridge has
+`clearance = "needs approval"` (the template's) means the script reads only a fake on this
+machine and refuses the real system before any request. The owner's quoted yes, through
+`approve_integration`, writes `clearance = "approved"` and the `data_class` (metadata only, by the
+kits' rules). You never write the clearance yourself, and a poller started before it does no harm:
+it logs `waiting for approval` once, reads nothing, and starts the moment `machine.toml` says
+approved.
 
-```toml
-[bridges.github_prs]
-repos = ["acme/service"]
-every = "60s"          # pause after each round (at least 5s); the round's own time adds to it
-lookback = "1h"        # first start only: how far back to read
-max_catchup = "48h"    # after a gap, how far back it reads at most
-overlap = "10m"        # each poll re-reads this much before the last
-host = "127.0.0.1"     # where /metrics listens
-port = 9466            # where /metrics is served; 0 = any free port and no scrape
-```
+## What runs it: the entries `approve_integration` writes
 
-- Durations: a number is seconds; a string takes `ms`, `s`, `m`, `h`, `d` or `w`.
-- `every` trades freshness for requests. Waits are measured in minutes, so 60 s is right almost
-  everywhere; raise it for many repositories or pull requests (rate limits, per bridge below). A
-  gap (a laptop asleep, a bridge stopped) is noticed only when a poll comes more than 3 × `every`
-  after the last good one.
-- `lookback` matters only the very first time (nothing of the bridge's on the bus or in the store).
-  A long one publishes history as if new; `1h` is a safe start.
-- `max_catchup` bounds the catch-up after a gap; what lies beyond is lost and counted as an
-  unrecovered gap. Larger costs a burst of requests after a long sleep; 48 h covers a weekend
-  only partly; `72h` if the laptop sleeps over weekends and the rate limits allow.
-- `overlap` covers late arrivals (search indexing, Jira's clock, a comment stamped before a close
-  already read). Re-reading never duplicates (ids are the system's). GitHub issue counts wait this
-  long before counting an event. Keep `10m`; larger than the clock skew between Jira and here.
-- `host`: keep `127.0.0.1`. A wildcard (`0.0.0.0`) exposes the counts to the network; the human
-  decides that.
-- `port`: defaults 9464 (github), 9465 (slack), 9466 (github_prs), 9467 (jira); a `jira_<name>`
-  section must name its own. Change one only on a clash with something else on the machine (the log
-  says the port is taken). `port = 0` leaves the counts unstored and a restart without its last
-  poll, so avoid it outside tests. A project's own `[[scrape]]` named `bridges.<section>` replaces
-  the plugin's and must keep exactly that name: a restarted bridge finds its counts by it.
-
-## GitHub issues: `[bridges.github]`
-
-Publishes issues opened, commented, labelled, closed, reopened (pull requests left out), and
-measures first response: issues waiting for anyone but their author.
+Both go to the owner's private overlay through `config_edit`, after the approval and never before
+(a `[[collect]]` written early fails every round):
 
 ```toml
-[bridges.github]
-repos = ["acme/service", "acme/web"]   # owner/name
-bots_answer = false                    # true: a bot's comment or close counts as a first response
-api = "https://api.github.com"         # GitHub Enterprise: https://<host>/api/v3
+[[machines]]                      # the poller's process: known to Orchestra only as a process
+name = "jira_poll"
+command = "python .orchestra/machines/jira_poll/jira_poll.py"
+restart = "always"
+
+[[collect]]                       # the instrument that stores its measurement
+name = "jira_poll"
+command = "python .orchestra/machines/jira_poll/jira_poll.py measure"
+every = "5m"
+timeout = "60s"
 ```
 
-- **`repos` is required.** There is no default: a section without it is refused
-  (`[bridges.github] repos is required`), so set it in the same change that adds the section.
-- Infer `repos` from `git remote -v` (`git@github.com:acme/service.git` → `acme/service`). A remote
-  on another host is GitHub Enterprise: `api = "https://<host>/api/v3"`, and the owner needs
-  `gh auth login --hostname <host>`.
-- `bots_answer`: false unless a bot's reply is a real answer for this team (a support bot that
-  triages and replies). Labels never count as an answer.
-- Cost: at least three paged lists per repository per round, 180 requests an hour per repository
-  at 60 s. The 5,000 an hour is per token, shared with the PR bridge and the owner's own `gh` use.
+- `python` is Orchestra's own Python, and the launcher runs each command from the repository's
+  root, so a script in the repository is named by its path there (one in the state directory, by
+  its full path).
+- `every` is the template's `[settings] every`, 5 minutes: the owner's rule is a live read at most
+  every 5 minutes per system. Raise it on a large scope or a shared rate limit; never lower it
+  without asking. `per_minute` and `ttl` (a little under `every`) are in the same `[settings]`.
+- A promql-only measurement has no `[[machines]]` entry; a store read in place is a `[[sources]]`
+  entry instead (`auth.bearer_file` or `auth.bearer_env`).
 
-## GitHub pull requests: `[bridges.github_prs]`
-
-Follows pull requests to merge or close: opened, pushed, review requested and submitted, line
-and conversation comments, labels, checks, merged, closed, reopened. Measures what waits on whom
-(awaiting review, awaiting changes, approved, checks failing, awaiting a label's result).
+## `[bridges.kits]`: the project's settings for every collector
 
 ```toml
-[bridges.github_prs]
-repos = ["acme/service"]            # required
-branches = ["agent/*", "fix/*"]     # follow pull requests whose head branch matches a glob,
-labels = ["SAIL"]                   # or that carry one of these labels; neither: all of them
-checks = true                       # read the head's check runs and statuses each round
-
-[bridges.github_prs.label_results]
-SAIL = ["SAIL-passed", "SAIL-failed"]   # carrying SAIL and neither result: awaiting a result
+[bridges.kits]
+ttl = "4m"                                   # how long a cached answer is served
+per_minute = 60                              # the default request rate per host, for every collector
+hosts = { "jira.acme.com" = 20 }             # a host's own rate: what its administrators allow
+tokens = { jira = "JIRA_API_TOKEN" }         # a kit's variable NAME, when a script names none
+ca_file = "~/.config/orchestra-bridges/corporate-ca.pem"   # trusted beside the system's CAs
 ```
 
-- Narrow with `branches` to the branches machines push (the agents' or a bot's prefix: look at
-  `git branch -r` and the agents' configuration) when the owner cares about those only; leave both
-  empty to follow every pull request. A followed one stays followed until merged or closed.
-- `label_results`: for a pipeline driven by labels (a label submits, others report). Read the
-  repository's `.github/workflows` for `on: pull_request: types: [labeled]` and the labels they
-  test and set. Applying the submitting label stays the owner's act; the bridge never labels.
-- Cost: about 2 requests a repository plus 3 per open followed pull request each round (1 without
-  checks), plus one per new review and per new head. Ten open pull requests at 60 s use about
-  1,900 of the 5,000 an hour. On a busy repository raise `every`, narrow `branches`, or set
-  `checks = false` (then `github_prs_checks_failing` is not measured). On a primary limit run out it
-  waits for the reset when that is within 15 minutes, else the poll fails and the next tries.
-- Only the first 100 check runs on a head are read. A machine acting through the owner's GitHub
-  account appears as the owner.
+It is checked by `config_edit` like the rest (`a token never goes in orchestra.toml`; an unknown
+key is refused); `cache_dir` moves the cache from `<state>/kits/cache`. **Behind a corporate
+proxy**, `HTTPS_PROXY` and `NO_PROXY` in the environment of `orchestra run` are honoured by every
+collector (a fake on this machine never goes through a proxy); a proxy that re-signs TLS needs its
+CA: `ca_file` here for every collector, `[settings] ca_file` for one, or `SSL_CERT_FILE` for
+everything in the process (a bundle holding the public CAs too).
 
-## Jira: `[bridges.jira]`, `[bridges.jira_<name>]`
+## Writes are never the kits'
 
-Publishes issues created, assigned, transitioned, updated (sprint, priority, labels, links, due
-date) and commented. Measures issues by status category, the owner's not-started issues and
-comments on them the owner has not answered.
+A collector only reads: no comment, label, transition, reaction or message, ever. An act in the
+other system as the owner (a SAIL label, a ticket moved to Done, a Slack post) is an Outbox draft,
+which the owner's approval settings govern (the Workflows plugin's `outbox: owner` step). The fakes
+accept `PUT`, `POST` and `DELETE` (labels, transitions, reviews, merges) only so a test can change
+the world between polls, and so the Outbox's own tests have something to write to.
 
-```toml
-[bridges.jira]
-api = "https://jira.acme.com"   # required; https (http only to a loopback fake)
-deployment = "datacenter"       # or "cloud"; default: cloud on *.atlassian.net, else datacenter
-projects = ["ABC", "OPS"]       # project keys, or instead:
-# jql = "project = ABC AND component = api"   # exactly one of projects and jql
-done_every = "1h"               # how often done issues are counted; 0 = never
-bots_ask = false                # true: a bot's comment waits for the owner's answer too
-# sprint_field = "customfield_10100"          # only if the sprint field found is wrong
-# token_file = "~/.config/orchestra-bridges/jira-token"   # a path, never the token
-```
+## What goes wrong
 
-- **The owner's Jira is Data Center**, on the company's own host: the default for any `api` not on
-  `*.atlassian.net`. Set `deployment = "cloud"` only for a Cloud site on a custom domain.
-- Infer `api` and `projects` from the codebase: issue keys in branch names and commit messages
-  (`ABC-123` → `ABC`), `/browse/ABC-1` links in READMEs, PR templates or CI config (their host is
-  `api`). Keys: an upper case letter, then upper case letters, digits or `_`.
-- `jql` is for a narrower scope (a component, a team's label). It is wrapped in parentheses and
-  given its own clauses, so it must not contain `ORDER BY`. Prefer `projects` when it fits.
-- `done_every` reads every done issue's key: hourly is right; `0` on a huge project.
-- `sprint_field` is found from the site's fields (the Jira Software sprint type). Set it only when
-  the site has several and the wrong one is picked.
-- `email` is Cloud only (the account the API token belongs to); it is personal, so the overlay.
-- **A second site** (a FedRAMP instance, say) is its own section with its own `api`, scope, token
-  and a required `port`. Name it `jira_` plus lower case letters or digits:
-
-```toml
-[bridges.jira_fedramp]
-api = "https://jira.fedramp.acme.com"
-projects = ["CUST"]
-port = 9468
-```
-
-- Cost: about four searches a round, a page per 50 issues, plus one request per changed issue
-  whose changelog or comments the search cut short. A 429 or 503 is waited out (at most 15 min).
-  A Data Center admin may rate-limit tokens; if the log shows 429s, raise `every`.
-- The owner is the token's account. On start the log says if that account is not in the identity
-  map and names the value to list (`jira = "<username>"`, or the Cloud account id).
-
-## Slack pings: `[bridges.slack]` (the overlay)
-
-Measures the owner's promise to answer pings: mentions of the owner, DMs, mentions of the owner's
-groups; what is waiting and how long answers took. It reads every message that mentions the owner
-(text in memory only): enabling it is the human's decision.
-
-```toml
-[bridges.slack]
-answered = ["reaction", "reply"]   # what answers a ping: a checkmark, the owner's reply, or both
-reactions = ["white_check_mark", "heavy_check_mark"]   # names without colons
-groups = ["S0123ABCD"]             # user group ids whose mentions are pings too
-dms = true                         # whether a direct message is a ping
-expire = "168h"                    # an unanswered ping stops waiting after this
-```
-
-- `answered` defines the promise; ask the human how they answer. The default is `["reaction"]`
-  only: then a ping answered only by replying waits until `expire` and counts as expired. Someone
-  who replies as often as they react wants both. It can never be empty.
-- A checkmark's time is unknown to Slack's API, so its answer is stamped when seen (up to a poll
-  late); a reply has its own time. `reactions.list` reads the owner's 500 latest reactions at most.
-- `groups`: user group ids (`S…`, from the group's page in Slack), not handles. Only the human
-  knows which groups count as pinging them.
-- `expire`: a ping not answered by then is dropped from the waiting stock and counted as expired.
-  7 days is right for most; shorter if pings go stale sooner.
-- `queries` replaces all the default searches (`<@{me}>`, one per group, `to:<@{me}>` when `dms`;
-  `{me}` is filled with the owner's member id). Set it only if the bridge's log shows real pings
-  missed; a replacement must keep the group and DM searches or those pings are never found.
-- `api` must be https on slack.com (or a loopback fake); leave it.
-- Cost: per poll, one `search.messages` per search per page of 100, one more search with the reply
-  rule, and up to five `reactions.list` while a ping waits under the checkmark rule. Well under
-  Slack's limits at 60 s; a `Retry-After` longer than `every` fails that poll.
-- Waits are wall-clock, nights and weekends included.
-
-## The identity map: `[bridges] people`
-
-```toml
-[bridges]
-people = "people.toml"   # relative to the repository root, or an absolute path
-```
-
-One file for every bridge, so one person is one machine across systems. Without it, people are
-`person.<login>` (GitHub), `person.jira.<user>` and `person.slack.<handle>`. A missing file means
-nobody is listed (silently); a file that is not valid TOML stops every bridge at start. `~` is not
-expanded here: use an absolute path for a file outside the repository (the owner's private map;
-set `bridges.people` in the overlay then).
-
-```toml
-[people.daniel]
-name = "Daniel Lewis"
-team = "sre"
-github = "danroblewis"
-jira = "dlewis"          # Data Center: username or user key (JIRAUSER10100); Cloud: account id
-slack = "U012AB3CD"      # member id or handle
-
-[people.automation]
-name = "Jira automation"
-bot = true               # a program, not a person; its comments never wait for an answer
-jira = ["automation", "jira-bot"]
-```
-
-- Always list the owner: their answers and their Jira levels then carry their name and team.
-- Infer candidates from `CODEOWNERS` (GitHub logins and teams) and `git log` names, but joining
-  accounts across systems is a claim about people: confirm with the human before writing it.
-
-## RabbitMQ: counted traffic (Orchestra's `[[sources]]`)
-
-Not a bridge and not a `[bridges]` section: the file `orchestra_bridges/rabbitmq/preset.toml` in
-this package defines series over RabbitMQ's own per-queue counts, for a project's `[[sources]]`.
-
-```toml
-[[sources]]
-name = "rabbit"
-url = "http://127.0.0.1:8441"   # the Prometheus-compatible store that scrapes RabbitMQ
-preset = "/path/to/orchestra_bridges/rabbitmq/preset.toml"   # where the package is installed
-settle = "30s"                  # VictoriaMetrics hides the newest 30 s from range queries
-
-[sources.producers]             # exchange = the machine that publishes into it
-orders = "orders-api"
-```
-
-- Needs the `rabbitmq_prometheus` plugin's `/metrics/detailed` scraped into that store with the
-  families the preset's header lists. Setting that up is infrastructure: the human's.
-- A queue is read as its consumer's by name, `<consumer>.<anything>`; each queue must be bound to
-  one exchange. Other naming needs a copy of the preset with a changed regex.
-- RabbitMQ never names publishers. Fill `[sources.producers]` from the code (`basic_publish` and
-  the exchange each service names); unnamed producers are drawn unattributed, which is honest.
-
-## A system no bridge reads: the kits (`orchestra bridges scaffold`)
-
-For PagerDuty, a Slack channel's history, a Jira query the bridge does not cover, series from a
-Prometheus API, or any JSON API (`http`), write a poller from a kit: `orchestra bridges scaffold
-<jira|slack|pagerduty|promql|http> <name>` writes `<state>/machines/<name>/` (`--root overlay` beside the private overlay, `--root repo`
-for a pull request only). Run its test against the fake first; read its `AGENTS.md` for what it may
-do; values marked `# guess` in `machine.toml` are the owner's to give. After the owner's approval
-(clearance and the token's variable name written), add the two entries it prints (`[[machines]]`
-for the poller, `[[collect]]` for its `measure`) with `config_edit`, target overlay. An entry
-written early does no harm: an uncleared poller logs `waiting for approval` once and reads nothing
-until approved. `orchestra bridges integrations` lists every scaffolded machine, its clearance,
-its token's variable name, whether it is scheduled and the guesses left. Its `machine.toml` says `clearance = "needs
-approval"`: it reads only a fake until the human approves reading the system; you never change that
-yourself. Its token is named by environment variable (`[settings] token_env`), never written.
-`[bridges.kits]` (`per_minute`, `hosts`, `tokens`, `ttl`, `cache_dir`) is checked like the rest.
-
-## Checking that it works
-
-1. config_edit accepted the change with the bridges' check: the settings read.
-2. The process `bridges.<section>` is running, and its log shows `serving http://…/metrics`, then
-   `resumed: …`, then one line a round (`N new events; …`). `poll failed, tried again next round:
-   GET <path>: HTTP 401` is a bad or expired token; `403` a missing scope or a rate limit; `404` a
-   wrong repository, or one the token cannot see.
-3. The Instruments page lists `bridges.<section>` with its series (`github_issues_unanswered`,
-   `github_prs_open`, `jira_issues`, `slack_pings_unanswered`, and the gap counts).
-4. People appear on the Machines page only when they act: a quiet repository shows none for a while.
+- **`HTTP 401`** in the script's log (`<state>/logs/machines/<name>.log`): a bad or expired token,
+  or for Jira Cloud a token without its account's email. **`403`**: a missing scope, or a rate
+  limit. **`404`**: a wrong repository, project or site, or one the token cannot see. **`410`**
+  from Jira: a Data Center script against Cloud (`flavour`).
+- **`waiting for approval`** forever: the clearance was never written; ask the owner.
+- **`reading … is not cleared`** and exit 2: `--once` or `measure` against the real host before the
+  approval (the `[[collect]]` written too early).
+- **A token named but not set**: `approve_integration` says so; the owner sets it and restarts
+  `orchestra run`, or (better) puts it in a file.
+- **No events but the series move**: nothing changed within the scope, or the scope is wrong
+  (`jql`, `channels`, `branches`); the first poll reads back only `lookback`.
+- **The same thing twice**: never from a re-read (an event's id is the item's id and its change's
+  stamp); two collectors over one scope, or a script edited to stamp by time, would.
+- **A dependency missing**: the kits not installed in Orchestra's Python (`python -c "import
+  orchestra_bridges.kits"`); pytest is a dependency of the plugin, so the test runs where the kits do.
 
 ## The human's decisions
 
 Ask; do not decide:
-- creating any token, Slack app or `gh` login, and the scopes granted;
-- which systems to read at all (Slack reads the owner's messages; Jira and GitHub read colleagues'
-  activity) and which repositories, projects or groups;
-- what counts as an answer (`answered`, `bots_answer`, `bots_ask`) and when a ping expires;
-- polling harder than the defaults, when it spends a shared rate limit;
-- exposing `/metrics` beyond loopback;
-- who is who in the identity map;
-- restarting `orchestra run` so a changed setting applies.
+- whether a system may be read at all, and the data class (their quoted yes);
+- creating any token, app or `gh` login, the scopes granted, and where it is kept (a file's path or
+  a variable's name; they put the token there);
+- the scope: which repositories, projects, channels or services;
+- whether the repository must stay clean (the state directory instead);
+- polling harder than every 5 minutes, or spending a rate limit others share;
+- every write to the system, each through the Outbox;
+- restarting `orchestra run` so an environment variable applies.
