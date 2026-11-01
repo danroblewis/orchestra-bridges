@@ -4,15 +4,19 @@ You are a coding tool working on this directory. Read this first; it is the whol
 
 ## What this is
 
-`chronosphere_series.py` is a small program with two halves:
+Two ways to bring Chronosphere's series in, in order of preference:
 
-- **the poller** (`python chronosphere_series.py`): every few minutes (`machine.toml`, `[settings] every`; 5
-  minutes by default) it reads what changed in a Prometheus API (Prometheus, Chronosphere, Mimir) and relays it as events on the project's
-  Orchestra bus: none: a metrics store has no item events, so it has no poller and no `[[machines]]` entry (its `make_poll` does nothing);
-- **the measurement** (`python chronosphere_series.py measure`): one read, printed as Prometheus text, which a
-  `[[collect]]` entry runs and stores: one gauge per configured query, named by its `name`, with the answer's labels (aliases applied).
+- **the `[[sources]]` entry** (`sources.toml`): Orchestra reads the store in place at each discovery,
+  under the entry's limits (`max_series`, `rate`, `max_requests_per_day`), with its label aliases
+  (`[sources.labels]`); nothing runs and nothing is copied. `python check_source.py` checks it
+  first (accepted, the store answers, the declared series come back, the aliases apply); the
+  Supervisor then adds the two tables through `config_edit`, the overlay by default;
+- **the fallback** (`python chronosphere_series.py measure`), when a series must be computed or
+  stored here: each query in `machine.toml` once, printed as Prometheus text for a `[[collect]]`
+  entry: one gauge per query, named by its `name`, with the answer's labels (aliases applied). A
+  metrics store has no item events, so it has no poller and no `[[machines]]` entry.
 
-It was scaffolded by `orchestra bridges scaffold promql chronosphere_series` from the orchestra-bridges kits
+The fallback was built with `orchestra bridges scaffold promql chronosphere_series` from the orchestra-bridges kits, then completed
 (`orchestra_bridges.kits`: `CachedClient`, `Prometheus`, `Poller`, `runner`).
 
 **The poller is a relay, never a machine** (Orchestra's rule 2, decision D19: the provider is never
@@ -46,7 +50,7 @@ against the kit's fake), this file.
   name. `keep`/`meta` in `chronosphere_series.py` decides what is cached and returned: keep it that strict.
   The test checks the fake's canary text appears in no output and no file.
 - **Never write to a Prometheus API (Prometheus, Chronosphere, Mimir).** Read-only: no comments, no transitions, no acknowledgements.
-- **Credentials by environment name only.** The token is read from `$PROMETHEUS_TOKEN` (the name is
+- **Credentials by environment name only.** The token is read from `$CHRONOSPHERE_TOKEN` (the name is
   `[settings] token_env`), kept in memory, sent only to `base_url`'s host. Never put a token in
   `machine.toml`, `orchestra.toml`, a test, a log line or a commit; never print it or ask for it in
   a chat. If it is missing, say which variable to set, and stop.

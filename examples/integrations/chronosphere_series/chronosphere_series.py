@@ -1,6 +1,7 @@
-"""chronosphere_series: series read from a Prometheus API (Prometheus, Chronosphere, Mimir, Thanos,
-VictoriaMetrics), printed for a ``[[collect]]`` entry (scaffolded from the orchestra-bridges kit
-``promql``; edit freely, AGENTS.md says what it may do).
+"""chronosphere_series, the fallback: series read from Chronosphere (any Prometheus API), printed for a
+``[[collect]]`` entry (built with ``orchestra bridges scaffold promql chronosphere_series``, then
+completed; AGENTS.md says what it may do). The preferred strategy is ``sources.toml`` beside this
+file, a ``[[sources]]`` entry Orchestra reads in place, checked by ``check_source.py``.
 
 A metrics store has no item events, so this has no poller: ``python chronosphere_series.py measure`` runs each
 query in ``[settings] queries`` (instant, at now) and prints one gauge per answer series, named by

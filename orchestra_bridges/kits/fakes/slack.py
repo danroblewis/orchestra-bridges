@@ -3,7 +3,7 @@
 ``has_more`` and ``response_metadata.next_cursor``; newest first) and ``users.info`` (``user``).
 Both answer HTTP 200 with ``ok: false`` and an ``error`` for a bad argument, as Slack does; a
 missing token is ``not_authed``. Paths are under ``/api/``. Every message text and real name
-carries the canary. ``post`` adds a message between polls."""
+carries the canary. ``post`` adds a message (with mentions) between polls."""
 
 from __future__ import annotations
 
@@ -17,10 +17,14 @@ class FakeSlack(FakeServer):
     fixture_name = "slack.json"
 
     # the test's controls
-    def post(self, channel: str, user: str, ts: str | None = None, thread_ts: str | None = None) -> str:
+    def post(self, channel: str, user: str, ts: str | None = None, thread_ts: str | None = None,
+             mentions: list[str] | None = None) -> str:
+        """A message by ``user`` (a reply when ``thread_ts``), mentioning ``mentions`` (member ids, as
+        ``<@U001>`` in its text); its ts."""
         with self._lock:
             ts = ts or f"{time.time():.6f}"
-            m = {"ts": ts, "user": user, "text": f"{CANARY} message"}
+            text = " ".join([CANARY, *(f"<@{u}>" for u in mentions or []), "message"])
+            m = {"ts": ts, "user": user, "text": text}
             if thread_ts:
                 m["thread_ts"] = thread_ts
             self.data["channels"].setdefault(channel, []).append(m)

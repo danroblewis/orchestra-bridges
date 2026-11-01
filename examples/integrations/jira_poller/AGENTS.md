@@ -8,11 +8,11 @@ You are a coding tool working on this directory. Read this first; it is the whol
 
 - **the poller** (`python jira_poller.py`): every few minutes (`machine.toml`, `[settings] every`; 5
   minutes by default) it reads what changed in Jira and relays it as events on the project's
-  Orchestra bus: `jira.issue.transitioned` once per status change (subject: the issue key; source: `person.jira.<login>`; data: from and to status);
+  Orchestra bus: `jira.issue.created` (source: the creator), `jira.issue.transitioned` (data: from and to status) and `jira.issue.updated` (data: the changed fields' names), once each (subject: the issue key; source: `person.jira.<login>`, `bot.jira` when no one);
 - **the measurement** (`python jira_poller.py measure`): one read, printed as Prometheus text, which a
-  `[[collect]]` entry runs and stores: `jira_issues{status, category}` (the issues in scope by status).
+  `[[collect]]` entry runs and stores: `jira_issues_total{status}` (the issues in scope by status), `jira_issue_age_seconds{status}` (the oldest not-done issue's age) and the poller's counters `jira_issues_created_total{status}`, `jira_issue_transitions_total{from_status, to_status}`.
 
-It was scaffolded by `orchestra bridges scaffold jira jira_poller` from the orchestra-bridges kits
+It was built with `orchestra bridges scaffold jira jira_poller` from the orchestra-bridges kits, then completed
 (`orchestra_bridges.kits`: `CachedClient`, `Prometheus`, `Poller`, `runner`).
 
 **The poller is a relay, never a machine** (Orchestra's rule 2, decision D19: the provider is never
@@ -22,7 +22,9 @@ person, `bot.jira` for the system's own act (`actor_source`). The kit announces 
 never announces itself, never publishes as `jira_poller`, and `Poller.emit` refuses any other source.
 The measurement is an instrument: it measures, never publishes.
 
-Files: `machine.toml` (its settings, clearance and the events it publishes), `jira_poller.py` (what it
+The counters are counted by the poller as it relays (Orchestra counts events by type and source
+only, never their `data`) and kept with its cursor; `measure` prints them from there. Files: `README.md`
+(what it emits and measures), `machine.toml` (its settings, clearance and the events it publishes), `jira_poller.py` (what it
 reads, keeps and publishes: `meta`/`keep_*`, `make_poll`, `measure`), `test_jira_poller.py` (its test
 against the kit's fake), this file.
 

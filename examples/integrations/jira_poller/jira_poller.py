@@ -11,11 +11,12 @@ acted (``person.jira.<login>``; ``bot.jira`` when no one did), with the issue ke
 - ``jira.issue.transitioned`` once per status change (stamp: the change's id; data: from, to);
 - ``jira.issue.updated`` once per other change (stamp: the change's id; data: the fields' names).
 
-Each relayed creation and status change is also counted, by status, for the measurement:
-``jira_issues_entered_total{status}`` (created into it, or moved into it) and
-``jira_issues_left_total{status}`` (moved out of it). Orchestra counts the events by type and
-source only (it never reads ``data``), so these counters are what balances the issues in each
-status. They are kept in the poller's ``cursor.json``: a restart neither loses nor repeats a count.
+Each relayed creation and status change is also counted for the measurement:
+``jira_issues_created_total{status}`` (created into the status) and
+``jira_issue_transitions_total{from_status, to_status}`` (moved from one status to another): one
+counter per move, so discovery can join the status it leaves to the status it enters as one flow.
+Orchestra counts the events by type and source only (it never reads ``data``), so these counters are
+what balances the issues in each status. They are kept in the poller's ``cursor.json``: a restart neither loses nor repeats a count.
 
 ``python jira_poller.py measure`` (for a ``[[collect]]`` entry): prints ``jira_issues_total{status}``
 (the issues in scope by status, a gauge), ``jira_issue_age_seconds{status}`` (how long ago the oldest
@@ -41,7 +42,7 @@ from orchestra_bridges.kits.pollstate import counters_at
 HERE = Path(__file__).resolve().parent
 API = "/rest/api/2"
 PAGE = 100
-ENTERED, LEFT = "jira_issues_entered_total", "jira_issues_left_total"
+CREATED, MOVED = "jira_issues_created_total", "jira_issue_transitions_total"
 
 
 def parse_time(jira_time: str) -> datetime:
@@ -92,17 +93,16 @@ def relay(p, issue: dict, created_since: float) -> None:
     """Publish what happened to one issue, once each, and count its moves between statuses."""
     key, changes = issue["key"], sorted(issue["changes"], key=lambda c: (parse_time(c["at"]), c["id"]))
     first = next((c["from"] for c in changes if c["from"] is not None), issue["status"])
-    if issue["created"] and parse_time(issue["created"]).timestamp() >= created_since:
-        if p.emit("jira.issue.created", key, {"status": first}, source=actor_source("jira", issue["creator"]),
-                  stamp="created", time=rfc3339(issue["created"])):
-            p.counter(ENTERED, 1, {"status": first}, help="Jira issues that entered the status (created or moved).")
+    new = bool(issue["created"]) and parse_time(issue["created"]).timestamp() >= created_since
+    if new and p.emit("jira.issue.created", key, {"status": first}, source=actor_source("jira", issue["creator"]),
+                      stamp="created", time=rfc3339(issue["created"])):
+        p.counter(CREATED, 1, {"status": first}, help="Jira issues created, by the status they were created in.")
     for c in changes:
         who, at = actor_source("jira", c["by"]), rfc3339(c["at"])
-        if c["to"] is not None:
-            if p.emit("jira.issue.transitioned", key, {"from": c["from"], "to": c["to"]}, source=who,
-                      stamp=c["id"], time=at):
-                p.counter(LEFT, 1, {"status": c["from"]}, help="Jira issues that moved out of the status.")
-                p.counter(ENTERED, 1, {"status": c["to"]}, help="Jira issues that entered the status (created or moved).")
+        if c["to"] is not None and p.emit("jira.issue.transitioned", key, {"from": c["from"], "to": c["to"]},
+                                          source=who, stamp=c["id"], time=at):
+            p.counter(MOVED, 1, {"from_status": c["from"], "to_status": c["to"]},
+                      help="Jira issues moved from one status to another.")
         if c["fields"]:
             p.emit("jira.issue.updated", key, {"fields": c["fields"]}, source=who, key=f"{key}/{c['id']}",
                    stamp="updated", time=at)
@@ -137,7 +137,7 @@ def measure(api, settings, series) -> None:
         if i["category"] != "done" and i["created"]:
             oldest[i["status"]] = min(oldest.get(i["status"], now), parse_time(i["created"]).timestamp())
     series.load_counters(counters_at(settings.poll_dir))
-    known = {dict(k).get("status") for t in series.counters.values() for k in t} - {None}
+    known = {v for t in series.counters.values() for k in t for n, v in k if n in ("status", "from_status", "to_status")}
     for status in sorted(set(counts) | known):         # a status emptied reads 0, not a gap
         series.gauge("jira_issues_total", counts.get(status, 0), {"status": status},
                      help="Jira issues in scope, by status (a level).")

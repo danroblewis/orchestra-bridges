@@ -4,9 +4,9 @@
 # First consider a [[sources]] entry: Orchestra reads such a store in place (INTEGRATING.md).
 name = "chronosphere_series"
 kit = "promql"
-description = "Runs a few PromQL queries against the company's Prometheus API each minute and prints their answers as gauges."
+description = "The fallback for Chronosphere: runs a few PromQL queries against its Prometheus API each minute and prints their answers as gauges. Preferred: the [[sources]] entry in sources.toml, checked by check_source.py (this file's clearance gates both)."
 engagement = "scheduled"
-created_by = "orchestra bridges scaffold"
+created_by = "orchestra bridges scaffold, then completed (I4)"
 # The compliance check: until the owner approves reading the store (then "approved", with the data
 # class), the program reads only a fake on this machine.
 clearance = "needs approval"
@@ -14,10 +14,11 @@ data_class = "unknown"
 
 [settings]
 base_url = "https://acme.chronosphere.io/data/metrics"   # the API root that serves /api/v1/query
-token_env = "PROMETHEUS_TOKEN"    # the NAME of the variable holding the API token; never the token
+token_env = "CHRONOSPHERE_TOKEN"  # the NAME of the variable holding the API token; never the token
+# token_file = "~/.config/orchestra-bridges/chronosphere-token"   # instead: a chmod 600 file outside any repository
 per_minute = 30
 ttl = "50s"                       # under the [[collect]] entry's every
-max_series = 200                  # an answer with more series fails: narrow the query
+max_series = 50                   # an answer with more series fails: narrow the query
 aliases = { k8s_cluster = "cluster" }   # the store's label -> the project's name for it
 
 [[settings.queries]]

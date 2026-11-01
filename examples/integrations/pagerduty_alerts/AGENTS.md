@@ -8,11 +8,11 @@ You are a coding tool working on this directory. Read this first; it is the whol
 
 - **the poller** (`python pagerduty_alerts.py`): every few minutes (`machine.toml`, `[settings] every`; 5
   minutes by default) it reads what changed in PagerDuty and relays it as events on the project's
-  Orchestra bus: `pagerduty.incident.triggered`, `.acknowledged`, `.resolved` (subject: the incident's id; source: `person.pagerduty.<user id>`, or `bot.pagerduty` when the service changed it);
+  Orchestra bus: `pagerduty.incident.triggered`, `.acknowledged`, `.resolved` once per change (subject: the incident's id; source: `person.pagerduty.<user id>`, or `bot.pagerduty` when the service changed it);
 - **the measurement** (`python pagerduty_alerts.py measure`): one read, printed as Prometheus text, which a
-  `[[collect]]` entry runs and stores: `pagerduty_incidents_open{service, urgency}`, `pagerduty_incidents_open_total`.
+  `[[collect]]` entry runs and stores: `pagerduty_incidents_open_total{urgency}` (the open incidents) and the poller's counters `pagerduty_incidents_triggered_total{urgency}`, `pagerduty_incidents_resolved_total{urgency}`.
 
-It was scaffolded by `orchestra bridges scaffold pagerduty pagerduty_alerts` from the orchestra-bridges kits
+It was built with `orchestra bridges scaffold pagerduty pagerduty_alerts` from the orchestra-bridges kits, then completed
 (`orchestra_bridges.kits`: `CachedClient`, `Prometheus`, `Poller`, `runner`).
 
 **The poller is a relay, never a machine** (Orchestra's rule 2, decision D19: the provider is never
@@ -22,7 +22,9 @@ person, `bot.pagerduty` for the system's own act (`actor_source`). The kit annou
 never announces itself, never publishes as `pagerduty_alerts`, and `Poller.emit` refuses any other source.
 The measurement is an instrument: it measures, never publishes.
 
-Files: `machine.toml` (its settings, clearance and the events it publishes), `pagerduty_alerts.py` (what it
+The counters are counted by the poller as it relays (Orchestra counts events by type and source
+only, never their `data`) and kept with its cursor; `measure` prints them from there. Files: `README.md`
+(what it emits and measures), `machine.toml` (its settings, clearance and the events it publishes), `pagerduty_alerts.py` (what it
 reads, keeps and publishes: `meta`/`keep_*`, `make_poll`, `measure`), `test_pagerduty_alerts.py` (its test
 against the kit's fake), this file.
 

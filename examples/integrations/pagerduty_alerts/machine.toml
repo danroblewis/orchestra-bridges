@@ -4,9 +4,9 @@
 # engagement, [[publishes]]); never by Orchestra, which knows the actors by their events.
 name = "pagerduty_alerts"
 kit = "pagerduty"
-description = "Polls PagerDuty's incidents every 5 minutes and relays pagerduty.incident.<status> once per change, as who changed it; measure prints the open incidents by service and urgency."
+description = "Polls PagerDuty's incidents every 5 minutes and relays pagerduty.incident.<status> once per change, as who changed it; measure prints the open incidents by urgency and the incidents that opened and closed."
 engagement = "scheduled"
-created_by = "orchestra bridges scaffold"
+created_by = "orchestra bridges scaffold, then completed (I4)"
 # The compliance check: until the owner approves reading PagerDuty (then "approved", with the
 # data class), the program reads only a fake on this machine.
 clearance = "needs approval"
@@ -15,6 +15,7 @@ data_class = "unknown"
 [settings]
 base_url = "https://api.pagerduty.com"
 token_env = "PAGERDUTY_TOKEN"     # the NAME of the variable holding a read-only REST API key; never the key
+# token_file = "~/.config/orchestra-bridges/pagerduty-token"   # instead: a chmod 600 file outside any repository
 every = "5m"
 per_minute = 30                   # PagerDuty allows far more; stay polite
 ttl = "4m"                        # a cached answer is served this long (shorter than every)
@@ -23,11 +24,23 @@ open_statuses = ["triggered", "acknowledged"]
 [[publishes]]
 type = "pagerduty.incident.triggered"
 subject = "the incident's id (PABC123)"
+source = "bot.pagerduty (the service triggered it), or person.pagerduty.<user id>"
+data = "number, urgency, service (its id)"
 
 [[publishes]]
 type = "pagerduty.incident.acknowledged"
 subject = "the incident's id"
+source = "person.pagerduty.<user id> who acknowledged it"
 
 [[publishes]]
 type = "pagerduty.incident.resolved"
 subject = "the incident's id"
+source = "person.pagerduty.<user id> who resolved it, or bot.pagerduty (an auto-resolve)"
+
+[[measures]]
+series = "pagerduty_incidents_open_total{urgency}"
+kind = "gauge: the open (triggered or acknowledged) incidents of each urgency (a level)"
+
+[[measures]]
+series = "pagerduty_incidents_triggered_total{urgency}, pagerduty_incidents_resolved_total{urgency}"
+kind = "counters: incidents first seen open, and incidents that stopped being open (the level's flows)"

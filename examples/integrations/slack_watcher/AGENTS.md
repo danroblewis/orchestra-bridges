@@ -8,11 +8,11 @@ You are a coding tool working on this directory. Read this first; it is the whol
 
 - **the poller** (`python slack_watcher.py`): every few minutes (`machine.toml`, `[settings] every`; 5
   minutes by default) it reads what changed in Slack and relays it as events on the project's
-  Orchestra bus: `slack.message.posted` (subject: `<channel>/<thread ts>`; source: `person.slack.<member id>` or `bot.slack.<id>`; data: channel, reply or not, bot or not);
+  Orchestra bus: `slack.message.posted` once per message (subject: `<channel>/<thread ts>`; source: `person.slack.<member id>` or `bot.slack.<id>`; data: channel, reply, bot, the watched members it mentions, whether it answers one), or with `publish = "mentions"` only the mentions of watched members and their answers;
 - **the measurement** (`python slack_watcher.py measure`): one read, printed as Prometheus text, which a
-  `[[collect]]` entry runs and stores: `slack_channel_messages_last_hour{channel}`.
+  `[[collect]]` entry runs and stores: the poller's counters `slack_messages_total{channel}`, `slack_mentions_total`, `slack_mentions_answered_total`, and `slack_mentions_open_total` (the mentions not yet answered).
 
-It was scaffolded by `orchestra bridges scaffold slack slack_watcher` from the orchestra-bridges kits
+It was built with `orchestra bridges scaffold slack slack_watcher` from the orchestra-bridges kits, then completed
 (`orchestra_bridges.kits`: `CachedClient`, `Prometheus`, `Poller`, `runner`).
 
 **The poller is a relay, never a machine** (Orchestra's rule 2, decision D19: the provider is never
@@ -22,7 +22,9 @@ person, `bot.slack` for the system's own act (`actor_source`). The kit announces
 never announces itself, never publishes as `slack_watcher`, and `Poller.emit` refuses any other source.
 The measurement is an instrument: it measures, never publishes.
 
-Files: `machine.toml` (its settings, clearance and the events it publishes), `slack_watcher.py` (what it
+The counters are counted by the poller as it relays (Orchestra counts events by type and source
+only, never their `data`) and kept with its cursor; `measure` prints them from there. Files: `README.md`
+(what it emits and measures), `machine.toml` (its settings, clearance and the events it publishes), `slack_watcher.py` (what it
 reads, keeps and publishes: `meta`/`keep_*`, `make_poll`, `measure`), `test_slack_watcher.py` (its test
 against the kit's fake), this file.
 

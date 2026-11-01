@@ -1,5 +1,5 @@
-"""pagerduty_alerts: a poller that relays PagerDuty's incident changes (scaffolded from the
-orchestra-bridges kit ``pagerduty``; edit freely, AGENTS.md says what it may do).
+"""pagerduty_alerts: a poller that relays PagerDuty's incident changes (built with ``orchestra
+bridges scaffold pagerduty pagerduty_alerts``, then completed; AGENTS.md says what it may do).
 
 ``python pagerduty_alerts.py`` (the poller): each poll lists the open incidents (triggered and
 acknowledged) and reads by id each incident that was open last poll and is not now (resolved,
@@ -7,8 +7,16 @@ usually). It publishes ``pagerduty.incident.<status>`` once per change, as whoev
 (``person.pagerduty.<user id>``, or ``bot.pagerduty`` when the service did), with the incident's id
 as the subject and its ``last_status_change_at`` as the stamp.
 
+It also counts, by urgency, the incidents it first sees open
+(``pagerduty_incidents_triggered_total{urgency}``) and those that stopped being open
+(``pagerduty_incidents_resolved_total{urgency}``): Orchestra counts the events by type and source
+only (it never reads ``data``), so these are what balances the open incidents of each urgency.
+They are kept in the poller's ``cursor.json`` with the cursor: a restart neither loses nor repeats
+a count.
+
 ``python pagerduty_alerts.py measure`` (for a ``[[collect]]`` entry): prints
-``pagerduty_incidents_open{service, urgency}`` and ``pagerduty_incidents_open_total``.
+``pagerduty_incidents_open_total{urgency}`` (a gauge: the open incidents, every urgency printed,
+0 included) and the poller's two counters.
 
 It keeps metadata only: ids, numbers, states, times, the service's and the user's ids. Never a
 title, summary or name."""
@@ -20,10 +28,12 @@ from pathlib import Path
 
 from orchestra_bridges.kits import runner
 from orchestra_bridges.kits.poller import actor_source
+from orchestra_bridges.kits.pollstate import counters_at
 
 HERE = Path(__file__).resolve().parent
 PAGE = 100
 HEADERS = {"Accept": "application/vnd.pagerduty+json;version=2"}
+URGENCIES = ("high", "low")
 
 
 def meta(incident: dict) -> dict:
@@ -60,8 +70,15 @@ def make_poll(api, settings):
         cursor = p.cursor or {"open": []}
         now_open = open_incidents(api, settings)
         gone = [iid for iid in cursor["open"] if iid not in {i["id"] for i in now_open}]
+        for i in now_open:
+            if i["id"] not in cursor["open"]:
+                p.counter("pagerduty_incidents_triggered_total", 1, {"urgency": i["urgency"] or ""},
+                          help="PagerDuty incidents first seen open, by urgency.")
         # a closed incident's last state is read fresh (ttl 0): a cached open state would hide the change
         closed = [api.get(f"/incidents/{iid}", keep=keep_one, ttl_s=0) for iid in gone]
+        for i in closed:
+            p.counter("pagerduty_incidents_resolved_total", 1, {"urgency": i["urgency"] or ""},
+                      help="PagerDuty incidents that stopped being open, by urgency.")
         for i in now_open + closed:
             p.emit(f"pagerduty.incident.{i['status']}", i["id"],
                    {"number": i["number"], "urgency": i["urgency"], "service": i["service"]},
@@ -72,15 +89,13 @@ def make_poll(api, settings):
 
 
 def measure(api, settings, series) -> None:
-    now_open = open_incidents(api, settings)
-    counts: dict[tuple, int] = {}
-    for i in now_open:
-        k = (i["service"] or "", i["urgency"] or "")
-        counts[k] = counts.get(k, 0) + 1
-    for (service, urgency), n in sorted(counts.items()):
-        series.gauge("pagerduty_incidents_open", n, {"service": service, "urgency": urgency},
-                     help="Open (triggered or acknowledged) PagerDuty incidents.")
-    series.gauge("pagerduty_incidents_open_total", len(now_open), help="Open PagerDuty incidents, all services.")
+    counts = dict.fromkeys(URGENCIES, 0)
+    for i in open_incidents(api, settings):
+        counts[i["urgency"] or ""] = counts.get(i["urgency"] or "", 0) + 1
+    for urgency, n in sorted(counts.items()):
+        series.gauge("pagerduty_incidents_open_total", n, {"urgency": urgency},
+                     help="Open (triggered or acknowledged) PagerDuty incidents, by urgency (a level).")
+    series.load_counters(counters_at(settings.poll_dir))
 
 
 def main(argv: list[str] | None = None) -> int:
