@@ -41,6 +41,10 @@ def test_the_retired_readers_are_named_only_as_retired():
 @pytest.mark.parametrize("n", range(len(blocks())))
 def test_every_toml_example_is_accepted(n):
     raw = tomllib.loads(blocks()[n])
+    if "people" in raw:                       # the identity map, a file of its own
+        from orchestra_bridges.identity import People
+        assert People(raw["people"]).listed("github", "alice")
+        return
     if "bridges" in raw:
         assert check(raw) == [] and problems(raw, check) == []
     else:                                   # the two entries approve_integration writes, as the scaffold prints them

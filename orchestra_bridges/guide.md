@@ -28,8 +28,8 @@ no system itself, runs no process and declares no instrument or machine. It give
 
 The kits are installed only if the `orchestra-bridges` package is in Orchestra's environment
 (installing it is the human's). The direct readers this plugin once had (`[bridges.github]`,
-`[bridges.github_prs]`, `[bridges.jira]`, `[bridges.slack]`, `[bridges] people`) were retired on
-2026-11-01: a section of theirs is refused by the plugin's check, with the kit that replaces it.
+`[bridges.github_prs]`, `[bridges.jira]`, `[bridges.slack]`) were retired on 2026-11-01: a section
+of theirs is refused by the plugin's check, with the kit that replaces it.
 
 ## A poller is a relay, never a machine
 
@@ -177,6 +177,37 @@ collector (a fake on this machine never goes through a proxy); a proxy that re-s
 CA: `ca_file` here for every collector, `[settings] ca_file` for one, or `SSL_CERT_FILE` for
 everything in the process (a bundle holding the public CAs too).
 
+## The identity map: `[bridges] people`
+
+```toml
+[bridges]
+people = "people.toml"   # relative to the repository root, or an absolute path
+```
+
+One file for every collector, so one person is one machine across systems: an account it lists on
+a system is published as `person.<key>` (`bot.<key>` for a bot) and announced with its name and
+team; an account it does not list stays `person.<system>.<account>`. Infer candidates from
+`CODEOWNERS` and `git log`, but joining accounts across systems is a claim about people: confirm
+with the human before writing it, and always list the owner.
+
+```toml
+[people.alice]
+name = "Alice Example"
+team = "sre"
+github = "alice"
+jira = "alice"           # Data Center: the user name; Cloud: the account id
+slack = "U012AB3CD"      # the member id
+```
+
+## RabbitMQ: counted traffic, no code
+
+Not a kit: `orchestra_bridges/rabbitmq/preset.toml` in this package defines series over RabbitMQ's
+own per-queue counts, for a project's `[[sources]]` (`preset = ` its installed path: `python -c
+"import importlib.resources as r; print(r.files('orchestra_bridges') / 'rabbitmq/preset.toml')"`).
+It needs the `rabbitmq_prometheus` plugin's `/metrics/detailed` scraped into a Prometheus-compatible
+store (infrastructure: the human's). RabbitMQ never names publishers: fill `[sources.producers]`
+from the code, or they are drawn unattributed, which is honest.
+
 ## Writes are never the kits'
 
 A collector only reads: no comment, label, transition, reaction or message, ever. An act in the
@@ -211,6 +242,7 @@ Ask; do not decide:
   a variable's name; they put the token there);
 - the scope: which repositories, projects, channels or services;
 - whether the repository must stay clean (the state directory instead);
+- who is who in the identity map;
 - polling harder than every 5 minutes, or spending a rate limit others share;
 - every write to the system, each through the Outbox;
 - restarting `orchestra run` so an environment variable applies.

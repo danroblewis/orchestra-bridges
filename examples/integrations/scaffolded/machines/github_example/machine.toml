@@ -1,0 +1,90 @@
+# github_example: a poller scaffolded from the orchestra-bridges kit `github`: a relay of what people, bots
+# and checks did to one repository's issues and pull requests, never a machine itself (the machines
+# are the actors it publishes as: person.github.<login>, bot.github.<app>).
+# Read by its own program (github_example.py: [settings], clearance) and by the Supervisor (description,
+# engagement, [[publishes]]); never by Orchestra, which knows the actors by their events.
+name = "github_example"
+# kit: the template it came from, and the system's name in [bridges.kits] tokens: when token_env
+# below is not set, the token's variable is the project's tokens.<kit> (tokens = { github = "GITHUB_TOKEN" }).
+kit = "github"
+description = "Polls one GitHub repository every 5 minutes and relays its issues opened, labelled, closed and reopened, and its pull requests opened, pushed, labelled, asked for and given reviews (approved, changes requested, commented), checked, merged and closed, as who did it; measure prints the open issues and the open pull requests by review state."
+engagement = "scheduled"
+created_by = "orchestra bridges scaffold"
+# The compliance check: until the owner approves reading GitHub (then "approved", with the data
+# class), the program reads only a fake on this machine.
+clearance = "needs approval"
+data_class = "unknown"
+
+[settings]
+base_url = "https://api.github.com"   # GitHub Enterprise: https://<host>/api/v3
+token_env = "GITHUB_TOKEN"        # the NAME of the variable holding a token with read access; never the token
+# token_file = "~/.config/orchestra-bridges/github-token"   # instead: `gh auth token` written there, chmod 600
+every = "5m"
+per_minute = 60                   # GitHub allows 5,000 an hour per token, shared with the owner's own use
+ttl = "4m"
+repo = "acme/service"             # guess: ask the owner (owner/name; `git remote -v` names it)
+branches = []                     # follow pull requests whose head branch matches one of these globs ("agent/*"),
+labels = []                       # or that carry one of these labels ("SAIL"); with neither, every pull request
+issues = true                     # relay the repository's issues too (pull requests are always relayed)
+lookback = "1d"                   # how far back the first poll reads
+overlap = "10m"                   # each poll re-reads this much before the last one
+
+[[publishes]]
+type = "github.issue.opened"
+subject = "the issue: <owner>/<name>#<number>"
+source = "its author: person.github.<login> (bot.github.<app> for a bot)"
+data = "repository, number"
+
+[[publishes]]
+type = "github.issue.labeled"
+subject = "the issue"
+source = "who added the label (github.issue.unlabeled: who took it off)"
+data = "repository, number, label"
+
+[[publishes]]
+type = "github.issue.closed"
+subject = "the issue"
+source = "who closed it (github.issue.reopened: who reopened it)"
+data = "repository, number"
+
+[[publishes]]
+type = "github.pr.opened"
+subject = "the pull request: <owner>/<name>#<number>"
+source = "its author"
+data = "repository, number, branch, head_sha"
+
+[[publishes]]
+type = "github.pr.synchronize"
+subject = "the pull request"
+source = "its author (GitHub does not say who pushed)"
+data = "repository, number, head_sha, previous"
+
+[[publishes]]
+type = "github.pr.labeled"
+subject = "the pull request"
+source = "who added the label (github.pr.unlabeled: who took it off)"
+data = "repository, number, label"
+
+[[publishes]]
+type = "github.pr.review_requested"
+subject = "the pull request"
+source = "who asked for the review"
+data = "repository, number, reviewer (a login)"
+
+[[publishes]]
+type = "github.pr.approved"
+subject = "the pull request"
+source = "the reviewer (github.pr.changes_requested and github.pr.commented: the other verdicts)"
+data = "repository, number, state, commit_id"
+
+[[publishes]]
+type = "github.checks.completed"
+subject = "the pull request"
+source = "the app that ran the checks (bot.github.github-actions), or who set the commit status"
+data = "repository, number, head_sha, outcome (success or failure), via (check_run or status), checks"
+
+[[publishes]]
+type = "github.pr.merged"
+subject = "the pull request"
+source = "who merged it (github.pr.closed: who closed it unmerged)"
+data = "repository, number"
