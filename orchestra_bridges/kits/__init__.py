@@ -1,4 +1,4 @@
-"""Kits for Programmatic Machines that bring an outside system in (Orchestra's docs/INTEGRATING.md):
+"""Kits for pollers (relays of what people and bots did) that bring an outside system in (Orchestra's docs/INTEGRATING.md):
 small parts a coding tool or the Supervisor builds a poller from, and a scaffold that writes one.
 
 - ``client.CachedClient``: HTTP with a disk TTL cache, a per-host rate limit, retries, the token
@@ -15,7 +15,7 @@ small parts a coding tool or the Supervisor builds a poller from, and a scaffold
 A poller built from a kit is a relay, never a machine (Orchestra's rule 2, D19; the bridges' SPEC §2):
 it publishes only as the people and bots who acted (``person.<system>.<account>``, ``bot.<system>``),
 announces each of them once, and never announces itself or publishes under its own name. It differs
-from a bridge only in keeping state of its own in the state directory (SPEC §8, AGENTS.md rule 4)."""
+from a bridge only in keeping state of its own in the state directory (SPEC §7, AGENTS.md rule 4)."""
 
 from .client import CachedClient, HTTPFailure, KitError, NotCached, TokenMissing
 from .poller import Poller

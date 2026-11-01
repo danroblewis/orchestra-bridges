@@ -1,5 +1,5 @@
 """The RabbitMQ preset against the rig's real RabbitMQ and VictoriaMetrics (opt in:
-``ORCHESTRA_RABBIT_RIG_URL=http://127.0.0.1:8441`` after ``orchestra_bridges/rabbitmq/rig/rig.sh up``).
+``ORCHESTRA_RABBIT_RIG_URL=http://127.0.0.1:8441`` after ``tests/rabbitmq_rig/rig.sh up``).
 
 The unit test's fake evaluates the preset's joins itself; this checks that a real store does the
 same: every series the fleet makes is read, nothing is missing, and each counts its direction,
@@ -18,7 +18,7 @@ from orchestra.sd.series import series_key
 from orchestra.sources.catalogue import Catalogue
 
 URL = os.environ.get("ORCHESTRA_RABBIT_RIG_URL")
-pytestmark = pytest.mark.skipif(not URL, reason="set ORCHESTRA_RABBIT_RIG_URL to the rig's VictoriaMetrics (rig/rig.sh up)")
+pytestmark = pytest.mark.skipif(not URL, reason="set ORCHESTRA_RABBIT_RIG_URL to the rig's VictoriaMetrics (tests/rabbitmq_rig/rig.sh up)")
 PRESET = Path(__file__).resolve().parents[2] / "orchestra_bridges" / "rabbitmq" / "preset.toml"
 CONSUMED = {"billing.orders": ("orders", "billing"), "billing.payments": ("payments", "billing"), "shipping.orders": ("orders", "shipping"),
             "notifier.payments": ("payments", "notifier"), "analytics.orders": ("orders", "analytics"),

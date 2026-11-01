@@ -4,10 +4,11 @@ People and bots are machines (docs/proposals/event-sources.md §4 in Orchestra):
 source is whoever acted. The owner's identity map, a TOML file that ``[bridges] people`` names,
 gives a person a name and a team and joins their accounts on the systems the bridges read::
 
-    [people.daniel]
-    name = "Daniel Lewis"
+    [people.alice]
+    name = "Alice Example"
     team = "sre"
-    github = "danroblewis"
+    github = "alice"
+    jira = "alice"
     slack = "U012AB3CD"               # a Slack member id, or the handle
 
     [people.triage]
@@ -51,15 +52,15 @@ class Actor:
     source: str                 # the machine: person.<key> or bot.<key>
     login: str | None           # the account on the system the event came from; None: the system itself
     bot: bool = False
-    name: str | None = None     # from the identity map only
+    name: str | None = None     # the identity map's, or a display name the bridge reads (Jira's)
     team: str | None = None
 
     def announcement(self, system: str) -> dict:
-        """What the bridge announces for this actor (``orchestra.machine.started``): Orchestra reads
-        ``kind``, ``mode`` and ``package``; the rest goes to the package's card unread."""
-        d = {"kind": "program" if self.bot else "person", "mode": "ad hoc", "package": "bridges", "bot": self.bot}
-        if self.login is not None:
-            d[system] = self.login
+        """What the bridge announces for this actor (``orchestra.machine.started``), all of which
+        Orchestra reads: ``kind``, ``mode``, ``package``, ``name`` and ``team`` (as the machine's
+        group). ``name`` is the identity map's, or, for an unlisted Jira person, Jira's display name
+        (the owner's choice, SPEC §4c). Nothing else is announced: no card reads it."""
+        d = {"kind": "program" if self.bot else "person", "mode": "ad hoc", "package": "bridges"}
         if self.name:
             d["name"] = self.name
         if self.team:

@@ -25,7 +25,15 @@ The token comes from ``[settings] token_env`` (an environment variable's name) o
 ``chmod 600`` file outside any repository). A fake on this machine needs neither: against a
 loopback URL with the variable unset and no such file, no token is sent (anywhere else a missing
 token is an error, as ever). ``measure`` finds the poller's directory in ``MachineFile.poll_dir``, so it can print the counters the poller keeps
-(``pollstate.counters_at``) beside what it reads itself."""
+(``pollstate.counters_at``) beside what it reads itself.
+
+A measurement-only program (a metrics store has no item events to relay) passes no ``make_poll``;
+running it without ``measure`` refuses, exit 2.
+
+**Exit codes**, the same for every scaffolded program: 0 done (a poll run that ended, a stop while
+waiting, a measurement printed); 1 a measurement that failed (its read raised); 2 refused before any
+read (a ``machine.toml`` that cannot be read, no project, not cleared for ``--once``/``--rounds``/
+``measure``, a missing token, a poll asked of a measurement-only program)."""
 
 from __future__ import annotations
 
@@ -123,7 +131,8 @@ def _until_stopped() -> threading.Event:
     return stop
 
 
-def main(here: str | Path, make_poll: Callable[[CachedClient, MachineFile], Poll], argv: list[str] | None = None, *,
+def main(here: str | Path, make_poll: Callable[[CachedClient, MachineFile], Poll] | None = None,
+         argv: list[str] | None = None, *,
          measure: Measure | None = None, auth_format: str = "Bearer {token}",
          headers: dict[str, str] | None = None) -> int:
     here = Path(here)
@@ -133,6 +142,9 @@ def main(here: str | Path, make_poll: Callable[[CachedClient, MachineFile], Poll
         print(e, file=sys.stderr)
         return 2
     a = parser(m.name).parse_args(argv)
+    if a.what == "poll" and make_poll is None:
+        print(f"{m.name}: polls nothing (a measurement only): run it with measure", file=sys.stderr)
+        return 2
     if a.what == "poll" and not a.once and a.rounds is None and not cleared(m, a.base_url or m.base_url):
         m = wait_for_clearance(here / "machine.toml", m, a.base_url, a.every or m.every_s, _until_stopped())
         if m is None:

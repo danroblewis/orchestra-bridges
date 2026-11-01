@@ -52,7 +52,3 @@ class DiskCache:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             json.dump({"at": self.clock(), "status": status, "value": value}, fh)
         os.replace(tmp, p)
-
-    def clear(self) -> None:
-        for p in self.root.rglob("*.json"):
-            p.unlink(missing_ok=True)

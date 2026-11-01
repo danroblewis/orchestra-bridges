@@ -22,7 +22,8 @@ from typing import Any
 
 from orchestra.config import ConfigError, parse_duration
 
-ENV_NAME = re.compile(r"^[A-Z][A-Z0-9_]{1,63}$")
+from ..local import ENV_NAME
+
 SYSTEM = re.compile(r"^[a-z][a-z0-9_]{0,40}$")
 HOST = re.compile(r"^[A-Za-z0-9.-]+(:\d+)?$")
 KEYS = {"cache_dir", "ttl", "per_minute", "hosts", "tokens"}

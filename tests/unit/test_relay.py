@@ -30,8 +30,7 @@ def test_it_publishes_as_people_and_bots(tmp_path):
 def test_the_system_itself_is_a_bot_with_no_account():
     jira = People().itself("jira", "Jira")
     assert (jira.source, jira.login, jira.bot) == ("bot.jira", None, True)
-    assert jira.announcement("jira") == {"kind": "program", "mode": "ad hoc", "package": "bridges", "bot": True,
-                                         "name": "Jira"}
+    assert jira.announcement("jira") == {"kind": "program", "mode": "ad hoc", "package": "bridges", "name": "Jira"}
 
 
 def test_the_github_issues_bridge_serves_each_change_at_its_own_time(project, github, make_bridge):

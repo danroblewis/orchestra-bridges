@@ -69,7 +69,7 @@ def test_the_identity_map_names_people_and_their_teams(project, github, make_bri
     run_once(make_bridge())
     assert published(project, "github.issue.opened")[0]["source"] == "person.al"
     [a] = [e for e in bus(project) if e["source"] == "person.al" and e["type"] == "orchestra.machine.started"]
-    assert (a["data"]["name"], a["data"]["team"], a["data"]["github"]) == ("Alice Liddell", "editor", "alice")
+    assert (a["data"]["name"], a["data"]["team"]) == ("Alice Liddell", "editor") and "github" not in a["data"]   # no unread field
 
 
 def test_overlapping_polls_and_restarts_publish_nothing_twice(project, github, clock, make_bridge):

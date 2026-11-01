@@ -28,6 +28,7 @@ from pathlib import Path
 NAME = re.compile(r"^[a-z][a-z0-9_]{1,40}$")
 TEMPLATES = Path(__file__).parent / "templates"
 ROOTS = ("state", "overlay", "repo")
+SECTION = re.compile(r"\{\{([#^])poller\}\}(.*?)\{\{/poller\}\}", re.DOTALL)
 
 
 @dataclass(frozen=True)
@@ -38,6 +39,7 @@ class Kind:
     events: str
     series: str
     poller: bool = True                 # False: a measurement only (a metrics store has no item events)
+    key: str | None = None              # the sources' and types' first word: the kit's name unless said
 
 
 KINDS = {
@@ -56,10 +58,9 @@ KINDS = {
     "http": Kind("a JSON API no kit knows", "API_TOKEN", "FakeAPI (a FakeServer written in the test)",
                  "`<system>.<thing>.<state>` once per item change (subject: the item's id; source: "
                  "`person.<system>.<account>`, or `bot.<system>` when no one; settings name the fields)",
-                 "`<system>_<thing>s{state}` (the items listed, by state)"),
+                 "`<system>_<thing>s{state}` (the items listed, by state)", key="<system>"),
     "promql": Kind("a Prometheus API (Prometheus, Chronosphere, Mimir)", "PROMETHEUS_TOKEN", "FakePrometheus",
-                   "none: a metrics store has no item events, so it has no poller and no `[[machines]]` entry "
-                   "(its `make_poll` does nothing)",
+                   "none: a metrics store has no item events, so it has no poller and no `[[machines]]` entry",
                    "one gauge per configured query, named by its `name`, with the answer's labels (aliases applied)",
                    poller=False),
 }
@@ -104,7 +105,10 @@ def _toml(s: str) -> str:
     return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
-def render(text: str, values: dict[str, str]) -> str:
+def render(text: str, values: dict[str, str], poller: bool = True) -> str:
+    """The template with its values, and its ``{{#poller}}…{{/poller}}`` parts kept only for a kit
+    with a poller (``{{^poller}}…{{/poller}}`` only for one without)."""
+    text = SECTION.sub(lambda m: m.group(2) if (m.group(1) == "#") == poller else "", text)
     for k, v in values.items():
         text = text.replace("{{" + k + "}}", v)
     return text
@@ -121,14 +125,14 @@ def scaffold(kind: str, name: str, target_root: Path) -> Path:
     if target.exists():
         raise ScaffoldError(f"{target} exists: choose another name, or remove it first")
     k, src = KINDS[kind], TEMPLATES / kind
-    values = {"name": name, "kind": kind, "system": k.system, "token_env": k.token_env, "fake": k.fake,
-              "events": k.events, "series": k.series, "dir": str(target)}
+    values = {"name": name, "kind": kind, "system": k.system, "system_key": k.key or kind, "token_env": k.token_env,
+              "fake": k.fake, "events": k.events, "series": k.series, "dir": str(target)}
     values["entries"] = entries(name, target, k.poller)
     files = {"machine.toml": src / "machine.toml", f"{name}.py": src / "machine.py",
              f"test_{name}.py": src / "test_machine.py", "AGENTS.md": TEMPLATES / "AGENTS.md"}
     target.mkdir(parents=True)
     for out, tpl in files.items():
-        (target / out).write_text(render(tpl.read_text(encoding="utf-8"), values), encoding="utf-8")
+        (target / out).write_text(render(tpl.read_text(encoding="utf-8"), values, k.poller), encoding="utf-8")
     return target
 
 

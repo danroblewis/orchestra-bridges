@@ -11,10 +11,9 @@ D19, "the provider is never the machine": §1).
 
 Throughout, every part is marked by status:
 
-- **Built (main)**: on `main`, tested. Every bridge in this document is: GitHub issues (§5), the
-  Slack pings bridge (§7, merged from `slack-bridge`), GitHub pull requests (§12, merged from
-  `pr-tracking`) and Jira (§13, merged from `jira-bridge`).
-- **Proposed**: designed in Orchestra's `docs/proposals/event-sources.md`, not built.
+- **Built**: tested. Every bridge in this document is: GitHub issues (§5), the Slack pings bridge
+  (§7), GitHub pull requests (§11) and Jira (§12); so are the kits (§10).
+- **Proposed**: not built; listed in SPEC §8, "Not built yet".
 
 ## Contents
 
@@ -22,15 +21,14 @@ Throughout, every part is marked by status:
 2. [Status at a glance](#2-status-at-a-glance)
 3. [The parts](#3-the-parts)
 4. [How it plugs into Orchestra](#4-how-it-plugs-into-orchestra)
-5. [The GitHub issues bridge (main)](#5-the-github-issues-bridge-main)
-6. [Counted traffic: the RabbitMQ preset and rig (main)](#6-counted-traffic-the-rabbitmq-preset-and-rig-main)
+5. [The GitHub issues bridge](#5-the-github-issues-bridge)
+6. [Counted traffic: the RabbitMQ preset and rig](#6-counted-traffic-the-rabbitmq-preset-and-rig)
 7. [The Slack pings bridge](#7-the-slack-pings-bridge)
 8. [Contracts](#8-contracts)
 9. [Add a new bridge](#9-add-a-new-bridge)
-10. [Proposed, not built](#10-proposed-not-built)
-11. [Where the docs and the code disagree](#11-where-the-docs-and-the-code-disagree)
-12. [The GitHub pull-request bridge](#12-the-github-pull-request-bridge)
-13. [The Jira bridge](#13-the-jira-bridge)
+10. [Kits and examples](#10-kits-and-examples)
+11. [The GitHub pull-request bridge](#11-the-github-pull-request-bridge)
+12. [The Jira bridge](#12-the-jira-bridge)
 
 ---
 
@@ -47,7 +45,7 @@ companies' message brokers. This package brings that work in, in three ways:
 |---|---|---|
 | **Other systems' activity as machines and events.** An issue opened, a comment, a Slack ping and its answer | A **bridge** polls the system and publishes real CloudEvents on Orchestra's bus. The source is the actor and the subject is the item | `orchestra_bridges/github/`, `github_prs/`, `jira/`, `slack/` |
 | **People as machines, with names and teams** | Each actor becomes an event `source` (`person.<key>`, `bot.<key>`). The bridge announces each one with `orchestra.machine.started`, giving the name and team from the owner's identity map. What a system did with no account behind it is the system's own bot (`bot.jira`) | `identity.py`, `announce.py`, `relay.py` |
-| **Counted traffic.** What producers put into a broker and consumers took out, without reading a message | A **preset** of series definitions that Orchestra's `[[sources]]` reads from a Prometheus-compatible store. Nothing is published on the bus | `orchestra_bridges/rabbitmq/` (main) |
+| **Counted traffic.** What producers put into a broker and consumers took out, without reading a message | A **preset** of series definitions that Orchestra's `[[sources]]` reads from a Prometheus-compatible store. Nothing is published on the bus | `orchestra_bridges/rabbitmq/` |
 
 A bridge is a **relay outside Orchestra** (Orchestra's rule 1: the core knows no tickets or
 pings), **never a machine** (Orchestra's rule 2 and its decision D19, "the provider is never the
@@ -80,20 +78,21 @@ Every bridge holds to the rules in `AGENTS.md`:
 
 | Piece | Status | Code |
 |---|---|---|
-| Plugin declaration (processes and instruments; no machines) | Built (main): every configured bridge, and the scrape of each one's `/metrics` | `plugin.py` |
-| Relay guard: every source a person or a bot | Built (main) | `relay.py` |
-| Gap counts, served by every bridge | Built (main) | `gaps.py` |
-| Config parsing (`[bridges]`, `[bridges.github]`, `[bridges.github_prs]`, `[bridges.jira]`, `[bridges.jira_<name>]`, `[bridges.slack]`) | Built (main) | `config.py` |
-| Identity map and actors, with namespaced strangers (`person.jira.<login>`, `person.slack.<handle>`) | Built (main) | `identity.py` |
-| Shared announcer | Built (main) | `announce.py` |
-| Shared `/metrics` server | Built (main) | `serve.py` |
-| Shared token reading (environment, or a `chmod 600` file outside the repository) | Built (main): Jira and Slack | `secret.py` |
-| GitHub issues bridge, its `/metrics` and its instrument | Built (main) | `github/` |
-| GitHub pull-request bridge, its `/metrics` and the instrument the plugin declares | Built (main, merged from `pr-tracking`) | `github_prs/` |
-| Jira bridge (Data Center first, and Cloud), its `/metrics`, its instrument, a second site | Built (main, merged from `jira-bridge`) | `jira/` |
-| Slack pings bridge, its `/metrics` and its instrument | Built (main, merged from `slack-bridge`) | `slack/` |
-| RabbitMQ preset, simulated fleet, Docker rig | Built (main). Orchestra's side (`orchestra/sources/traffic.py`, `preset.py`) is built in Orchestra | `rabbitmq/` |
-| Confluence, Google Drive bridges; Bluesky stand-in; Pub/Sub preset; webhooks; team-only mode; write-back (the outbox) | Proposed | none |
+| Plugin declaration (processes and instruments; no machines) | Built: every configured bridge, and the scrape of each one's `/metrics` | `plugin.py` |
+| Relay guard: every source a person or a bot | Built | `relay.py` |
+| Gap counts, served by every bridge | Built | `gaps.py` |
+| Config parsing (`[bridges]`, `[bridges.github]`, `[bridges.github_prs]`, `[bridges.jira]`, `[bridges.jira_<name>]`, `[bridges.slack]`) | Built | `config.py` |
+| Identity map and actors, with namespaced strangers (`person.jira.<login>`, `person.slack.<handle>`) | Built | `identity.py` |
+| Shared announcer | Built | `announce.py` |
+| Shared `/metrics` server | Built | `serve.py` |
+| Shared token reading (environment, or a `chmod 600` file outside the repository) | Built: Jira, Slack and the kits' client | `secret.py` |
+| GitHub issues bridge, its `/metrics` and its instrument | Built | `github/` |
+| GitHub pull-request bridge, its `/metrics` and the instrument the plugin declares | Built | `github_prs/` |
+| Jira bridge (Data Center first, and Cloud), its `/metrics`, its instrument, a second site | Built | `jira/` |
+| Slack pings bridge, its `/metrics` and its instrument | Built | `slack/` |
+| RabbitMQ preset, simulated fleet, Docker rig | Built | `rabbitmq/` (the preset); `tests/rabbitmq_rig/` (the fleet and rig, a test system) |
+| Kits for pollers (client, poller, fakes, scaffold, clearance) and four example pollers | Built | `kits/`, `examples/integrations/` |
+| What is not built | Proposed: SPEC §8 | none |
 
 ## 3. The parts
 
@@ -121,7 +120,7 @@ flowchart LR
         ghb["github/<br/>api, poll, translate,<br/>responses, measures, bridge"]
         slb["slack/<br/>api, search, pings,<br/>waits, bridge"]
         preset["rabbitmq/preset.toml"]
-        fleet["rabbitmq/fleet.py + rig/"]
+        fleet["tests/rabbitmq_rig/<br/>fleet.py + rig.sh"]
     end
 
     subgraph orch["Orchestra (~/orchestra_2)"]
@@ -167,7 +166,7 @@ flowchart LR
     bus --> sd
 ```
 
-The diagram draws the GitHub issues and Slack bridges; the pull-request (§12) and Jira (§13)
+The diagram draws the GitHub issues and Slack bridges; the pull-request (§11) and Jira (§12)
 bridges plug in the same way, each with its own instrument (`bridges.github_prs`,
 `bridges.jira`), and every bridge shares `relay.py`, `gaps.py`, `serve.py`, `announce.py` and,
 for Jira and Slack, `secret.py`. The events go to the bus only through `relay.py`, as the actors.
@@ -282,7 +281,7 @@ card unread.
 
 ---
 
-## 5. The GitHub issues bridge (main)
+## 5. The GitHub issues bridge
 
 ### 5.1 Modules
 
@@ -495,10 +494,10 @@ named by `[bridges] people` (relative to the repository). It is optional; when i
 nobody is listed.
 
 ```toml
-[people.daniel]
-name = "Daniel Lewis"
+[people.alice]
+name = "Alice Example"
 team = "sre"
-github = "danroblewis"            # one account, or a list
+github = "alice"                 # one account, or a list
 
 [people.triage]
 name = "VS Code triage bot"
@@ -570,7 +569,7 @@ The README states these limits, and the code confirms them:
 
 ---
 
-## 6. Counted traffic: the RabbitMQ preset and rig (main)
+## 6. Counted traffic: the RabbitMQ preset and rig
 
 Some buses carry too much to read, or data that is not ours. Orchestra reads them by **counts**:
 what each producer put into a channel, what each consumer took out, and what waits. This part of
@@ -587,7 +586,7 @@ A project names the preset from a `[[sources]]` table:
 [[sources]]
 name = "rabbit"
 url = "http://127.0.0.1:8441"         # the Prometheus-compatible store that scrapes RabbitMQ
-preset = "~/orchestra-bridges/orchestra_bridges/rabbitmq/preset.toml"
+preset = "PRESET"                     # the installed package's rabbitmq/preset.toml (importlib.resources)
 settle = "30s"
 [sources.producers]                   # exchange = producer: RabbitMQ cannot say who publishes
 orders = "orders-api"
@@ -689,7 +688,7 @@ machine. `tests/contract/test_rabbitmq_live.py` runs against the live rig.
 
 ### 6.3 The rig
 
-`rabbitmq/rig/rig.sh up|down|status` (Docker):
+`tests/rabbitmq_rig/rig.sh up|down|status` (Docker; a test system, outside the package):
 
 | Part | Container or process | Ports (127.0.0.1 only) |
 |---|---|---|
@@ -701,7 +700,7 @@ machine. `tests/contract/test_rabbitmq_live.py` runs against the live rig.
 follows a "day" compressed into `--period` (20 minutes): `mean × (1 + 0.7 sin 2πt/period)`. Orders
 publish about 4 per second, payments about 2, and clicks about 6. At peak, about 17 per second reach
 analytics, which handles about 14. Queues are named `<consumer>.<what>`, the naming the preset
-reads consumers from. `rig/orchestra.toml` is an example project for the rig: window 40 minutes,
+reads consumers from. `tests/rabbitmq_rig/orchestra.toml` is an example project for the rig: window 40 minutes,
 step 15 seconds, conservation strategy, and `settle = "30s"`, because VictoriaMetrics hides the
 newest 30 seconds from range queries.
 
@@ -709,7 +708,7 @@ newest 30 seconds from range queries.
 
 ## 7. The Slack pings bridge
 
-> **Built (main)**, merged from `slack-bridge` (`aae18aa`). It uses the shared `secret.py`,
+> **Built.** It uses the shared `secret.py`,
 > `serve.py`, `announce.py` and `identity.py` like the other bridges.
 
 The need comes from the proposal: "someone will @ ping me on Slack and be mad if I don't respond
@@ -959,8 +958,8 @@ system's own `id` and `time`. No bridge publishes as itself.
 | `orchestra.machine.started` (the system itself) | main (Jira) | `bot.jira` | none | `jira:announce:bot.jira:<hash12>:<time>` | `kind` (`program`), `mode` (`ad hoc`), `package`, `bot` (true), `name` (`Jira`); no account |
 | `slack.ping.received` | main | the pinger | `<workspace>/<channel>/<thread ts>` | `slack:<ws>:ping:<ch>:<ts>` | `workspace`, `channel`, `channel_type` (`im`/`mpim`/`group`/`channel`), `ts`, `thread_ts`, `user` (member id), `kind` (`dm`/`mention`/`group`) |
 | `slack.ping.answered` | main | the owner | same | `slack:<ws>:answered:<ch>:<ping ts>` | `workspace`, `channel`, `ts`, `wait_seconds`, `within`, `rule` (`reply`/`reaction`). Reply adds `reply_ts`. Reaction adds `reaction`, `observed: true`, `not_before` |
-| `github.pr.*` (13 types) | main | who acted | `<owner>/<repo>#<n>` | `github:<repo>:pr:<n>:<kind>:<GitHub id>` | §12.3 |
-| `jira.issue.created`, `.assigned`, `.transitioned`, `.updated`, `jira.comment.added` | main | who acted (`person.<key>`, `person.jira.<account>`), or `bot.jira` for Jira's own change (no author) | the issue key, `ABC-12` | `jira:<site>:issue:<issue id>:<created, history:<id>:<kind>, comment:<id>>` | §13.2 |
+| `github.pr.*` (13 types) | main | who acted | `<owner>/<repo>#<n>` | `github:<repo>:pr:<n>:<kind>:<GitHub id>` | §11.3 |
+| `jira.issue.created`, `.assigned`, `.transitioned`, `.updated`, `jira.comment.added` | main | who acted (`person.<key>`, `person.jira.<account>`), or `bot.jira` for Jira's own change (no author) | the issue key, `ABC-12` | `jira:<site>:issue:<issue id>:<created, history:<id>:<kind>, comment:<id>>` | §12.2 |
 
 Events published before 2026-10-27 have unprefixed types (`issue.opened`, …). They are still read
 back on a restart. A bus from before 2026-10-27 also holds events no bridge publishes any more:
@@ -1147,74 +1146,24 @@ flowchart TB
 
 ---
 
-## 10. Proposed, not built
+## 10. Kits and examples
 
-From Orchestra's `docs/proposals/event-sources.md`, after the owner's answers of 2026-10-26.
+The kits (`orchestra_bridges/kits/`) are the parts a poller for a system no bridge reads is built
+from: a cached, read-only client, the poller loop (a relay: it publishes only as the people and bots
+who acted, the identity map first), the fakes, the scaffold (`orchestra bridges scaffold`), the
+clearance gate and `orchestra bridges integrations`. `examples/integrations/` holds four pollers
+built from them, with their tests. SPEC §7 is their reference; what is not built is SPEC §8.
 
-- **Bridges:**
-  - Confluence;
-  - Google Drive (`gdoc.*`);
-  - Bluesky's Jetstream, chosen with the owner as the second test bridge and a high-volume
-    stand-in for Slack.
-- **Push:** webhooks and Socket Mode, where a relay is allowed. Today everything polls, because
-  the laptop has no public URL.
-- **Counted traffic:**
-  - the GCP Pub/Sub preset, its topology poller (`[[collect]]` over the admin API) and its
-    simulator;
-  - Kafka and NATS presets;
-  - IAM-candidate publishers and a fitted split;
-  - loose balances.
-- **People:** a team-only mode. The proposal's pseudonym default is **superseded** by the owner's
-  answer 6 (people by name, each with a team).
-- **Slack:** working hours for the 15 minutes (an open question); the work workspace (allowed by
-  the owner's answer 5, but not yet run there).
-- **The outbox:** speaking back into Slack or Jira. Bridges stay read-only until then.
-- **Layout drift from the proposal's §7:** the proposal sketched `envelope.py`, `fakes/` and
-  `pubsub/`. The built code uses per-bridge `translate.py`/`pings.py`, `tests/fake_*.py` and
-  `rabbitmq/`.
-
-## 11. Where the docs and the code disagree
-
-Found while checking this document against the code. The code is taken as the truth everywhere
-above.
-
-1. **README event table (main).** The README says `github.issue.labelled`, `.closed` and
-   `.reopened` carry "the same" data as `opened`, including `association`. `translate.from_event`
-   does not include `association` for these three; issue events carry no author association.
-2. **README "Every `every` seconds it reads" (main).** `every` is the pause after a round
-   (`stop.wait(every)`), not the period. Slack's README says the same and has the same gap.
-3. **Slack `bridge.py` docstring.** It says "Only these [the searches] (and `auth.test`)
-   fail a poll". `auth.test` is not called in a poll. It is called once in `run()` before
-   `resume()`, retried each round until it succeeds.
-4. **Proposal vs the built Slack bridge.**
-   - The proposal's §5 names two events and the buckets `5m|15m|60m|over`, with the reply as the
-     default answer. The bridge adds the bucket `unknown` and the checkmark default, following the
-     owner's answer 5, and counts expiries (`slack_pings_expired_total`) without an event.
-   - The proposal's §4 sources (`work.person.7f3a`, `work.jira`) became `person.<key>` and, for a
-     system's own act, `bot.<system>` (`bot.jira`); never the bridge (D19).
-5. **Proposal §4 privacy** (pseudonyms by default) is superseded by the owner's answer 6. The
-   proposal text was not updated.
-6. **Orchestra's AGENTS.md rule 2** lists the announcement fields Orchestra reads as "mode, what it
-   listens for, its kind, where its log is and which package it belongs to". Orchestra's SPEC and
-   `web/machines.py` also read `name` and `group`/`team`, which this package relies on for people's
-   names and teams.
-7. **The gap and resume behaviour differs between the GitHub issues and Slack bridges** (from the
-   start vs the end of the last poll; stored counters vs the larger of stored and rebuilt). This is
-   intended and documented in SPEC §4d. It is noted here because readers of the
-   GitHub section may assume the two bridges behave the same.
-
-## 12. The GitHub pull-request bridge
+## 11. The GitHub pull-request bridge
 
 Goal G6 in Orchestra's `docs/roadmap/goals.md`: pull requests tracked to resolution. The owner's
 company drives CI/CD with labels on pull requests: the owner adds `SAIL` by hand, and the pipeline
 later reports pass or fail, also as labels. Something must watch each pull request and, when review
-comments, change requests or a failing label arrive, re-engage the worker that wrote the change.
-Re-engaging is the task system's job (its protocol lives in `~/orchestra-tasking` and
-`~/orchestra-agents`, not here). This bridge only reads GitHub and publishes what happens, with what
-that wiring needs: the pull request, its branch, its head commit, who acted and what kind of thing
-happened.
+comments, change requests or a failing label arrive, tell whatever wrote the change. This bridge
+only reads GitHub and publishes what happens, for any consumer: the pull request, its branch, its
+head commit, who acted and what kind of thing happened.
 
-### 12.1 Why a bridge of its own
+### 11.1 Why a bridge of its own
 
 The issues bridge drops pull requests on purpose, and extending it would have tangled two rhythms:
 
@@ -1229,7 +1178,7 @@ Both share `github/api.py` (the client and `gh_token`; `get` was added for singl
 identity map, and the announcer, so a person is one machine (`person.<login>` or their map key)
 whichever bridge saw them. Announcements of both use ids `github:announce:…`.
 
-### 12.2 Modules
+### 11.2 Modules
 
 | Module | Responsibility |
 |---|---|
@@ -1241,7 +1190,7 @@ whichever bridge saw them. Announcements of both use ids `github:announce:…`.
 | `announce.py` | `Announcer`, shared with every bridge |
 | `config.py` | `GitHubPRsConfig`, `github_prs()`, `follows(branch, labels)` |
 
-### 12.3 Events
+### 11.3 Events
 
 Every event: source the actor, subject `<owner>/<repo>#<n>`, GitHub's time, id
 `github:<repo>:pr:<n>:…`. Every `data` holds `repository`, `pull`, `login`, `branch`, `base` and
@@ -1266,7 +1215,7 @@ Not published: drafts made ready or turned back, assignments, reviews still pend
 dismissal as an event of its own (the review's state becomes `dismissed`; a review first seen after
 it was dismissed is published with that state), and check runs still running or statuses pending.
 
-### 12.4 One poll
+### 11.4 One poll
 
 ```mermaid
 flowchart TB
@@ -1286,7 +1235,7 @@ A round costs about 2 requests per repository and 3 per followed pull request, p
 review and one per new head: ten open pull requests polled every minute use about 1,900 of the
 5,000 an hour.
 
-### 12.5 Resume and gaps
+### 11.5 Resume and gaps
 
 As for issues (§5.4, §5.5), with what is resumed adapted:
 
@@ -1302,9 +1251,10 @@ As for issues (§5.4, §5.5), with what is resumed adapted:
 The levels need no resume: each round reads them from GitHub. The gap counters continue from the
 store, by the same `instrument` and `repo`.
 
-### 12.6 The owner's loop, as the bridge sees it
+### 11.6 The owner's loop, as the bridge sees it
 
-The task system's part is drawn dashed: it is what the events are for, not built here.
+Any consumer of the events (a machine that re-engages the worker, a workflow) is outside this
+bridge and not drawn.
 
 ```mermaid
 sequenceDiagram
@@ -1315,7 +1265,6 @@ sequenceDiagram
     participant CI as Pipeline (label-driven)
     participant B as bridges.github_prs
     participant Bus as Orchestra bus
-    participant T as Task system
 
     W->>G: push branch agent/fix-login, open pull request 12
     B->>G: GET pulls, timeline, checks (every 60 s)
@@ -1328,45 +1277,13 @@ sequenceDiagram
     G->>G: reviewer requests changes with two line comments
     B->>Bus: github.pr.review_submitted state changes_requested, comments 2
     B->>Bus: github.pr.review_commented, twice (path, line, side)
-    Bus-->>T: events for the pull request and branch of a ticket
-    T-->>W: re-engage the worker that wrote it (its session, same branch)
     W->>G: push a new commit to agent/fix-login
     B->>Bus: github.pr.pushed (previous head, new head)
     G->>G: reviewer approves, owner merges
     B->>Bus: github.pr.review_submitted approved, then github.pr.merged
-    Bus-->>T: merged, so the ticket can close
 ```
 
-### 12.7 What the task system needs to wire these to re-engage a worker
-
-The bridge publishes; it decides nothing. The task system (being redesigned elsewhere) will need:
-
-1. **The link from a ticket to a pull request.** Match on `data.repository` and `data.pull` (or
-   the subject), or on `data.branch` when the ticket knows its branch before the pull request
-   exists. Every event carries both.
-2. **Which events re-engage.** Suggested: `review_submitted` with `state` `changes_requested` (or
-   `commented` with `comments` above 0), `review_commented`, `commented`, `check_completed` with a
-   failing `conclusion` (`failure`, `timed_out`, `error`), and `labelled` with a label the task
-   system's own configuration calls failing (`SAIL-failed`). Which labels mean failure is the
-   owner's configuration, not the bridge's: the bridge only names labels.
-3. **Batching.** One review arrives as one `review_submitted` followed by its `review_commented`s
-   at the same time; wait for the review, not each comment, and use `comments` to know how many to
-   expect. Several events often land in one poll.
-4. **The commit the feedback is about.** `data.head` on a review is the commit reviewed; compare it
-   with the branch's head before re-engaging, so stale feedback is recognised.
-5. **Its own echo.** A worker that pushes or comments through the owner's GitHub account appears as
-   the owner (`person.<owner>`), and `pusher_from` may be `pull_author`. To ignore its own acts,
-   the task system should match on what it did (the head it pushed, the time) rather than on the
-   source alone.
-6. **Resolution.** `merged` resolves the pull request; `closed` (never a merge's own close) means
-   it was abandoned; `reopened` brings it back.
-7. **Exactly once.** Ids are stable, and a restart or a gap never republishes, but a consumer that
-   itself restarts should still key on the event id.
-8. **Waiting, as levels.** `github_prs_awaiting_changes` and `github_prs_awaiting_label_result` are
-   the stocks of work waiting on workers and on the pipeline; `github_prs_awaiting_review` and its
-   oldest age, on reviewers.
-
-### 12.8 The sandbox and what the end-to-end run showed
+### 11.7 The sandbox and what the end-to-end run showed
 
 `danroblewis/orchestra-e2e-sandbox` is a private repository made for this test, holding a README,
 a small file and one file per run under `runs/`. `tests/contract/test_github_prs_sandbox.py`
@@ -1386,7 +1303,7 @@ published nothing again. **GitHub refused
 request"), so the test falls back to a commenting review, and `changes_requested` is covered by the
 fake only, as is a review request (the sandbox has no second account to ask).
 
-### 12.9 Limits
+### 11.8 Limits
 
 - Several pushes between two polls are one `pushed`; for an ordinary push GitHub names no pusher.
 - A push's time is its commit's date when that falls in the window read, else when it was seen.
@@ -1394,9 +1311,9 @@ fake only, as is a review request (the sandbox has no second account to ask).
 - `review_request_removed` and `review_requested` shapes are from GitHub's documentation and the
   fake; the sandbox cannot produce them with one account.
 - Followed pull requests are read every round whether or not anything changed, which is what costs
-  requests (§12.4).
+  requests (§11.4).
 
-## 13. The Jira bridge
+## 12. The Jira bridge
 
 Building block 4 of Orchestra's `docs/roadmap/story-placement.md`. It unlocks the Jira half of ten
 of the owner's 21 user stories (1, 2, 3, 6, 8, 10, 12, 14, 15, 20): a request filed or assigned to
@@ -1405,7 +1322,7 @@ weekly update's done work. The owner's Jira is **Data Center** (REST API v2, a p
 token). Cloud (API v3, an API token with the account's email) is kept because it differs only in
 the search's paging and the sign-in.
 
-### 13.1 Modules
+### 12.1 Modules
 
 | Module | What it does |
 |---|---|
@@ -1417,9 +1334,9 @@ the search's paging and the sign-in.
 | `jira/bridge.py` | Resume, the window and the gap (counted), read then publish as the actors (`bot.jira` for none), announce them, `/metrics`, the loop |
 | `secret.py` | The token from `JIRA_API_TOKEN`, the file `JIRA_API_TOKEN_FILE` names, `token_file`, or `~/.config/orchestra-bridges/jira-token`; a file must be outside the repository and `chmod 600` |
 
-### 13.2 Events
+### 12.2 Events
 
-The source is who acted, through the identity map's `jira` key (§13.5); the subject the issue key;
+The source is who acted, through the identity map's `jira` key (§12.5); the subject the issue key;
 the time and id Jira's.
 
 | Type | From | Id (after `jira:<site>:issue:<issue id>:`) | Data besides the common fields |
@@ -1435,7 +1352,7 @@ Common data: `site`, `project`, `issue`, `key`, `issuetype`, `login`, and the is
 `status_category`, `priority`, `priority_id`, `labels`, `sprints`, `links`. Never a summary, a
 description, a comment body, a sprint's name or goal, or a text field's before and after.
 
-### 13.3 One poll
+### 12.3 One poll
 
 Every request is a GET. A poll reads everything first and publishes only when every read succeeded.
 
@@ -1479,9 +1396,9 @@ sequenceDiagram
     I->>S: points labelled instrument=bridges.jira, project
 ```
 
-### 13.4 Resume and gaps
+### 12.4 Resume and gaps
 
-As the pull-request bridge (§12.5): own events read back by the id prefix `jira:<site>:issue:` give
+As the pull-request bridge (§11.5): own events read back by the id prefix `jira:<site>:issue:` give
 `seen`; the store's `jira_bridge_last_poll_timestamp_seconds{instrument="bridges.jira"}` gives the
 last good poll; the next poll reads from the later of the two less `overlap`, no further back than
 `max_catchup`, and with neither from `lookback` ago. A gap is counted once, when a poll succeeds
@@ -1489,7 +1406,7 @@ last good poll; the next poll reads from the later of the two less `overlap`, no
 unless `max_catchup` cut it short), continued from the store on start. JQL's relative minutes (`"-Nm"`) cover the
 window on Jira's own clock, so the laptop's time zone and JQL's minute resolution do not matter.
 
-### 13.5 People
+### 12.5 People
 
 | Account | Data Center | Cloud |
 |---|---|---|
@@ -1503,7 +1420,7 @@ published as `bot.jira` (`People.itself`: kind `program`, named `Jira`, no accou
 like anyone else; on every site, since the map's `jira` key serves them all. The owner is the token's account
 (`/myself`): the levels compare assignees and comment authors with it.
 
-### 13.6 Two sites
+### 12.6 Two sites
 
 `[bridges.jira_<name>]` is a second bridge: process and instrument `bridges.jira_<name>`,
 its own `port` (required), its token from `JIRA_<NAME>_API_TOKEN` or
@@ -1511,7 +1428,7 @@ its own `port` (required), its token from `JIRA_<NAME>_API_TOKEN` or
 collide. Both announce people under the map's `jira` key, so one person on both sites is one
 machine when the map lists both accounts.
 
-### 13.7 Limits
+### 12.7 Limits
 
 - Only the owner's comment answers a comment.
 - `jira.issue.updated` covers sprint, priority, labels, links and due date only.

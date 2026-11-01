@@ -11,7 +11,6 @@ refuses anything else before a request is made (machine-design.md §2.2, "Compan
 
 from __future__ import annotations
 
-import ipaddress
 import tomllib
 import urllib.parse
 from dataclasses import dataclass, field
@@ -20,7 +19,7 @@ from typing import Any
 
 from orchestra.config import parse_duration
 
-from .settings import ENV_NAME
+from ..local import ENV_NAME, is_local
 
 CLEARANCES = ("needs approval", "approved")
 
@@ -71,14 +70,6 @@ def read(path: str | Path) -> MachineFile:
         ttl_s=parse_duration(s.get("ttl"), 240.0), clearance=clearance,
         data_class=str(raw.get("data_class") or "unknown"),
         extra={k: v for k, v in s.items() if k not in known})
-
-
-def is_local(url: str) -> bool:
-    host = (urllib.parse.urlsplit(url).hostname or "").lower()
-    try:
-        return ipaddress.ip_address(host).is_loopback
-    except ValueError:
-        return host == "localhost"
 
 
 def require_clearance(m: MachineFile, base_url: str) -> None:

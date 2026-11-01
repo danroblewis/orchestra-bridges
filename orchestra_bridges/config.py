@@ -78,7 +78,6 @@ environment variable (``token_env`` names it, never holds it) or a file outside 
 from __future__ import annotations
 
 import fnmatch
-import ipaddress
 import re
 import urllib.parse
 from dataclasses import dataclass, field
@@ -86,6 +85,8 @@ from pathlib import Path
 from typing import Any
 
 from orchestra.config import ConfigError, parse_duration
+
+from .local import ENV_NAME, is_local
 
 REPO = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 GITHUB_PORT = 9464
@@ -296,14 +297,6 @@ class JiraConfig:
         return "project in (" + ", ".join(f'"{p}"' for p in self.projects) + ")"
 
 
-def _loopback(host: str) -> bool:
-    try:
-        return ipaddress.ip_address(host).is_loopback
-    except ValueError:
-        return host == "localhost"
-
-
-ENV_NAME = re.compile(r"^[A-Z][A-Z0-9_]{1,63}$")
 
 
 def token_env(s: dict[str, Any], where: str) -> str | None:
@@ -322,7 +315,7 @@ def jira_api(name: str, url: str) -> str:
     """``api`` when the token may go there: https anywhere (Data Center is the company's own host), or
     plain http only to a fake on this machine."""
     u = urllib.parse.urlsplit(url)
-    if u.scheme == "https" and u.hostname or u.scheme == "http" and _loopback((u.hostname or "").lower()):
+    if u.scheme == "https" and u.hostname or u.scheme == "http" and is_local((u.hostname or "").lower()):
         return url.rstrip("/")
     raise ConfigError(f"[bridges.{name}] api must be an https URL (or http on a loopback host, for a fake), not {url!r}")
 
@@ -395,7 +388,7 @@ def slack_api(url: str) -> str:
     u = urllib.parse.urlsplit(url)
     host = (u.hostname or "").lower()
     if (u.scheme == "https" and (host == "slack.com" or host.endswith(".slack.com"))) or (
-            u.scheme in ("http", "https") and _loopback(host)):
+            u.scheme in ("http", "https") and is_local(host)):
         return url.rstrip("/")
     raise ConfigError(f"[bridges.slack] api must be https on slack.com, or a loopback host for a local fake, not {url!r}: "
                       "the token goes nowhere else")

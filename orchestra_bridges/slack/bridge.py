@@ -5,7 +5,8 @@ Each poll first reads, then publishes, so a poll that fails part way publishes n
 publish again differently:
 
 1. the searches (``search.py``) over the window: pings, and the owner's own messages when the reply
-   rule is on. Only these (and ``auth.test``) fail a poll;
+   rule is on. Only these fail a poll (``auth.test`` is called once in ``run`` before ``resume``,
+   tried again each round until it succeeds);
 2. when the reaction rule is on and a ping waits, the owner's own reactions, the messages reacted
    to most recently first, from ``reactions.list``: one call a page of 100, at most
    ``REACTION_PAGES`` pages, however many pings wait. Slack gives no reaction's time, so there is no

@@ -1,8 +1,8 @@
 """Run a bridge for the project at ORCHESTRA_REPO, else the working directory, until SIGTERM or SIGINT.
 
 ``orchestra bridges github|github_prs|slack|jira[_<name>] [--once]`` (or ``orchestra bridges scaffold
-<kind> <name>``, which writes a new machine from a kit: ``kits/scaffold.py``; ``orchestra bridges
-integrations``, which lists them: ``kits/integrations.py``) (``orchestra --repo PATH bridges
+<kind> <name>``, which writes a new poller from a kit: ``kits/scaffold.py``; ``orchestra bridges
+integrations``, which lists the scaffolded pollers: ``kits/integrations.py``) (``orchestra --repo PATH bridges
 ...`` sets ORCHESTRA_REPO), or ``python -m orchestra_bridges ...``, which the launcher runs and gives
 ORCHESTRA_REPO. A bridge publishes only as the people and bots who acted (``relay.py``), so its bus has no
 source of its own."""
@@ -64,7 +64,7 @@ def _slack(project, stop: threading.Event):
                         ProjectStore(for_project(project), project.key))
 
 
-BRIDGES = {"github": (_github, github), "github_prs": (_github_prs, github_prs), "slack": (_slack, slack)}
+BRIDGES = {"github": _github, "github_prs": _github_prs, "slack": _slack}
 
 
 def _log(name: str, msg: str) -> None:
@@ -73,10 +73,10 @@ def _log(name: str, msg: str) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
-    if argv[:1] == ["scaffold"]:                  # a new Programmatic Machine from a kit (kits/scaffold.py)
+    if argv[:1] == ["scaffold"]:                  # a new poller (a relay) from a kit (kits/scaffold.py)
         from .kits.scaffold import main as scaffold
         return scaffold(argv[1:])
-    if argv[:1] == ["integrations"]:              # read-only: the scaffolded machines (kits/integrations.py)
+    if argv[:1] == ["integrations"]:              # read-only: the scaffolded pollers (kits/integrations.py)
         from .kits.integrations import main as integrations
         return integrations(argv[1:])
     ap = argparse.ArgumentParser(prog="orchestra bridges")
@@ -88,7 +88,7 @@ def main(argv: list[str] | None = None) -> int:
     stop = threading.Event()
     try:
         if args.bridge in BRIDGES:
-            bridge = BRIDGES[args.bridge][0](load_project(), stop)
+            bridge = BRIDGES[args.bridge](load_project(), stop)
         else:
             bridge = _jira(load_project(), args.bridge, stop)
     except (ConfigError, GitHubError, IdentityError, JiraError, TokenError) as e:

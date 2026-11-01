@@ -275,3 +275,17 @@ def test_an_uncleared_poller_stops_cleanly_while_waiting(tmp_path):
                 proc.kill()
                 proc.wait()
     assert log.read_text().count("waiting for approval") == 1 and not (tmp_path / "e.jsonl").exists()
+
+
+def test_a_measurement_only_kit_says_nothing_of_a_poller_and_refuses_to_poll(tmp_path):
+    d = scaffold("promql", "prom_series", tmp_path / "root")
+    doc = (d / "AGENTS.md").read_text()
+    assert "a measurement of" in doc and "Poller.emit" not in doc and "--once" not in doc and "{{" not in doc
+    assert "[[machines]]" not in doc and "make_poll" not in (d / "prom_series.py").read_text()
+    r = subprocess.run([sys.executable, str(d / "prom_series.py"), "--state-dir", str(tmp_path / "st")],
+                       capture_output=True, text=True, timeout=60, check=False)
+    assert r.returncode == 2 and "polls nothing" in r.stderr, r.stderr
+    poller = (scaffold("pagerduty", "pd_doc", tmp_path / "root") / "AGENTS.md").read_text()
+    assert "Poller.emit" in poller and "person.pagerduty.<account>" in poller and "{{" not in poller
+    http = (scaffold("http", "api_doc", tmp_path / "root") / "AGENTS.md").read_text()
+    assert "person.<system>.<account>" in http and "person.http." not in http

@@ -119,9 +119,6 @@ class FakeGitHub:
         self._touch(n, at)
         return e
 
-    def edit_comment(self, c: dict, at: float) -> None:
-        c["updated_at"] = ts(at)
-
     def list(self, what: str, q: dict[str, str]) -> list[dict]:
         since = q.get("since")
         desc = q.get("direction", "desc") == "desc"

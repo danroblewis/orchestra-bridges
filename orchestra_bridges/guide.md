@@ -253,11 +253,11 @@ expanded here: use an absolute path for a file outside the repository (the owner
 set `bridges.people` in the overlay then).
 
 ```toml
-[people.daniel]
-name = "Daniel Lewis"
+[people.alice]
+name = "Alice Example"
 team = "sre"
-github = "danroblewis"
-jira = "dlewis"          # Data Center: username or user key (JIRAUSER10100); Cloud: account id
+github = "alice"
+jira = "alice"           # Data Center: username or user key (JIRAUSER10100); Cloud: account id
 slack = "U012AB3CD"      # member id or handle
 
 [people.automation]
@@ -279,7 +279,7 @@ this package defines series over RabbitMQ's own per-queue counts, for a project'
 [[sources]]
 name = "rabbit"
 url = "http://127.0.0.1:8441"   # the Prometheus-compatible store that scrapes RabbitMQ
-preset = "/path/to/orchestra_bridges/rabbitmq/preset.toml"   # where the package is installed
+preset = "/path/to/orchestra_bridges/rabbitmq/preset.toml"   # where the package is installed: python -c "import importlib.resources as r; print(r.files('orchestra_bridges') / 'rabbitmq/preset.toml')"
 settle = "30s"                  # VictoriaMetrics hides the newest 30 s from range queries
 
 [sources.producers]             # exchange = the machine that publishes into it

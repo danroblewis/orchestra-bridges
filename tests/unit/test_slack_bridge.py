@@ -92,8 +92,8 @@ def test_a_mention_is_a_ping_from_the_pinger_on_the_thread(slack_project, slack,
                          "user": BOB, "kind": "mention"}
     [a] = [e for e in bus(slack_project) if e["source"] == "person.bob"
            and e["type"] == "orchestra.machine.started"]
-    assert (a["data"]["name"], a["data"]["team"], a["data"]["kind"], a["data"]["slack"]) == (
-        "Bob Builder", "platform", "person", "bob")
+    assert (a["data"]["name"], a["data"]["team"], a["data"]["kind"]) == ("Bob Builder", "platform", "person")
+    assert "slack" not in a["data"]                     # the account is no field anything reads
     assert level(b, "slack_pings_unanswered") == 1 and level(b, "slack_pings_oldest_unanswered_seconds") == 120
     assert {m["id"] for m in only_actors(bus(slack_project))} == {"person.bob"}
 

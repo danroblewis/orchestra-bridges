@@ -192,10 +192,6 @@ class FakePRs:
         self.pulls[n].update(state="closed", closed_at=ts(at))
         self._event(n, "closed", login, at, state_reason=None)
 
-    def reopen(self, n: int, login: str, at: float) -> None:
-        self.pulls[n].update(state="open", closed_at=None)
-        self._event(n, "reopened", login, at)
-
     def list_pulls(self, q: dict[str, str]) -> list[dict]:
         state = q.get("state", "open")
         items = [p for p in self.pulls.values() if state == "all" or p["state"] == state]

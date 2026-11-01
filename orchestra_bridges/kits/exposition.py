@@ -1,25 +1,15 @@
 """Series in the Prometheus text format, as a ``[[collect]]`` entry reads them (docs/machines.md,
 "What a collector prints").
 
-A poller keeps its gauges and counters here and writes them whole, after each good poll, to a file
-(renamed into place, so a reader never sees half) or to standard output. The machine does not
-store them: an instrument does. The ``[[collect]]`` entry that adopts the file runs
-
-    python -m orchestra_bridges.kits.exposition <file> --max-age 900
-
-which prints the file when it was written within ``--max-age`` seconds, and otherwise prints
-nothing and exits 1, so a poller that stopped shows on the Instruments page as an instrument that
-fails, never as a level that holds still."""
+A poller keeps its counters here (saved with its cursor after each good poll); a scaffolded
+program's ``measure`` fills a ``Registry`` and writes it to standard output (``write("-")``) for its
+``[[collect]]`` entry. The machine does not store them: an instrument does."""
 
 from __future__ import annotations
 
-import argparse
 import math
-import os
 import re
 import sys
-import time
-from pathlib import Path
 
 NAME = re.compile(r"^[a-zA-Z_:][a-zA-Z0-9_:]*$")
 LABEL = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
@@ -70,9 +60,6 @@ class Registry:
         if help:
             self.help[name] = help
 
-    def clear_gauges(self) -> None:
-        self.gauges.clear()
-
     def render(self) -> str:
         out: list[str] = []
         for kind, table in (("gauge", self.gauges), ("counter", self.counters)):
@@ -92,42 +79,10 @@ class Registry:
         for n, rows in (state or {}).items():
             self.counters[n] = {tuple(tuple(p) for p in k): float(v) for k, v in rows}
 
-    def write(self, path: str | Path) -> None:
-        text = self.render()
-        if str(path) == "-":
-            sys.stdout.write(text)
-            sys.stdout.flush()
-            return
-        p = Path(path)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        tmp = p.with_suffix(f".{os.getpid()}.tmp")
-        tmp.write_text(text, encoding="utf-8")
-        os.replace(tmp, p)
+    def write(self, path: str = "-") -> None:
+        """Print the series on standard output (``-``), for a ``[[collect]]`` entry."""
+        if path != "-":
+            raise ValueError("series are printed on standard output, for the instrument that runs measure")
+        sys.stdout.write(self.render())
+        sys.stdout.flush()
 
-
-def show(path: str | Path, max_age_s: float, now: float | None = None) -> str | None:
-    """The file's text when it was written within ``max_age_s``; else None."""
-    p = Path(path)
-    try:
-        if (now or time.time()) - p.stat().st_mtime > max_age_s:
-            return None
-        return p.read_text(encoding="utf-8")
-    except OSError:
-        return None
-
-
-def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="python -m orchestra_bridges.kits.exposition")
-    ap.add_argument("file")
-    ap.add_argument("--max-age", type=float, default=900.0, help="seconds; older than this prints nothing")
-    a = ap.parse_args(argv)
-    text = show(a.file, a.max_age)
-    if text is None:
-        print(f"{a.file}: missing or older than {a.max_age:g} s (is its poller running?)", file=sys.stderr)
-        return 1
-    sys.stdout.write(text)
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())

@@ -30,7 +30,7 @@ up() {
   if [ -f "$RIG_STATE/fleet.pid" ] && kill -0 "$(cat "$RIG_STATE/fleet.pid")" 2>/dev/null; then
     echo "fleet already running (pid $(cat "$RIG_STATE/fleet.pid"))"
   else
-    nohup uv run --no-project --with pika python "$HERE/../fleet.py" --port 5682 --pidfile "$RIG_STATE/fleet.pid" \
+    nohup uv run --no-project --with pika python "$HERE/fleet.py" --port 5682 --pidfile "$RIG_STATE/fleet.pid" \
       >"$RIG_STATE/fleet.log" 2>&1 &
     sleep 3
     echo "fleet started (pid $(cat "$RIG_STATE/fleet.pid"), log $RIG_STATE/fleet.log)"

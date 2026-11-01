@@ -308,7 +308,7 @@ def test_people_map_through_the_identity_map_with_their_teams(project, jira, mak
     assert (started["person.al"]["name"], started["person.al"]["team"]) == ("Alice L", "web")
     assert started["person.jira.carol"]["name"] == "Carol Person" and "team" not in started["person.jira.carol"]
     assert started["bot.robot"]["kind"] == "program"
-    assert {k: started["bot.jira"][k] for k in ("kind", "name", "bot")} == {"kind": "program", "name": "Jira", "bot": True}
+    assert {k: started["bot.jira"][k] for k in ("kind", "name")} == {"kind": "program", "name": "Jira"} and "bot" not in started["bot.jira"]
     assert "jira" not in started["bot.jira"]                         # no account behind it
     only_actors(bus(project))
 
