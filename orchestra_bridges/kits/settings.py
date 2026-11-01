@@ -9,6 +9,7 @@ through the project's merged configuration, never by opening the file (Orchestra
     per_minute = 60                     # the default request rate per host, for every kit client
     hosts = { "api.pagerduty.com" = 30, "jira.acme.com" = 20 }   # per host, over the default
     tokens = { pagerduty = "PAGERDUTY_TOKEN", jira = "JIRA_API_TOKEN" }   # environment NAMES only
+    ca_file = "~/.config/orchestra-bridges/corporate-ca.pem"   # a CA bundle trusted beside the system's
 
 A token is never here: ``tokens`` maps a system to the name of the environment variable that holds
 it, and ``check`` refuses a value that is not such a name, and any key named ``token``."""
@@ -22,10 +23,11 @@ from typing import Any
 
 from orchestra.config import ConfigError, parse_duration
 
-ENV_NAME = re.compile(r"^[A-Z][A-Z0-9_]{1,63}$")
+from ..local import ENV_NAME
+
 SYSTEM = re.compile(r"^[a-z][a-z0-9_]{0,40}$")
 HOST = re.compile(r"^[A-Za-z0-9.-]+(:\d+)?$")
-KEYS = {"cache_dir", "ttl", "per_minute", "hosts", "tokens"}
+KEYS = {"cache_dir", "ttl", "per_minute", "hosts", "tokens", "ca_file"}
 DEFAULT_PER_MINUTE = 60
 DEFAULT_TTL_S = 300.0
 
@@ -37,6 +39,7 @@ class KitSettings:
     per_minute: int = DEFAULT_PER_MINUTE
     hosts: dict[str, int] = field(default_factory=dict)
     tokens: dict[str, str] = field(default_factory=dict)
+    ca_file: str | None = None                # a PEM bundle trusted beside the system's CAs (a re-signing proxy)
 
     def per_minute_for(self, host: str) -> int:
         return self.hosts.get(host.lower(), self.per_minute)
@@ -82,11 +85,14 @@ def read(raw: dict[str, Any]) -> KitSettings:
             # never echo the value: it may be the token itself, pasted by mistake
             raise ConfigError(f"[bridges.kits] tokens.{k} must be the NAME of an environment variable "
                               "(upper case, digits, _), never the token")
+    ca = s.get("ca_file")
+    if ca is not None and not (isinstance(ca, str) and ca):
+        raise ConfigError(f"[bridges.kits] ca_file must be the path of a PEM bundle, not {ca!r}")
     return KitSettings(
         cache_dir=Path(cache).expanduser() if cache else None, ttl_s=ttl,
         per_minute=_rate(s.get("per_minute", DEFAULT_PER_MINUTE), "[bridges.kits] per_minute"),
         hosts={h.lower(): _rate(v, f"[bridges.kits] hosts.{h}") for h, v in hosts.items()},
-        tokens=dict(tokens))
+        tokens=dict(tokens), ca_file=ca)
 
 
 def check(raw: dict[str, Any]) -> list[str]:

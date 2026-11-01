@@ -5,42 +5,42 @@ broken without updating the spec and saying so in the commit.
 
 ## Invariants
 
-1. **Never text.** A bridge publishes, writes and logs metadata only: ids, logins, numbers,
-   states, label names, times. It never publishes titles, bodies, comments, messages or document
-   content. Text may pass through memory, and nowhere else. The canary test must stay green for
-   every bridge.
-2. **Read only.** A bridge never writes to the system it reads: no comments, labels or reactions.
-   Speaking into another system is a separate proposal (the outbox).
-3. **The token stays in memory.** A bridge takes credentials at start from the environment, a
-   token file outside the repository readable only by its owner (`secret.py`), or the owner's CLI
-   login. It never writes, logs or publishes them, and sends them only to the configured API host.
-4. **No state of its own.** What a bridge knows comes from the events it relayed, found on the bus
-   by their ids (never by a source of its own: it has none), and the series its instrument stored,
-   found by `instrument="bridges.<section>"`, rebuilt at start. Ids are the system's own, so
-   re-reading never duplicates. (A poller built from the kits, SPEC §8, is the exception: it keeps
-   its cursor, the ids it emitted and a cache of only what it kept, in the state directory.)
-5. **Through Orchestra's library only.** Events go through `orchestra.events.Events` (behind
-   `relay.py`, or the kits' `Poller`, which keeps the same rule); the store is only read, through `orchestra.metrics`. Processes and instruments are
-   declared through `orchestra.plugins`, `orchestra.launcher.Process` and
-   `orchestra.collect.spec.Collector`. Nothing in the package imports Orchestra's web app, model or
-   host (the tests use its Machines view to check rule 6), and nothing in Orchestra knows a bridge
-   (Orchestra's rule 1).
-6. **A bridge is a relay, never a machine** (Orchestra's rule 2, D19). An event's source is the
-   person or bot who acted (`identity.py`), and its subject is the item. A bridge never announces
-   itself, never publishes under its own name (`relay.py` refuses any source but `person.…` and
-   `bot.…`), is never declared as a machine, and never writes a metric: it serves `/metrics` for an
-   instrument the plugin declares. What a system did with no account behind it is that system's
-   own act, as the system's bot (`bot.<system>`: `bot.jira`). What no one did (a gap, an expiry) is
-   counted, never published. `bridges.<section>` names only a process, its log and its instrument.
-7. **Catch up, never assume continuity.** After a gap, a bridge reads back to where it left off
-   (within `max_catchup`) and counts the gap through its instrument (`gaps.py`).
+1. **A library, never a reader.** The package reads no system itself, runs no process, declares
+   no instrument and no machine (`plugin.py`: the guide and the check only). Every collector is a
+   script scaffolded from a kit into the owner's repository (or the state directory, when asked),
+   run by the project's own `[[machines]]` and `[[collect]]` entries. The direct readers were
+   retired on 2026-11-01; never bring one back here.
+2. **Never text.** A collector publishes, caches, logs and prints metadata only: ids, logins,
+   numbers, states, label names, times. Never titles, bodies, comments, messages or document
+   content. Text may pass through memory, and nowhere else. Every template's test and every fake
+   keeps the canary.
+3. **Read only.** The kits' client sends GET, or a form POST that asks a question, and refuses
+   anything else. A write to another system is an Outbox draft, never a kit's. The fakes accept
+   writes only so a test can change their world.
+4. **Credentials by reference.** A token comes from a `chmod 600` file outside any repository or
+   an environment variable a setting names (`secret.read_token`, the one reader), is kept in
+   memory, and is sent only to the configured host, never to a fake on this machine (the runner
+   sends placeholders there). It is never written, logged, cached, printed or put in a test.
+5. **Clearance.** A scaffolded script reads only a fake on this machine until its `machine.toml`
+   says `clearance = "approved"`, which only the owner's approval writes.
+6. **A relay, never a machine** (Orchestra's rule 2, D19). A poller publishes only as the person or
+   bot who acted (`kits/poller.py` refuses any other source), announces each of them once (with
+   its notes: `kits/notes.py`), never announces itself and never publishes as its own name. Its
+   measurement is an instrument and publishes nothing.
+7. **Through Orchestra's library only.** Events go through `orchestra.events.Events`; settings are
+   read from the project's merged configuration, never by opening a file (Orchestra's rule 10).
+   Nothing in the package imports Orchestra's web app, model or host, and nothing in Orchestra
+   knows a bridge (Orchestra's rule 1).
+8. **What the scaffold writes is the reference.** `examples/integrations/scaffolded/` is exactly
+   the templates' output; change a template, regenerate it, and keep each kit's own test passing
+   against its fake with the owner's values in.
 
 ## Conventions
 
 - Python 3.12+, `uv` for everything. Run tests with `uv run python -m pytest -q` and lint with
   `uv run ruff check .`.
-- Each bridge gets a fake of its API in the real shapes (`tests/fake_<system>.py`) and an opt-in
-  contract test against the real API that compares shapes only.
+- Each kit has a fake of its API in the real shapes (`kits/fakes/`) and a template whose test runs
+  against it.
 - Keep modules small and single-purpose. If a file needs a section divider comment, split it into
   two files. Comments and docs use plain language and are honest about limits.
 - Orchestra comes from GitHub (`[tool.uv] override-dependencies`, `main`), at the

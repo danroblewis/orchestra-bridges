@@ -22,15 +22,27 @@ it polls) or it is stopped (SIGTERM, SIGINT: exit 0). Against a fake on this mac
 and polls at once. ``--once``, ``--rounds`` and ``measure`` still refuse (exit 2) before any read.
 
 The token comes from ``[settings] token_env`` (an environment variable's name) or ``token_file`` (a
-``chmod 600`` file outside any repository). A fake on this machine needs neither: against a
-loopback URL with the variable unset and no such file, no token is sent (anywhere else a missing
-token is an error, as ever). ``measure`` finds the poller's directory in ``MachineFile.poll_dir``, so it can print the counters the poller keeps
-(``pollstate.counters_at``) beside what it reads itself."""
+``chmod 600`` file outside any repository). **A fake never gets a credential**: against a loopback
+URL the runner reads neither the token nor the account and sends placeholders instead,
+``[settings] fake_token`` and ``fake_user`` when set, else ``FAKE_TOKEN`` and ``FAKE_USER`` (a test
+starts its fake with the same, ``testing.fake_token``), so a real token is sent only to the real
+host. Anywhere else a missing token is an error, as ever. Against a fake the poller's notes say so
+(``notes.FAKE``, on each actor's announcement), beside ``machine.toml``'s ``[notes]``. ``ca_file``
+is passed to the client (a corporate CA); ``HTTPS_PROXY``/``NO_PROXY`` are the client's. ``measure``
+finds the poller's directory in ``MachineFile.poll_dir``, so it can print the counters the poller
+keeps (``pollstate.counters_at``) beside what it reads itself.
+
+A measurement-only program (a metrics store has no item events to relay) passes no ``make_poll``;
+running it without ``measure`` refuses, exit 2.
+
+**Exit codes**, the same for every scaffolded program: 0 done (a poll run that ended, a stop while
+waiting, a measurement printed); 1 a measurement that failed (its read raised); 2 refused before any
+read (a ``machine.toml`` that cannot be read, no project, not cleared for ``--once``/``--rounds``/
+``measure``, a missing token, a poll asked of a measurement-only program)."""
 
 from __future__ import annotations
 
 import argparse
-import os
 import signal
 import sys
 import threading
@@ -42,11 +54,15 @@ from pathlib import Path
 
 from orchestra.events import Events
 
+from . import notes as note
 from .client import CachedClient, KitError, read_token
 from .exposition import Registry
 from .machinefile import MachineFile, MachineFileError, is_local, read, require_clearance
 from .poller import Poller, poll_dir
 
+FAKE_TOKEN = "fake-token-for-a-local-fake"     # what a run against a fake sends instead of a token
+FAKE_USER = "fake-user"                         # and instead of an HTTP Basic account
+FAKE_RATE = 6000                                # requests a minute to a fake: no real system to spare
 Poll = Callable[[Poller], None]
 Measure = Callable[[CachedClient, MachineFile, Registry], None]
 
@@ -69,7 +85,8 @@ def parser(name: str) -> argparse.ArgumentParser:
     return ap
 
 
-FIXED = {"base_url", "token", "token_env", "token_file", "user_env", "user_file", "every", "per_minute", "ttl"}
+FIXED = {"base_url", "token", "token_env", "token_file", "user_env", "user_file", "every", "per_minute", "ttl",
+         "ca_file", "fake_token", "fake_user"}
 
 
 def overrides(pairs: list[str]) -> dict:
@@ -91,6 +108,16 @@ def overrides(pairs: list[str]) -> dict:
 
 def cleared(m: MachineFile, base_url: str) -> bool:
     return is_local(base_url) or m.clearance == "approved"
+
+
+def credentials(m: MachineFile, base_url: str, repo_root: Path | None = None) -> dict:
+    """What the client is given to authenticate: against a fake on this machine the placeholders
+    (never a credential read from anywhere), else the token's and the account's references (a file
+    inside ``repo_root`` is refused)."""
+    if is_local(base_url):
+        return {"token": m.fake_token or FAKE_TOKEN, "basic_user": m.fake_user or FAKE_USER}
+    user = read_token(m.user_env, m.user_file, repo_root) if m.user_env or m.user_file else None
+    return {"token_env": m.token_env, "token_file": m.token_file, "basic_user": user, "repo_root": repo_root}
 
 
 def _log(name: str, msg: str) -> None:
@@ -123,8 +150,9 @@ def _until_stopped() -> threading.Event:
     return stop
 
 
-def main(here: str | Path, make_poll: Callable[[CachedClient, MachineFile], Poll], argv: list[str] | None = None, *,
-         measure: Measure | None = None, auth_format: str = "Bearer {token}",
+def main(here: str | Path, make_poll: Callable[[CachedClient, MachineFile], Poll] | None = None,
+         argv: list[str] | None = None, *,
+         measure: Measure | None = None, auth_format: str | Callable[[MachineFile], str] = "Bearer {token}",
          headers: dict[str, str] | None = None) -> int:
     here = Path(here)
     try:
@@ -133,6 +161,9 @@ def main(here: str | Path, make_poll: Callable[[CachedClient, MachineFile], Poll
         print(e, file=sys.stderr)
         return 2
     a = parser(m.name).parse_args(argv)
+    if a.what == "poll" and make_poll is None:
+        print(f"{m.name}: polls nothing (a measurement only): run it with measure", file=sys.stderr)
+        return 2
     if a.what == "poll" and not a.once and a.rounds is None and not cleared(m, a.base_url or m.base_url):
         m = wait_for_clearance(here / "machine.toml", m, a.base_url, a.every or m.every_s, _until_stopped())
         if m is None:
@@ -151,19 +182,15 @@ def main(here: str | Path, make_poll: Callable[[CachedClient, MachineFile], Poll
         if a.ttl is not None:
             m.ttl_s = a.ttl
         m.extra.update(overrides(a.set))
-        token_env, token_file = m.token_env, m.token_file
-        if is_local(base_url) and not (token_env and os.environ.get(token_env)) and not (
-                token_file and Path(token_file).expanduser().is_file()):
-            token_env = token_file = None       # a fake on this machine: no credentials needed
         m.poll_dir = poll_dir(m.name, a.state_dir, project)
-        user = read_token(m.user_env, m.user_file) if (token_env or token_file) and (m.user_env or m.user_file) else None
-        common = {"token_env": token_env, "token_file": token_file, "auth_format": auth_format, "headers": headers,
-                  "dry_run": a.dry_run, "basic_user": user}
+        common = {**credentials(m, base_url, project.repo_root if project is not None else None), "auth_format": auth_format(m) if callable(auth_format) else auth_format,
+                  "headers": headers, "dry_run": a.dry_run, "ca_file": m.ca_file}
+        rate = FAKE_RATE if is_local(base_url) else m.per_minute     # a fake on this machine has no rate to keep
         if a.state_dir:
-            client = CachedClient(base_url, per_minute=m.per_minute, cache_dir=Path(a.state_dir) / "cache",
+            client = CachedClient(base_url, per_minute=rate, cache_dir=Path(a.state_dir) / "cache",
                                   ttl_s=m.ttl_s, **common)
         else:
-            client = CachedClient.for_project(project, base_url, system=m.kit, per_minute=m.per_minute, ttl_s=m.ttl_s,
+            client = CachedClient.for_project(project, base_url, system=m.kit, per_minute=rate, ttl_s=m.ttl_s,
                                               **common)
     except (MachineFileError, KitError, ValueError) as e:
         print(f"{m.name}: {e}", file=sys.stderr)
@@ -181,5 +208,7 @@ def main(here: str | Path, make_poll: Callable[[CachedClient, MachineFile], Poll
         series.write("-")
         return 0
     events = Events(Path(a.events_file)) if a.events_file else None
-    poller = Poller(m.name, every_s=a.every or m.every_s, state_dir=a.state_dir, events=events, project=project)
+    notes = {**m.notes, **({"fake": note.FAKE} if is_local(base_url) else {})}
+    poller = Poller(m.name, every_s=a.every or m.every_s, state_dir=a.state_dir, events=events, project=project,
+                    notes=notes)
     return poller.run(make_poll(client, m), once=a.once, rounds=a.rounds)

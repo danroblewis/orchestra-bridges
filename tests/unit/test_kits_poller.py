@@ -3,7 +3,6 @@ cursor persisted, emission idempotent across a restart, a failed poll saving not
 file, and a clean stop on SIGTERM."""
 
 import json
-import os
 import signal
 import subprocess
 import sys
@@ -13,9 +12,9 @@ import time
 import pytest
 from orchestra.events import Events
 
-from orchestra_bridges.kits.exposition import Registry, show
-from orchestra_bridges.kits.exposition import main as show_main
+from orchestra_bridges.kits.exposition import Registry
 from orchestra_bridges.kits.poller import Poller, RelayError, actor_source
+from orchestra_bridges.kits.pollstate import counters_at
 
 
 def make(tmp_path, **kw):
@@ -49,11 +48,30 @@ def test_relays_as_actors_and_announces_each_once(tmp_path):
     evs = read(tmp_path)
     started = [e for e in evs if e["type"] == "orchestra.machine.started"]
     assert [e["source"] for e in started] == ["person.demo.ann", "bot.demo"]
-    assert started[0]["data"] == {"mode": "ad hoc", "kind": "person", "listens_for": [], "package": "demo_poller"}
+    assert started[0]["data"] == {"mode": "ad hoc", "kind": "person", "listens_for": [], "package": "bridges"}
     assert started[1]["data"]["kind"] == "program"
     assert not any(e["source"] == "demo_poller" for e in evs)
     first = evs.index(started[0])
     assert evs[first + 1]["subject"] == "A-1"                              # announced just before the first event
+
+
+def test_notes_go_on_each_actors_announcement_and_a_change_announces_again(tmp_path):
+    """K7: a poller's notes (relayed from a fake, a stand-in, disabled) are in each actor's own
+    announcement, so they show with that machine; a changed note announces each actor again, once."""
+    p = make(tmp_path, notes={"fake": "relayed from a fake", "disabled": ""})
+    p.run(items_poll([("A-1", "opened", "ann")]), once=True)
+    q = make(tmp_path, notes={"fake": "relayed from a fake"})          # a restart, the same notes: nothing again
+    q.run(items_poll([("A-1", "opened", "ann"), ("A-2", "opened", "ann")]), once=True)
+    r = make(tmp_path, notes={"stand_in": "reviews as comments"})       # the notes changed: announced again
+    r.run(items_poll([("A-3", "opened", "ann")]), once=True)
+    started = [e["data"] for e in read(tmp_path) if e["type"] == "orchestra.machine.started"]
+    assert len(started) == 2
+    assert started[0]["fake"] == "relayed from a fake" and "disabled" not in started[0]
+    assert started[1]["stand_in"] == "reviews as comments" and "fake" not in started[1]
+    with pytest.raises(ValueError, match="no note"):
+        make(tmp_path, notes={"title": "x"})
+    with pytest.raises(ValueError, match="one line"):
+        make(tmp_path, notes={"disabled": "two\nlines"})
 
 
 def test_refuses_any_source_but_an_actor(tmp_path):
@@ -99,27 +117,23 @@ def test_a_failed_poll_saves_nothing(tmp_path):
     assert not (tmp_path / "state" / "cursor.json").exists()
 
 
-def test_series_written_after_a_good_poll_and_counters_kept(tmp_path):
+def test_counters_kept_with_the_cursor_across_restarts(tmp_path):
     def poll(p):
-        p.gauge("demo_open", 3, {"kind": "a"}, help="Open items.")
         p.counter("demo_seen_total", 2)
     make(tmp_path).run(poll, rounds=2)
-    text = (tmp_path / "state" / "metrics.prom").read_text()
-    assert 'demo_open{kind="a"} 3' in text and "demo_seen_total 4" in text and "# TYPE demo_open gauge" in text
+    assert counters_at(tmp_path / "state") == {"demo_seen_total": [[[], 4.0]]}
     make(tmp_path).run(poll, once=True)                                    # a restart: the counter goes on
-    assert "demo_seen_total 6" in (tmp_path / "state" / "metrics.prom").read_text()
+    assert counters_at(tmp_path / "state") == {"demo_seen_total": [[[], 6.0]]}
+    assert not list((tmp_path / "state").glob("*.prom"))                  # no file of series: measure prints them
 
 
-def test_exposition_show_refuses_a_stale_file(tmp_path, capsys):
+def test_a_registry_prints_escaped_series_on_standard_output(capsys):
     r = Registry()
     r.gauge("x", 1.5, {"a": 'q"uote'})
-    f = tmp_path / "m.prom"
-    r.write(f)
-    assert show(f, 60) == '# TYPE x gauge\nx{a="q\\"uote"} 1.5\n'
-    assert show(f, 60, now=time.time() + 120) is None
-    assert show_main([str(f), "--max-age", "60"]) == 0 and "x{" in capsys.readouterr().out
-    os.utime(f, (time.time() - 3600, time.time() - 3600))
-    assert show_main([str(f), "--max-age", "60"]) == 1
+    r.write("-")
+    assert capsys.readouterr().out == '# TYPE x gauge\nx{a="q\\"uote"} 1.5\n'
+    with pytest.raises(ValueError):
+        r.write("m.prom")
 
 
 def test_registry_refuses_bad_names():
@@ -152,3 +166,21 @@ def test_stops_cleanly_on_sigterm(tmp_path):
         if proc.poll() is None:
             proc.kill()
     assert "stopped" in proc.stderr.read()
+
+
+def test_the_identity_map_wins_for_a_kit_poller_as_for_the_jira_reader(tmp_path):
+    from orchestra_bridges.identity import People
+    people = People({"alice": {"name": "Alice Example", "team": "sre", "jira": "alice.j"}})
+    p = make(tmp_path, people=people)
+
+    def poll(poller):
+        poller.emit("jira.issue.transitioned", "ABC-1", {"to": "Done"}, source=actor_source("jira", "alice.j"), stamp="1")
+        poller.emit("jira.issue.transitioned", "ABC-2", {"to": "Done"}, source=actor_source("jira", "bob"), stamp="1")
+    p.run(poll, once=True)
+    evs = read(tmp_path)
+    moved = [e["source"] for e in evs if e["type"] == "jira.issue.transitioned"]
+    reader = [people.actor("jira", login, namespaced=True).source for login in ("alice.j", "bob")]   # the Jira reader's rule
+    assert moved == reader == ["person.alice", "person.jira.bob"]
+    [alice] = [e for e in evs if e["type"] == "orchestra.machine.started" and e["source"] == "person.alice"]
+    assert alice["data"] == {"mode": "ad hoc", "kind": "person", "listens_for": [], "package": "bridges",
+                             "name": "Alice Example", "team": "sre"}

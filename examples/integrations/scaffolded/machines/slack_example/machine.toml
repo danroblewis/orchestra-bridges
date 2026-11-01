@@ -1,0 +1,30 @@
+# slack_example: a poller scaffolded from the orchestra-bridges kit `slack`: a relay of who posted in a
+# few channels, never a machine itself (the machines are the people and bots it publishes as).
+# Read by its own program (slack_example.py: [settings], clearance) and by the Supervisor (description,
+# engagement, [[publishes]]); never by Orchestra, which knows the actors by their events.
+# Mentions of you and whether you answered need a search with your user token (search:read): adapt this script.
+name = "slack_example"
+# kit: the template it came from, and the system's name in [bridges.kits] tokens: when token_env
+# below is not set, the token's variable is the project's tokens.<kit> (tokens = { jira = "JIRA_API_TOKEN" }).
+kit = "slack"
+description = "Polls a few Slack channels every 5 minutes and relays each message as slack.message.posted, as who posted it; measure prints the messages per channel in the last hour."
+engagement = "scheduled"
+created_by = "orchestra bridges scaffold"
+# The compliance check: until the owner approves reading Slack (then "approved", with the data
+# class), the program reads only a fake on this machine.
+clearance = "needs approval"
+data_class = "unknown"
+
+[settings]
+base_url = "https://slack.com"
+token_env = "SLACK_TOKEN"         # the NAME of the variable holding the token; never the token
+# token_file = "~/.config/orchestra-bridges/slack-token"   # instead: a chmod 600 file outside any repository
+every = "5m"
+per_minute = 20                   # conversations.history is Tier 3 (50 a minute); stay under it
+ttl = "4m"
+channels = ["C001"]               # guess: ask the owner (channel ids, not names)
+lookback_s = 86400                # how far back the first poll reads
+
+[[publishes]]
+type = "slack.message.posted"
+subject = "<channel>/<thread ts>"

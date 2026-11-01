@@ -13,15 +13,15 @@ def test_bots_are_told_by_the_system_or_the_bot_suffix():
 
 def test_a_listed_account_is_its_person_with_name_and_team(tmp_path):
     f = tmp_path / "people.toml"
-    f.write_text('[people.daniel]\nname = "Daniel Lewis"\nteam = "sre"\ngithub = "DanRobLewis"\nslack = "U123"\n'
+    f.write_text('[people.alice]\nname = "Alice Example"\nteam = "sre"\ngithub = "Alice"\nslack = "U123"\n'
                  '[people.triage]\nbot = true\nteam = "vscode"\ngithub = ["vscode-triage-bot", "vs-code-engineering"]\n')
     people = People.load(f)
-    a = people.actor("github", "danroblewis")
-    assert (a.source, a.name, a.team) == ("person.daniel", "Daniel Lewis", "sre")
-    assert people.actor("slack", "u123").source == "person.daniel"          # one person across systems
+    a = people.actor("github", "alice")
+    assert (a.source, a.name, a.team) == ("person.alice", "Alice Example", "sre")
+    assert people.actor("slack", "u123").source == "person.alice"           # one person across systems
     assert people.actor("github", "vs-code-engineering").source == "bot.triage"
-    assert a.announcement("github") == {"kind": "person", "mode": "ad hoc", "package": "bridges", "github": "danroblewis",
-                                        "bot": False, "name": "Daniel Lewis", "team": "sre"}
+    assert a.announcement("github") == {"kind": "person", "mode": "ad hoc", "package": "bridges",
+                                        "name": "Alice Example", "team": "sre"}
     assert people.actor("github", "vscode-triage-bot").announcement("github")["kind"] == "program"
 
 

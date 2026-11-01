@@ -5,14 +5,16 @@ build-backend = "hatchling.build"
 [project]
 name = "orchestra-bridges"
 version = "0.1.0"
-description = "Bridges for Orchestra: machines that poll systems which are buses in all but name (GitHub issues and pull requests, Jira, Slack pings) and publish what people did there as metadata-only events on a project's Orchestra bus."
+description = "The bridges for Orchestra: a library (kits, fakes, templates, a scaffold and a clearance gate) from which a Supervisor or a coding tool writes, in the owner's repository, the scripts that bring an outside system's events and measurements into a project."
 requires-python = ">=3.12"
 # orchestra: ours is 1.0.0a1; <1.0.0rc0 keeps out the unrelated `orchestra` on PyPI (1.0.0 and up)
-dependencies = ["orchestra>=1.0.0a1,<1.0.0rc0"]
+# pytest: a scaffolded collector's own test runs in Orchestra's Python, beside the kits (kits/scaffold.py)
+dependencies = ["orchestra>=1.0.0a1,<1.0.0rc0", "pytest>=8.0"]
 
 [project.optional-dependencies]
-# orchestra[sd]: the RabbitMQ contract test aligns series with discovery's own reader (orchestra.sd.rediscover).
-dev = ["pytest>=8.0", "ruff>=0.6", "orchestra[sd]"]
+# orchestra[sd]: the examples' model-acceptance test (test_integrations_model.py) and the RabbitMQ contract test
+# (discovery's own reader, orchestra.sd.rediscover). pytest is a dependency itself (a scaffolded test runs beside the kits).
+dev = ["ruff>=0.6", "orchestra[sd]"]
 
 [project.entry-points."orchestra.plugins"]
 bridges = "orchestra_bridges.plugin:plugin"

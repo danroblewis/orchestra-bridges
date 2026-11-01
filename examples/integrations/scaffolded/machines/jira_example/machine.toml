@@ -1,0 +1,49 @@
+# jira_example: a poller scaffolded from the orchestra-bridges kit `jira`: a relay of what people did in
+# Jira, never a machine itself (the machines are the actors it publishes as).
+# Read by its own program (jira_example.py: [settings], clearance) and by the Supervisor (description,
+# engagement, [[publishes]]); never by Orchestra, which knows the actors by their events.
+name = "jira_example"
+# kit: the template it came from, and the system's name in [bridges.kits] tokens: when token_env
+# below is not set, the token's variable is the project's tokens.<kit> (tokens = { jira = "JIRA_API_TOKEN" }).
+kit = "jira"
+description = "Polls Jira every 5 minutes and relays each issue created, assigned and moved (jira.issue.created, .assigned, .transitioned), as who did it; measure prints the issues in scope by status."
+engagement = "scheduled"
+created_by = "orchestra bridges scaffold"
+# The compliance check: until the owner approves reading Jira (then "approved", with the data
+# class), the program reads only a fake on this machine.
+clearance = "needs approval"
+data_class = "unknown"
+
+[settings]
+base_url = "https://jira.example.com"   # guess: ask the owner (a Data Center host, or https://<site>.atlassian.net)
+# flavour: "datacenter" (REST API v2, /search, a personal access token as Bearer) or "cloud" (REST
+# API v3, /search/jql, an API token with the account's email as HTTP Basic); "auto": cloud on
+# *.atlassian.net, else datacenter (a Cloud site on its own domain needs "cloud")
+flavour = "auto"
+token_env = "JIRA_API_TOKEN"      # the NAME of the variable holding the token; never the token
+# token_file = "~/.config/orchestra-bridges/jira-token"   # instead: a chmod 600 file outside any repository
+# user_file = "~/.config/orchestra-bridges/jira-email"    # Cloud: the account the token belongs to (or user_env)
+every = "5m"
+per_minute = 20
+ttl = "4m"
+jql = "project = ABC"             # guess: ask the owner (the issues in scope; no ORDER BY, the poller adds its own)
+lookback = "1d"                   # how far back the first poll reads
+overlap = "10m"                   # each poll re-reads this much before the last one
+
+[[publishes]]
+type = "jira.issue.created"
+subject = "the issue key (ABC-12)"
+source = "its creator: person.jira.<account>"
+data = "status"
+
+[[publishes]]
+type = "jira.issue.assigned"
+subject = "the issue key"
+source = "who assigned it: person.jira.<account> (bot.jira when no one)"
+data = "assignee: the account it went to (none: unassigned)"
+
+[[publishes]]
+type = "jira.issue.transitioned"
+subject = "the issue key"
+source = "who moved it: person.jira.<account> (bot.jira when no one)"
+data = "from, to: the status names"

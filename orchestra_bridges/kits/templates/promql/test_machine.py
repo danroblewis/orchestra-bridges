@@ -1,7 +1,7 @@
 """{{name}} against the kit's Prometheus fake: ``measure`` prints each query's answer as gauges with
 the aliases applied, and refuses an answer over ``max_series``; no token leaves.
 
-Run: ``uv run python -m pytest {{dir}}/test_{{name}}.py`` (in an environment with orchestra-bridges)."""
+Run with Orchestra's own Python (the one ``orchestra`` runs in, which has the kits): ``python -m pytest {{dir}}/test_{{name}}.py``."""
 
 import importlib.util
 from pathlib import Path
@@ -9,10 +9,11 @@ from pathlib import Path
 import pytest
 
 from orchestra_bridges.kits.fakes import FakePrometheus
-from orchestra_bridges.kits.testing import set_args, token_env
+from orchestra_bridges.kits.testing import fake_token, set_args, token_env
 
 HERE = Path(__file__).resolve().parent
-TOKEN = "test-token-not-real"
+TOKEN = fake_token(HERE)        # the placeholder the runner sends a fake on this machine
+REAL = "real-token-never-sent-to-a-fake"   # in the environment, yet never read for a fake
 TOKEN_ENV = token_env(HERE, "PROMETHEUS_TOKEN")      # machine.toml's, so the owner's variable works too
 # The queries the fake's series answer (the owner's own queries are theirs to try against the store).
 SCOPE = set_args(aliases={"k8s_cluster": "cluster"}, max_series=200, queries=[
@@ -31,7 +32,7 @@ def program():
 @pytest.fixture
 def fake(tmp_path, monkeypatch):
     monkeypatch.setenv("ORCHESTRATOR_HOME", str(tmp_path / "home"))
-    monkeypatch.setenv(TOKEN_ENV, TOKEN)
+    monkeypatch.setenv(TOKEN_ENV, REAL)
     with FakePrometheus(token=TOKEN) as f:
         yield f
 
@@ -58,7 +59,7 @@ def test_too_many_series_fails(fake, tmp_path, capsys):
 def test_no_token_leaves(fake, tmp_path, capsys):
     measure(fake, tmp_path)
     out = capsys.readouterr()
-    assert TOKEN not in out.out + out.err
+    assert REAL not in out.out + out.err
     for p in tmp_path.rglob("*"):
         if p.is_file():
-            assert TOKEN not in p.read_text(errors="replace"), p
+            assert REAL not in p.read_text(errors="replace"), p

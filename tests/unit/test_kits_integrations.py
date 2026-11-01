@@ -29,16 +29,16 @@ def test_lists_scaffolded_machines_with_clearance_token_name_schedule_and_guesse
     items = {i.name: i for i in listing(proj)}
     assert sorted(items) == ["chrono", "jira_poll", "pd_alerts"]
     p, j, c = items["pd_alerts"], items["jira_poll"], items["chrono"]
-    assert (p.kit, p.root, p.clearance, p.token, p.machines_entry, p.collect_entry, p.guesses) == (
-        "pagerduty", "state", "approved", "$PD_READONLY", True, True, 0)
-    assert (j.root, j.clearance, j.token, j.machines_entry, j.collect_entry) == (
-        "repo", "needs approval", "$JIRA_API_TOKEN", False, False)
+    assert (p.kit, p.root, p.clearance, p.token, p.schedule, p.collect_entry, p.guesses) == (
+        "pagerduty", "state", "approved", "$PD_READONLY", "[[machines]]", True, 0)
+    assert (j.root, j.clearance, j.token, j.schedule, j.collect_entry) == (
+        "repo", "needs approval", "$JIRA_API_TOKEN", "no", False)
     assert j.guesses == 2                                                # the site and the JQL
-    assert c.machines_entry is None and c.guesses >= 2                  # a measurement only: no [[machines]] wanted
+    assert c.schedule is None and c.guesses >= 2                  # a measurement only: no [[machines]] wanted
 
     assert bridges_main(["integrations"]) == 0
     out = capsys.readouterr().out
-    assert "kits: http, jira, pagerduty, promql, slack" in out and "$PD_READONLY" in out
+    assert "kits: github, http, jira, pagerduty, promql, slack" in out and "$PD_READONLY" in out
     assert "a-real-looking-secret-value" not in out and "pipeline_manager" not in out
     assert bridges_main(["integrations", "--json"]) == 0
     got = json.loads(capsys.readouterr().out)
@@ -59,3 +59,13 @@ def test_a_broken_machine_file_is_listed_with_its_error(tmp_path, monkeypatch):
                                                                            '\n[settings]\ntoken = "x"\n'))
     [i] = listing(proj)
     assert i.name == "chat" and "token" in i.error and i.token == "?"
+
+
+def test_a_poller_the_workflows_floor_runs_is_scheduled_by_every(tmp_path, monkeypatch):
+    proj = new_project(tmp_path, monkeypatch, "")
+    d = scaffold("jira", "jira_poll", proj.state_dir)
+    (proj.repo_root / "orchestra.toml").write_text('[workflows.every.jira_poll]\nevery = "5m"\nrole = "jira_poll"\nbrief = "poll"\n')
+    proj.reload_config()
+    assert listing(proj)[0].schedule == "no"                     # the clock item, but no machine.json the floor runs it from
+    (d / "machine.json").write_text('{"id": "jira_poll"}\n')
+    assert listing(proj)[0].schedule == "every"

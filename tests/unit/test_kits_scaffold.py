@@ -18,10 +18,12 @@ from orchestra_bridges.__main__ import main as bridges_main
 from orchestra_bridges.check import check
 from orchestra_bridges.kits.fakes import CANARY, FakePagerDuty
 from orchestra_bridges.kits.machinefile import MachineFileError, read, require_clearance
+from orchestra_bridges.kits.runner import FAKE_TOKEN, FAKE_USER, credentials
 from orchestra_bridges.kits.scaffold import KINDS, TEMPLATES, ScaffoldError, root_dir, scaffold
 from orchestra_bridges.kits.settings import read as read_settings
 
-TOKEN = "scaffold-test-token-not-real"
+TOKEN = FAKE_TOKEN                       # what the runner sends a fake on this machine
+REAL = "real-scaffold-token-never-sent-to-a-fake"
 
 
 @pytest.fixture
@@ -29,26 +31,38 @@ def proj(tmp_path, monkeypatch):
     return new_project(tmp_path, monkeypatch, "")
 
 
-def test_writes_the_four_files_into_the_state_root(proj, capsys):
+def test_writes_the_four_files_into_the_repository_by_default(proj, capsys):
     assert bridges_main(["scaffold", "pagerduty", "pd_alerts"]) == 0
-    d = proj.state_dir / "machines" / "pd_alerts"
+    d = proj.repo_root / ".orchestra" / "machines" / "pd_alerts"
     assert sorted(p.name for p in d.iterdir()) == ["AGENTS.md", "machine.toml", "pd_alerts.py", "test_pd_alerts.py"]
     toml = tomllib.loads((d / "machine.toml").read_text())
     assert toml["name"] == "pd_alerts" and toml["clearance"] == "needs approval"
     assert toml["settings"]["token_env"] == "PAGERDUTY_TOKEN" and "token" not in toml["settings"]
     agents = (d / "AGENTS.md").read_text()
     assert "{{" not in agents and "$PAGERDUTY_TOKEN" in agents and "[[collect]]" in agents and "measure" in agents
-    assert "never a machine" in agents
+    assert "never a machine" in agents and "uv run python" not in agents
     out = capsys.readouterr().out
-    assert "[[machines]]" in out and "pd_alerts.py measure" in out and 'restart = "always"' in out
+    # the test command with Orchestra's own Python (the repository's environment may not have the kits)
+    assert f"{sys.executable} -m pytest {d}/test_pd_alerts.py -q" in out
+    # the entries name the script from the repository's root, where the launcher runs commands
+    assert 'command = "python .orchestra/machines/pd_alerts/pd_alerts.py"' in out
+    assert 'command = "python .orchestra/machines/pd_alerts/pd_alerts.py measure"' in out
+    assert 'restart = "always"' in out and 'every = "5m"' in out and 'timeout = "60s"' in out   # INTEGRATING.md's
+
+
+def test_the_state_root_names_the_script_by_its_full_path(proj, capsys):
+    assert bridges_main(["scaffold", "pagerduty", "pd_alerts", "--root", "state"]) == 0
+    d = proj.state_dir / "machines" / "pd_alerts"
+    assert (d / "pd_alerts.py").is_file()
+    assert f'command = "python {d}/pd_alerts.py measure"' in capsys.readouterr().out
 
 
 def test_roots(proj):
     assert root_dir(proj, "state") == proj.state_dir
     assert root_dir(proj, "repo") == proj.repo_root / ".orchestra"
     assert root_dir(proj, "overlay") == proj.overlay_file.parent
-    assert bridges_main(["scaffold", "jira", "jira_poll", "--root", "repo"]) == 0
-    assert (proj.repo_root / ".orchestra" / "machines" / "jira_poll" / "jira_poll.py").is_file()
+    assert bridges_main(["scaffold", "jira", "jira_poll", "--root", "overlay"]) == 0
+    assert (proj.overlay_file.parent / "machines" / "jira_poll" / "jira_poll.py").is_file()
 
 
 def test_refuses_a_bad_name_an_unknown_kind_and_an_existing_directory(proj, tmp_path):
@@ -76,7 +90,7 @@ def events_of(path):
 def test_a_scaffolded_pagerduty_poller_runs_two_intervals_and_stops(tmp_path, monkeypatch):
     d = scaffold("pagerduty", "pd_alerts", tmp_path / "root")
     ev = tmp_path / "events.jsonl"
-    env = checkout_env(PAGERDUTY_TOKEN=TOKEN, ORCHESTRATOR_HOME=str(tmp_path / "home"))
+    env = checkout_env(PAGERDUTY_TOKEN=REAL, ORCHESTRATOR_HOME=str(tmp_path / "home"))
     common = ["--base-url", None, "--state-dir", str(tmp_path / "state"), "--ttl", "0"]
     with FakePagerDuty(token=TOKEN) as fake:
         common[1] = fake.url
@@ -118,8 +132,8 @@ def test_a_scaffolded_pagerduty_poller_runs_two_intervals_and_stops(tmp_path, mo
     for p in tmp_path.rglob("*"):
         if p.is_file() and p.suffix in (".json", ".jsonl", ".log", ".prom"):
             text = p.read_text(errors="replace")
-            assert CANARY not in text and TOKEN not in text, p
-    assert CANARY not in log + measured.stdout + measured.stderr and TOKEN not in log
+            assert CANARY not in text and REAL not in text, p
+    assert CANARY not in log + measured.stdout + measured.stderr and REAL not in log
 
 
 def test_clearance(tmp_path):
@@ -157,21 +171,48 @@ def _measure(d, fake, tmp_path):
                           env=checkout_env(ORCHESTRATOR_HOME=str(tmp_path / "home")), check=False)
 
 
-def test_the_runner_reads_the_token_from_token_file(tmp_path, monkeypatch):
-    monkeypatch.delenv("PAGERDUTY_TOKEN", raising=False)
+def test_the_runner_reads_credentials_only_for_the_real_host(tmp_path, monkeypatch):
+    """K4: against a fake on this machine the runner reads no token and no account (placeholders
+    instead); against the real host, the references machine.toml names."""
+    d = scaffold("jira", "jira_poll", tmp_path / "root")
+    secret = tmp_path / "secrets" / "jira-token"
+    secret.parent.mkdir()
+    secret.write_text(REAL + "\n")
+    secret.chmod(0o600)
+    (d / "machine.toml").write_text((d / "machine.toml").read_text().replace(
+        "\n[settings]\n", f'\n[settings]\ntoken_file = "{secret}"\nuser_env = "JIRA_EMAIL"\n'))
+    monkeypatch.setenv("JIRA_EMAIL", "owner@example.com")
+    m = read(d / "machine.toml")
+    assert credentials(m, "http://127.0.0.1:9999") == {"token": FAKE_TOKEN, "basic_user": FAKE_USER}
+    real = credentials(m, "https://jira.example.com")
+    assert real == {"token_env": "JIRA_API_TOKEN", "token_file": str(secret), "basic_user": "owner@example.com",
+                    "repo_root": None}
+    (d / "machine.toml").write_text((d / "machine.toml").read_text().replace(
+        "\n[settings]\n", '\n[settings]\nfake_token = "the-fakes-own"\n'))
+    assert credentials(read(d / "machine.toml"), "http://localhost:1")["token"] == "the-fakes-own"
+
+
+def test_a_real_token_is_never_sent_to_a_fake(tmp_path, monkeypatch):
+    """The variable and the file both hold a real token, and the fake still gets the placeholder."""
     d = scaffold("pagerduty", "pd_alerts", tmp_path / "root")
     secret = tmp_path / "secrets" / "pd-token"
     secret.parent.mkdir()
-    secret.write_text(TOKEN + "\n")
+    secret.write_text(REAL + "\n")
     secret.chmod(0o600)
-    toml = (d / "machine.toml").read_text().replace("\n[settings]\n", f'\n[settings]\ntoken_file = "{secret}"\n')
-    (d / "machine.toml").write_text(toml)
-    assert read(d / "machine.toml").token_file == str(secret)
-    with FakePagerDuty(token=TOKEN) as fake:
-        r = _measure(d, fake, tmp_path)
+    (d / "machine.toml").write_text((d / "machine.toml").read_text().replace(
+        "\n[settings]\n", f'\n[settings]\ntoken_file = "{secret}"\n'))
+    with FakePagerDuty(token=FAKE_TOKEN) as fake:
+        r = subprocess.run([sys.executable, str(d / "pd_alerts.py"), "measure", "--base-url", fake.url, "--state-dir",
+                            str(tmp_path / "state"), "--ttl", "0"], capture_output=True, text=True, timeout=60,
+                           env=checkout_env(ORCHESTRATOR_HOME=str(tmp_path / "home"), PAGERDUTY_TOKEN=REAL), check=False)
         assert r.returncode == 0, r.stderr
         assert fake.requests and all(q.authorized for q in fake.requests)
-    assert TOKEN not in r.stdout + r.stderr
+    with FakePagerDuty(token=REAL) as fake:          # a fake that wants the real token never gets it
+        r = subprocess.run([sys.executable, str(d / "pd_alerts.py"), "measure", "--base-url", fake.url, "--state-dir",
+                            str(tmp_path / "state"), "--ttl", "0"], capture_output=True, text=True, timeout=60,
+                           env=checkout_env(ORCHESTRATOR_HOME=str(tmp_path / "home"), PAGERDUTY_TOKEN=REAL), check=False)
+        assert r.returncode != 0 and not any(q.authorized for q in fake.requests)
+    assert REAL not in r.stdout + r.stderr
 
 
 def test_a_fake_needs_no_token(tmp_path, monkeypatch):
@@ -183,6 +224,7 @@ def test_a_fake_needs_no_token(tmp_path, monkeypatch):
 
 
 OWNERS = {     # what the owner's answers look like once filled in: another variable, their own scope
+    "github": [('repo = "acme/service"', 'repo = "theirs/their-service"'), ("branches = []", 'branches = ["agent/*"]')],
     "jira": [('jql = "project = ABC"', 'jql = "project = XYZ AND assignee = currentUser()"')],
     "slack": [('channels = ["C001"]', 'channels = ["C777", "C888"]')],
     "pagerduty": [('open_statuses = ["triggered", "acknowledged"]', 'open_statuses = ["triggered"]')],
@@ -207,9 +249,20 @@ def test_each_kinds_own_test_still_passes_with_the_owners_values(kind, tmp_path)
     assert r.returncode == 0, r.stdout[-3000:] + r.stderr[-2000:]
 
 
+def test_the_jira_kits_own_test_passes_for_cloud_too(tmp_path):
+    """Jira Cloud: the owner's site on atlassian.net makes the flavour cloud (v3, /search/jql, Basic)."""
+    d = scaffold("jira", "jira_cloud", tmp_path / "root")
+    toml = (d / "machine.toml").read_text().replace('"https://jira.example.com"', '"https://acme.atlassian.net"')
+    (d / "machine.toml").write_text(toml.replace("\n[settings]\n", '\n[settings]\nuser_env = "JIRA_EMAIL"\n'))
+    r = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", str(d / "test_jira_cloud.py")],
+                       capture_output=True, text=True, timeout=300, cwd=tmp_path, env=checkout_env(), check=False)
+    assert r.returncode == 0, r.stdout[-3000:] + r.stderr[-2000:]
+    assert "4 passed" in r.stdout
+
+
 def test_guessed_values_are_marked():
     """A tool reading a template knows which values to ask the owner for."""
-    for kind, keys in {"jira": ["base_url", "jql"], "slack": ["channels"], "promql": ["base_url", "aliases"],
+    for kind, keys in {"github": ["repo"], "jira": ["base_url", "jql"], "slack": ["channels"], "promql": ["base_url", "aliases"],
                        "http": ["base_url", "system", "thing", "list_path"]}.items():
         lines = (TEMPLATES / kind / "machine.toml").read_text().splitlines()
         for key in keys:
@@ -231,7 +284,7 @@ def test_an_uncleared_poller_waits_for_approval_instead_of_exiting(tmp_path):
     once, reads nothing, re-reads machine.toml on its interval, and polls once it is cleared."""
     d = scaffold("pagerduty", "pd_alerts", tmp_path / "root")
     ev = tmp_path / "events.jsonl"
-    env = checkout_env(PAGERDUTY_TOKEN=TOKEN, ORCHESTRATOR_HOME=str(tmp_path / "home"))
+    env = checkout_env(PAGERDUTY_TOKEN=REAL, ORCHESTRATOR_HOME=str(tmp_path / "home"))
     with FakePagerDuty(token=TOKEN) as fake:
         proc = subprocess.Popen([sys.executable, str(d / "pd_alerts.py"), "--every", "0.2", "--events-file", str(ev),
                                  "--state-dir", str(tmp_path / "state"), "--ttl", "0"], env=env,
@@ -275,3 +328,17 @@ def test_an_uncleared_poller_stops_cleanly_while_waiting(tmp_path):
                 proc.kill()
                 proc.wait()
     assert log.read_text().count("waiting for approval") == 1 and not (tmp_path / "e.jsonl").exists()
+
+
+def test_a_measurement_only_kit_says_nothing_of_a_poller_and_refuses_to_poll(tmp_path):
+    d = scaffold("promql", "prom_series", tmp_path / "root")
+    doc = (d / "AGENTS.md").read_text()
+    assert "a measurement of" in doc and "Poller.emit" not in doc and "--once" not in doc and "{{" not in doc
+    assert "[[machines]]" not in doc and "make_poll" not in (d / "prom_series.py").read_text()
+    r = subprocess.run([sys.executable, str(d / "prom_series.py"), "--state-dir", str(tmp_path / "st")],
+                       capture_output=True, text=True, timeout=60, check=False)
+    assert r.returncode == 2 and "polls nothing" in r.stderr, r.stderr
+    poller = (scaffold("pagerduty", "pd_doc", tmp_path / "root") / "AGENTS.md").read_text()
+    assert "Poller.emit" in poller and "person.pagerduty.<account>" in poller and "{{" not in poller
+    http = (scaffold("http", "api_doc", tmp_path / "root") / "AGENTS.md").read_text()
+    assert "person.<system>.<account>" in http and "person.http." not in http

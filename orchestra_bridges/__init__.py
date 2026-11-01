@@ -1,2 +1,4 @@
-"""Bridges: machines that poll systems which are buses in all but name and publish what people did
-there as metadata-only CloudEvents on a project's Orchestra bus (SPEC.md)."""
+"""The bridges: a library for collectors that bring an outside system into an Orchestra project
+(the kits, their fakes and templates, the scaffold and the clearance gate). It reads no system
+itself: a Supervisor or a coding tool scaffolds a collector into the owner's repository and adapts
+it there (SPEC.md)."""

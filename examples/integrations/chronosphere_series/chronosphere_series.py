@@ -24,12 +24,6 @@ from orchestra_bridges.kits.promql import Prometheus
 HERE = Path(__file__).resolve().parent
 
 
-def make_poll(api, settings):
-    def poll(p):
-        p.stop()            # nothing to relay: run `measure` from a [[collect]] entry
-    return poll
-
-
 def measure(api, settings, series) -> None:
     prom = Prometheus(api, aliases=settings.extra.get("aliases") or {},
                       max_series=int(settings.extra.get("max_series", 200)))
@@ -40,7 +34,7 @@ def measure(api, settings, series) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    return runner.main(HERE, make_poll, argv, measure=measure)
+    return runner.main(HERE, None, argv, measure=measure)
 
 
 if __name__ == "__main__":

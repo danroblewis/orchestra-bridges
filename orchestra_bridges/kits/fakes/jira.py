@@ -1,8 +1,16 @@
-"""A fake of Jira Data Center's REST API v2, in its shapes, for what a poller reads: ``/search``
-(GET or POST, ``jql``, ``startAt``/``maxResults`` paging with ``total``, ``fields``), ``/issue/<key>``
-and ``/issue/<key>/transitions`` (GET lists them; POST ``{"transition": {"id"}}`` moves the issue,
-which a read-only machine never does, but a test may, to change the world). The token goes as
-``Bearer`` (a personal access token).
+"""A fake of Jira's REST API, in its shapes, for what a poller reads, in either flavour:
+
+- **Data Center** (``flavour="datacenter"``, the default): REST API v2, ``/rest/api/2/search``
+  (GET or POST, ``jql``, ``startAt``/``maxResults`` paging with ``total``, ``fields``), users by
+  ``name`` and ``key``, a personal access token as ``Bearer``;
+- **Cloud** (``flavour="cloud"``): REST API v3, ``/rest/api/3/search/jql`` (GET or POST,
+  ``nextPageToken`` paging with ``isLast``, no ``total``; the old ``/search`` answers 410 Gone, as
+  Cloud does), users by ``accountId`` only, HTTP Basic of the account's email and an API token
+  (``basic_user``). An account id here is the fixture's login.
+
+Both serve ``/myself`` (the token's account: ``me``), ``/issue/<key>`` and
+``/issue/<key>/transitions`` (GET lists them; POST ``{"transition": {"id"}}`` moves the issue,
+which a read-only machine never does, but a test may, to change the world).
 
 It understands a small JQL: clauses joined by ``AND``, each ``project = X``, ``project in (X, Y)``,
 ``status = "S"``, ``status in (...)``, ``statusCategory = Done`` / ``!= Done``, ``assignee = x`` /
@@ -21,7 +29,9 @@ from typing import Any
 
 from .base import CANARY, FakeServer, one
 
-API = "/rest/api/2"
+API = "/rest/api/2"                      # Data Center's
+CLOUD_API = "/rest/api/3"                # Cloud's
+FLAVOURS = ("datacenter", "cloud")
 CATEGORY = {"new": ("To Do", 2), "indeterminate": ("In Progress", 4), "done": ("Done", 3)}
 
 
@@ -141,6 +151,23 @@ def compile_jql(jql: str, categories: dict[str, str], now: datetime):
 class FakeJira(FakeServer):
     fixture_name = "jira.json"
 
+    def __init__(self, fixture=None, token: str | None = None, basic_user: str | None = None, *,
+                 flavour: str = "datacenter", me: str = "api-user"):
+        if flavour not in FLAVOURS:
+            raise ValueError(f"flavour is one of {FLAVOURS}, not {flavour!r}")
+        super().__init__(fixture, token, basic_user)
+        self.flavour, self.me = flavour, me
+        self.api = CLOUD_API if flavour == "cloud" else API
+        self.auth_format = "Basic {basic}" if flavour == "cloud" else "Bearer {token}"
+
+    def _user(self, login: str | None) -> dict | None:
+        """A person as this flavour names one: Cloud by account id only, Data Center by name and key."""
+        if not login:
+            return None
+        if self.flavour == "cloud":
+            return {"accountId": login, "displayName": f"{CANARY} {login}", "emailAddress": CANARY}
+        return {"name": login, "key": login, "displayName": f"{CANARY} {login}"}
+
     def _issue(self, i: dict, fields: list[str] | None = None, changelog: bool = False) -> dict:
         cat = self.data["statuses"].get(i["status"], "new")
         cname, cid = CATEGORY[cat]
@@ -148,24 +175,19 @@ class FakeJira(FakeServer):
             "summary": i["summary"], "project": {"key": i["project"], "name": i["project"]},
             "status": {"name": i["status"], "statusCategory": {"id": cid, "key": cat, "name": cname}},
             "issuetype": {"name": i["issuetype"]}, "priority": {"name": i["priority"]},
-            "assignee": {"name": i["assignee"], "key": i["assignee"], "displayName": i["assignee"]} if i.get("assignee") else None,
+            "assignee": self._user(i.get("assignee")),
             "created": i["created"], "updated": i["updated"],
-            "creator": self._person(i.get("creator")), "reporter": self._person(i.get("creator")),
+            "creator": self._user(i.get("creator")), "reporter": self._user(i.get("creator")),
         }
         if fields and "*all" not in fields:
             f = {k: v for k, v in f.items() if k in fields}
-        out = {"id": i["id"], "key": i["key"], "self": f"{self.url}{API}/issue/{i['id']}", "fields": f}
+        out = {"id": i["id"], "key": i["key"], "self": f"{self.url}{self.api}/issue/{i['id']}", "fields": f}
         if changelog:
             hs = i.get("history") or []
             out["changelog"] = {"startAt": 0, "maxResults": len(hs), "total": len(hs), "histories": [
-                {"id": h["id"], "author": {"name": h["by"], "key": h["by"], "displayName": f"{CANARY} {h['by']}"},
-                 "created": h["at"], "items": [{"field": h.get("field", "status"), "fieldtype": "jira",
-                                                "fromString": h["from"], "toString": h["to"]}]} for h in hs]}
+                {"id": h["id"], "author": self._user(h["by"]),
+                 "created": h["at"], "items": [_item(h)]} for h in hs]}
         return out
-
-    @staticmethod
-    def _person(login: str | None) -> dict | None:
-        return {"name": login, "key": login, "displayName": f"{CANARY} {login}"} if login else None
 
     def _record(self, i: dict, to: str, by: str | None, at: datetime) -> None:
         hist = i.setdefault("history", [])
@@ -177,14 +199,16 @@ class FakeJira(FakeServer):
         return next((i for i in self.data["issues"] if i["key"] == key or i["id"] == key), None)
 
     # the test's controls
-    def create(self, key: str, status: str = "Open", by: str | None = "alice", at: datetime | None = None) -> None:
-        """A new issue ``key`` (its project is the key's prefix) in ``status``, created by ``by``."""
+    def create(self, key: str, status: str = "Open", by: str | None = "alice", at: datetime | None = None,
+               assignee: str | None = None) -> None:
+        """A new issue ``key`` (its project is the key's prefix) in ``status``, created by ``by``
+        (assigned to ``assignee`` from the start: Jira writes no changelog for that)."""
         with self._lock:
             t = stamp(at or datetime.now(UTC))
             n = 10000 + len(self.data["issues"]) + 1
             self.data["issues"].append({"id": str(n), "key": key, "project": key.split("-")[0],
                                         "summary": f"{CANARY}: {key}", "status": status, "issuetype": "Task",
-                                        "priority": "Medium", "assignee": None, "creator": by,
+                                        "priority": "Medium", "assignee": assignee, "creator": by,
                                         "created": t, "updated": t})
 
     def edit(self, key: str, field: str = "priority", by: str | None = "alice", at: datetime | None = None) -> None:
@@ -196,17 +220,36 @@ class FakeJira(FakeServer):
                                                 "from": f"{CANARY} before", "to": f"{CANARY} after"})
             i["updated"] = stamp(t)
 
+    def assign(self, key: str, to: str | None, by: str | None = "alice", at: datetime | None = None) -> None:
+        """``key`` assigned to ``to`` (None: unassigned) by ``by``, recorded in its changelog."""
+        with self._lock:
+            i, t = self._find(key), at or datetime.now(UTC)
+            hid = str(20000 + sum(len(x.get("history") or []) for x in self.data["issues"]) + 1)
+            i.setdefault("history", []).append({"id": hid, "by": by or "automation", "at": stamp(t), "field": "assignee",
+                                                "from": i.get("assignee"), "to": to})
+            i["assignee"], i["updated"] = to, stamp(t)
+
     def move(self, key: str, status: str, by: str | None = "alice", at: datetime | None = None) -> None:
         """``key`` moves to ``status`` by ``by``, recorded in its changelog."""
         with self._lock:
             self._record(self._find(key), status, by, at or datetime.now(UTC))
 
     def route(self, method: str, path: str, query: dict[str, list[str]], body: Any) -> tuple[int, Any]:
-        if path == f"{API}/search":
-            return self._search(query if method == "GET" else {**query, **_as_query(body)})
-        if m := re.fullmatch(rf"{API}/issue/([^/]+)/transitions", path):
+        api = self.api
+        q = query if method == "GET" else {**query, **_as_query(body)}
+        if path == f"{api}/myself":
+            return 200, self._user(self.me)
+        if self.flavour == "cloud":
+            if path == f"{api}/search/jql":
+                return self._search(q, tokens=True)
+            if path == f"{api}/search":
+                gone = "The requested API has been removed. Please migrate to the /rest/api/3/search/jql API."
+                return 410, {"errorMessages": [gone], "errors": {}}
+        elif path == f"{api}/search":
+            return self._search(q)
+        if m := re.fullmatch(rf"{api}/issue/([^/]+)/transitions", path):
             return self._transitions(method, m.group(1), body)
-        if m := re.fullmatch(rf"{API}/issue/([^/]+)", path):
+        if m := re.fullmatch(rf"{api}/issue/([^/]+)", path):
             i = self._find(m.group(1))
             if method != "GET":
                 return 405, None
@@ -215,19 +258,24 @@ class FakeJira(FakeServer):
             return 200, self._issue(i, _fields(query), "changelog" in (one(query, "expand") or ""))
         return 404, {"errorMessages": ["null for uri"], "errors": {}}
 
-    def _search(self, q: dict[str, list[str]]) -> tuple[int, Any]:
+    def _search(self, q: dict[str, list[str]], tokens: bool = False) -> tuple[int, Any]:
+        """A page of the issues the JQL matches: ``startAt`` and ``total`` (Data Center), or
+        ``nextPageToken`` and ``isLast`` (Cloud, ``tokens``)."""
         try:
             pred, key, rev = compile_jql(one(q, "jql", "") or "", self.data["statuses"], datetime.now(UTC))
-            start, size = int(one(q, "startAt", "0")), min(int(one(q, "maxResults", "50")), 1000)
+            start = int(one(q, "nextPageToken", "0") or "0") if tokens else int(one(q, "startAt", "0"))
+            size = min(int(one(q, "maxResults", "50")), 1000)
         except BadJQL as e:
             return 400, {"errorMessages": [str(e)], "errors": {}}
         except ValueError:
-            return 400, {"errorMessages": ["startAt and maxResults are numbers"], "errors": {}}
+            return 400, {"errorMessages": ["startAt, nextPageToken and maxResults are numbers here"], "errors": {}}
         rows = sorted((i for i in self.data["issues"] if pred(i)), key=key, reverse=rev)
         fields = _fields(q)
-        return 200, {"expand": "schema,names", "startAt": start, "maxResults": size, "total": len(rows),
-                     "issues": [self._issue(i, fields, "changelog" in (one(q, "expand") or ""))
-                                for i in rows[start:start + size]]}
+        page = [self._issue(i, fields, "changelog" in (one(q, "expand") or "")) for i in rows[start:start + size]]
+        if tokens:
+            last = start + size >= len(rows)
+            return 200, {"issues": page, "isLast": last, **({} if last else {"nextPageToken": str(start + size)})}
+        return 200, {"expand": "schema,names", "startAt": start, "maxResults": size, "total": len(rows), "issues": page}
 
     def _transitions(self, method: str, key: str, body: Any) -> tuple[int, Any]:
         i = self._find(key)
@@ -244,6 +292,15 @@ class FakeJira(FakeServer):
             return 400, {"errorMessages": [f"Transition id '{tid}' is not valid for this issue."], "errors": {}}
         self._record(i, t["to"], "api-user", datetime.now(UTC))
         return 204, None
+
+
+def _item(h: dict) -> dict:
+    """A changelog item: an assignee's change names the accounts (``from``, ``to``) and shows their
+    names (the canary); any other field shows its values only."""
+    if h.get("field") == "assignee":
+        return {"field": "assignee", "fieldtype": "jira", "from": h["from"], "to": h["to"],
+                "fromString": CANARY if h["from"] else None, "toString": CANARY if h["to"] else None}
+    return {"field": h.get("field", "status"), "fieldtype": "jira", "fromString": h["from"], "toString": h["to"]}
 
 
 def _fields(q: dict[str, list[str]]) -> list[str] | None:

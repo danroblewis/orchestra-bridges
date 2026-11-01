@@ -3,36 +3,41 @@ standard library.
 
 ``CachedClient(base_url, token_env=None, token_file=None, per_minute=60, cache_dir=..., ttl_s=300)``:
 
-- **GET and POST** (``get``, ``post``) to paths under ``base_url``, answers parsed as JSON. A
-  request to another origin is refused, so the token goes only to the configured host.
+- **Reads only**: ``get``, and ``post`` of a form (a query too long for a URL), to paths under
+  ``base_url``, answers parsed as JSON. Any other method or body is refused (a write to another
+  system is the outbox's), and so is a request to another origin, so the token goes only to the
+  configured host.
 - **A TTL cache on disk** (``cache.py``) keyed by method, URL and body, of **only what ``keep``
   returns**: ``keep`` (per client or per request) is applied to an answer before it is cached or
   returned, and a request without one is never cached. A poller keeps metadata only (ids, states,
-  times), so no title or body is ever written to disk (the bridges' rule 1).
+  times), so no title or body is ever written to disk (the bridges' rule 2).
 - **A per-host rate limit**: Orchestra's own token bucket (``orchestra.sources.limits.RateLimit``),
   in a file every process on this machine shares for the host (by default beside the buckets of
   Orchestra's ``[[sources]]``, ``~/.orchestrator/stores/<host key>/kits.rate``).
 - **Retries** on 429 and 5xx and on a dropped connection, with a doubling backoff; a
   ``Retry-After`` is honoured (and holds the host's bucket for every reader) up to ``max_wait_s``.
-- **The token stays in memory**: read once, from the environment variable ``token_env`` or the
-  file ``token_file`` (outside any repository, ``chmod 600``), sent as ``auth_format`` in
-  ``Authorization``. ``{basic}`` in ``auth_format`` is HTTP Basic's base64 of ``basic_user:token``
-  (Jira Cloud: the account's email and its API token, ``"Basic {basic}"``), so the token file holds
-  the token as issued and the account comes from elsewhere (``machine.toml``'s ``user_env`` or
-  ``user_file``). It is never logged, never in a cache key or file, never in an error or repr.
+- **The token stays in memory**: read once, by the bridges' one reader (``secret.read_token``),
+  from the environment variable ``token_env`` or the file ``token_file`` (outside the repository,
+  ``chmod 600``), sent as ``auth_format`` in ``Authorization``. ``{basic}`` in ``auth_format`` is
+  HTTP Basic's base64 of ``basic_user:token`` (Jira Cloud: the account's email and its API token,
+  ``"Basic {basic}"``), so the token file holds the token as issued and the account comes from
+  elsewhere (``machine.toml``'s ``user_env`` or ``user_file``). It is never logged, never in a
+  cache key or file, never in an error or repr.
 - **``dry_run``**: answers only from the cache, of any age, and raises ``NotCached`` on a miss: a
-  rehearsal that sends nothing."""
+  rehearsal that sends nothing.
+- **Behind a proxy**: ``HTTPS_PROXY`` and ``HTTP_PROXY`` from the environment are used, except for
+  a host ``NO_PROXY`` names and for a fake on this machine (a loopback host never goes through a
+  proxy). ``ca_file`` is a PEM bundle trusted beside the system's CAs (a corporate proxy that
+  re-signs TLS); ``SSL_CERT_FILE`` in the environment replaces the system's bundle for everything."""
 
 from __future__ import annotations
 
 import base64
 import email.utils
-import ipaddress
 import json
 import logging
-import os
 import re
-import stat
+import ssl
 import time
 import urllib.error
 import urllib.parse
@@ -43,7 +48,11 @@ from typing import Any
 
 from orchestra.sources.limits import RateLimit, store_dir, store_key
 
+from .. import secret
+from ..local import is_local
 from .cache import DiskCache, key
+
+FORM = "application/x-www-form-urlencoded"
 
 log = logging.getLogger("orchestra_bridges.kits.client")
 
@@ -78,41 +87,51 @@ def redact(url: str) -> str:
     return urllib.parse.urlunsplit(u._replace(query=urllib.parse.urlencode(q)))
 
 
-def _loopback(host: str) -> bool:
+def read_token(token_env: str | None, token_file: str | Path | None, repo_root: Path | None = None) -> str | None:
+    """The token from ``$token_env`` (or the file ``$token_env_FILE`` names), else from
+    ``token_file``; None when neither is named. The bridges' one reader (``secret.read_token``): a
+    file inside ``repo_root``, readable by others or empty is refused. Errors name where it looked,
+    never what it found."""
     try:
-        return ipaddress.ip_address(host).is_loopback
-    except ValueError:
-        return host == "localhost"
+        return secret.read_token(token_env, None, repo_root, token_file)
+    except secret.TokenError as e:
+        raise TokenMissing(str(e)) from None
 
 
-def read_token(token_env: str | None, token_file: str | Path | None) -> str | None:
-    """The token from ``$token_env``, else from ``token_file``; None when neither is named. Errors
-    name where it looked, never what it found."""
-    if token_env:
-        if v := os.environ.get(token_env, "").strip():
-            return v
-        if not token_file:
-            raise TokenMissing(f"the environment variable {token_env} is not set")
-    if not token_file:
-        return None
-    p = Path(token_file).expanduser()
-    if not p.is_file():
-        raise TokenMissing(f"no token file at {p}" + (f" and no {token_env}" if token_env else ""))
-    if p.stat().st_mode & (stat.S_IRWXG | stat.S_IRWXO):
-        raise TokenMissing(f"{p} is readable by others: chmod 600 it")
-    if not (v := p.read_text(encoding="utf-8").strip()):
-        raise TokenMissing(f"{p} is empty")
-    return v
+def proxies_for(host: str) -> dict[str, str]:
+    """The proxies a request to ``host`` goes through: ``HTTPS_PROXY``/``HTTP_PROXY`` from the
+    environment, none for a host ``NO_PROXY`` names, and none for a loopback host (a fake)."""
+    if is_local(host):
+        return {}
+    env = urllib.request.getproxies_environment()
+    if env.get("no") and urllib.request.proxy_bypass_environment(host, env):
+        return {}
+    return {k: v for k, v in env.items() if k in ("http", "https")}
+
+
+def tls_context(ca_file: str | Path | None) -> ssl.SSLContext:
+    """The system's CAs (or ``SSL_CERT_FILE``'s), and ``ca_file``'s beside them when given."""
+    ctx = ssl.create_default_context()
+    if ca_file:
+        p = Path(ca_file).expanduser()
+        if not p.is_file():
+            raise KitError(f"no CA file at {p}")
+        try:
+            ctx.load_verify_locations(cafile=str(p))
+        except ssl.SSLError as e:
+            raise KitError(f"{p} is not a PEM bundle of CA certificates: {e.reason or e}") from None
+    return ctx
 
 
 def default_cache_dir() -> Path:
-    """``<state>/kits/cache`` of the project at ORCHESTRA_REPO (else the working directory), or
-    under Orchestra's home when there is no project."""
-    from orchestra.config import ConfigError, home, load_project
+    """``<state>/kits/cache`` of the project at ORCHESTRA_REPO (else the working directory); with no
+    project, an error: a kit keeps its cache only in a project's state directory."""
+    from orchestra.config import ConfigError, load_project
     try:
         return load_project().state_dir / "kits" / "cache"
-    except (ConfigError, OSError):
-        return home() / "kits" / "cache"
+    except (ConfigError, OSError) as e:
+        raise KitError(f"no project to keep the cache in ({e}): run it in a project (ORCHESTRA_REPO), "
+                       "or give cache_dir") from None
 
 
 def retry_after(value: str | None, now: float) -> float | None:
@@ -135,16 +154,19 @@ class CachedClient:
                  auth_format: str = "Bearer {token}", headers: dict[str, str] | None = None,
                  keep: Callable[[Any], Any] | None = None, dry_run: bool = False, retries: int = 3,
                  backoff_s: float = 1.0, max_wait_s: float = 300.0, timeout_s: float = 30.0,
-                 rate_dir: str | Path | None = None, sleep: Callable[[float], None] = time.sleep,
-                 clock: Callable[[], float] = time.time, basic_user: str | None = None):
+                 rate_dir: str | Path | None = None, repo_root: Path | None = None,
+                 sleep: Callable[[float], None] = time.sleep,
+                 clock: Callable[[], float] = time.time, basic_user: str | None = None,
+                 token: str | None = None, ca_file: str | Path | None = None):
         u = urllib.parse.urlsplit(base_url)
         if u.scheme not in ("http", "https") or not u.hostname:
             raise ValueError(f"base_url must be an http(s) URL, not {base_url!r}")
         self.base_url = base_url.rstrip("/")
         self.origin = f"{u.scheme}://{u.netloc}".lower()
         self.host = (u.hostname or "").lower()
-        self._token = read_token(token_env, token_file)
-        if self._token and u.scheme != "https" and not _loopback(self.host):
+        # ``token``: a value already in memory (the runner's placeholder for a fake); else read once
+        self._token = token if token is not None else read_token(token_env, token_file, repo_root)
+        if self._token and u.scheme != "https" and not is_local(self.host):
             raise ValueError(f"{self.origin}: a token goes only over https (or to a fake on this machine)")
         self.auth_format = auth_format
         if "{basic}" in auth_format and self._token:
@@ -160,19 +182,25 @@ class CachedClient:
         self.limit = RateLimit(per_minute / 60.0, max(1.0, per_minute / 4.0), bucket / "kits.rate",
                                what=f"the host {self.host}", sleep=sleep, clock=clock)
         self._sleep, self._clock = sleep, clock
+        self.proxies = proxies_for(self.host)
+        self._opener = urllib.request.build_opener(urllib.request.ProxyHandler(self.proxies),
+                                                   urllib.request.HTTPSHandler(context=tls_context(ca_file)))
         self.sent = 0                       # requests that reached the network, for tests and logs
         self.hits = 0
 
     @classmethod
     def for_project(cls, project, base_url: str, system: str | None = None, token_env: str | None = None,
                     **kw) -> CachedClient:
-        """A client with ``[bridges.kits]``'s cache directory and TTL unless given, the host's rate
+        """A client with ``[bridges.kits]``'s cache directory, TTL and CA file unless given, the host's rate
         (or ``per_minute``, when lower) and the system's token variable (``tokens.<system>``) unless given."""
         from .settings import cache_dir, read
         s = read(project.config.raw)
         host = (urllib.parse.urlsplit(base_url).hostname or "").lower()
         kw.setdefault("cache_dir", cache_dir(s, project.state_dir))
         kw.setdefault("ttl_s", s.ttl_s)
+        kw.setdefault("repo_root", project.repo_root)
+        if not kw.get("ca_file"):
+            kw["ca_file"] = s.ca_file
         limit = s.per_minute_for(host)          # the project's limit for the host; a machine may ask for less
         kw["per_minute"] = min(int(kw.get("per_minute") or limit), limit)
         return cls(base_url, token_env=token_env or (s.token_env(system) if system else None), **kw)
@@ -196,19 +224,17 @@ class CachedClient:
     def get(self, path: str, params: dict | None = None, **kw) -> Any:
         return self.request("GET", path, params, **kw)
 
-    def post(self, path: str, json_body: Any = None, *, form: dict | None = None, params: dict | None = None,
-             **kw) -> Any:
-        if form is not None:
-            body = urllib.parse.urlencode(list(form.items()), doseq=True).encode()
-            ctype = "application/x-www-form-urlencoded"
-        else:
-            body = json.dumps(json_body, sort_keys=True).encode() if json_body is not None else b""
-            ctype = "application/json"
-        return self.request("POST", path, params, body=body, content_type=ctype, **kw)
+    def post(self, path: str, *, form: dict, params: dict | None = None, **kw) -> Any:
+        """A read sent as a form (a PromQL query too long for a URL): never a write."""
+        body = urllib.parse.urlencode(list(form.items()), doseq=True).encode()
+        return self.request("POST", path, params, body=body, content_type=FORM, **kw)
 
     def request(self, method: str, path: str, params: dict | None = None, *, body: bytes | None = None,
                 content_type: str | None = None, keep: Callable[[Any], Any] | None = None,
                 ttl_s: float | None = None, cache: bool = True, headers: dict[str, str] | None = None) -> Any:
+        if not (method == "GET" or method == "POST" and content_type == FORM):
+            raise KitError(f"{method} {content_type or ''}".strip() + ": a kit only reads (GET, or a POST of a form "
+                           "that asks a question); a write to another system is the outbox's, never a kit's")
         url = self.url(path, params)
         k = key(method, url, body)
         ttl = self.ttl_s if ttl_s is None else ttl_s
@@ -246,7 +272,7 @@ class CachedClient:
             wait: float | None = None
             try:
                 self.sent += 1
-                with urllib.request.urlopen(req, timeout=self.timeout_s) as r:
+                with self._opener.open(req, timeout=self.timeout_s) as r:
                     raw = r.read()
                     log.info("%s %s -> %s", method, shown, r.status)
                     return r.status, _parse(raw)

@@ -3,7 +3,7 @@ on a random loopback port that records requests and checks a token): two polls (
 them) relay each item's change once, as who made it; ``measure`` prints the items by state; no
 text or token leaves. Change ``FakeAPI`` to answer in your API's real shapes.
 
-Run: ``uv run python -m pytest {{dir}}/test_{{name}}.py`` (in an environment with orchestra-bridges)."""
+Run with Orchestra's own Python (the one ``orchestra`` runs in, which has the kits): ``python -m pytest {{dir}}/test_{{name}}.py``."""
 
 import importlib.util
 import json
@@ -12,10 +12,11 @@ from pathlib import Path
 import pytest
 
 from orchestra_bridges.kits.fakes import CANARY, FakeServer
-from orchestra_bridges.kits.testing import set_args, token_env, uncleared
+from orchestra_bridges.kits.testing import fake_token, set_args, token_env, uncleared
 
 HERE = Path(__file__).resolve().parent
-TOKEN = "test-token-not-real"
+TOKEN = fake_token(HERE)        # the placeholder the runner sends a fake on this machine
+REAL = "real-token-never-sent-to-a-fake"   # in the environment, yet never read for a fake
 TOKEN_ENV = token_env(HERE, "{{token_env}}")         # machine.toml's, so the owner's variable works too
 # The shape FakeAPI answers in. When you change FakeAPI to your API's real shapes, change these to
 # match (or drop them, and the run reads machine.toml's own).
@@ -55,7 +56,7 @@ def program(here=HERE):
 @pytest.fixture
 def fake(tmp_path, monkeypatch):
     monkeypatch.setenv("ORCHESTRATOR_HOME", str(tmp_path / "home"))
-    monkeypatch.setenv(TOKEN_ENV, TOKEN)
+    monkeypatch.setenv(TOKEN_ENV, REAL)
     with FakeAPI(WORLD, token=TOKEN) as f:
         yield f
 
@@ -95,15 +96,15 @@ def test_no_text_or_token_leaves(fake, tmp_path, capsys):
     poll_once(fake, tmp_path)
     program().main(args(fake, tmp_path, "measure"))
     out = capsys.readouterr()
-    assert CANARY not in out.out + out.err and TOKEN not in out.out + out.err
+    assert CANARY not in out.out + out.err and REAL not in out.out + out.err
     for p in tmp_path.rglob("*"):
         if p.is_file():
             text = p.read_text(errors="replace")
-            assert CANARY not in text and TOKEN not in text, p
+            assert CANARY not in text and REAL not in text, p
 
 
 def test_refuses_an_uncleared_system(tmp_path, monkeypatch):
-    monkeypatch.setenv(TOKEN_ENV, TOKEN)
+    monkeypatch.setenv(TOKEN_ENV, REAL)
     copy = uncleared(HERE, tmp_path / "copy", "{{name}}.py")      # holds after the owner's approval too
     rc = program(copy).main(["--once", "--base-url", "https://ci.example.com", "--state-dir", str(tmp_path / "s"),
                          "--events-file", str(tmp_path / "e.jsonl")])
