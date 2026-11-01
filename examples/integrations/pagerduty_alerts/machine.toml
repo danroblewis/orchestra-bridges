@@ -1,0 +1,33 @@
+# pagerduty_alerts: a poller scaffolded from the orchestra-bridges kit `pagerduty`: a relay of what people
+# and PagerDuty did, never a machine itself (the machines are the actors it publishes as).
+# Read by its own program (pagerduty_alerts.py: [settings], clearance) and by the Supervisor (description,
+# engagement, [[publishes]]); never by Orchestra, which knows the actors by their events.
+name = "pagerduty_alerts"
+kit = "pagerduty"
+description = "Polls PagerDuty's incidents every 5 minutes and relays pagerduty.incident.<status> once per change, as who changed it; measure prints the open incidents by service and urgency."
+engagement = "scheduled"
+created_by = "orchestra bridges scaffold"
+# The compliance check: until the owner approves reading PagerDuty (then "approved", with the
+# data class), the program reads only a fake on this machine.
+clearance = "needs approval"
+data_class = "unknown"
+
+[settings]
+base_url = "https://api.pagerduty.com"
+token_env = "PAGERDUTY_TOKEN"     # the NAME of the variable holding a read-only REST API key; never the key
+every = "5m"
+per_minute = 30                   # PagerDuty allows far more; stay polite
+ttl = "4m"                        # a cached answer is served this long (shorter than every)
+open_statuses = ["triggered", "acknowledged"]
+
+[[publishes]]
+type = "pagerduty.incident.triggered"
+subject = "the incident's id (PABC123)"
+
+[[publishes]]
+type = "pagerduty.incident.acknowledged"
+subject = "the incident's id"
+
+[[publishes]]
+type = "pagerduty.incident.resolved"
+subject = "the incident's id"

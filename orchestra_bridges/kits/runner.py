@@ -11,11 +11,17 @@ Without ``--state-dir`` and ``--events-file`` it runs in the project at ORCHESTR
 sets it; else the working directory): events on the project's bus, the cursor under
 ``<state>/kits/pollers/<name>/`` and the cache under ``[bridges.kits] cache_dir``
 (``<state>/kits/cache``). A test gives both, and a fake's URL. Before anything is read, the
-compliance check (``machinefile.require_clearance``)."""
+compliance check (``machinefile.require_clearance``).
+
+A fake on this machine needs no credentials: against a loopback URL with ``token_env`` unset, no
+token is sent (anywhere else a missing token is an error, as ever). ``measure`` finds the poller's
+directory in ``MachineFile.poll_dir``, so it can print the counters the poller keeps
+(``pollstate.counters_at``) beside what it reads itself."""
 
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -24,8 +30,8 @@ from orchestra.events import Events
 
 from .client import CachedClient, KitError
 from .exposition import Registry
-from .machinefile import MachineFile, MachineFileError, read, require_clearance
-from .poller import Poller
+from .machinefile import MachineFile, MachineFileError, is_local, read, require_clearance
+from .poller import Poller, poll_dir
 
 Poll = Callable[[Poller], None]
 Measure = Callable[[CachedClient, MachineFile, Registry], None]
@@ -69,7 +75,11 @@ def main(here: str | Path, make_poll: Callable[[CachedClient, MachineFile], Poll
         require_clearance(m, base_url)
         if a.ttl is not None:
             m.ttl_s = a.ttl
-        common = {"token_env": m.token_env, "auth_format": auth_format, "headers": headers, "dry_run": a.dry_run}
+        token_env = m.token_env
+        if token_env and not os.environ.get(token_env) and is_local(base_url):
+            token_env = None                    # a fake on this machine: no credentials needed
+        m.poll_dir = poll_dir(m.name, a.state_dir, project)
+        common = {"token_env": token_env, "auth_format": auth_format, "headers": headers, "dry_run": a.dry_run}
         if a.state_dir:
             client = CachedClient(base_url, per_minute=m.per_minute, cache_dir=Path(a.state_dir) / "cache",
                                   ttl_s=m.ttl_s, **common)

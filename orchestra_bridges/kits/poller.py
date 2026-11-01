@@ -53,7 +53,7 @@ from .pollstate import PollState
 
 NAME = re.compile(r"^[a-z][a-z0-9_]{1,40}$")
 STARTED = "orchestra.machine.started"
-__all__ = ["ACTORS", "Poller", "RelayError", "actor_source"]
+__all__ = ["ACTORS", "Poller", "RelayError", "actor_source", "poll_dir"]
 
 
 def _safe(s: str) -> str:
@@ -66,6 +66,14 @@ def actor_source(system: str, account: str | None = None, *, bot: bool = False) 
     if not account:
         return f"bot.{_safe(system)}"
     return f"{'bot' if bot else 'person'}.{_safe(system)}.{_safe(account)}"
+
+
+def poll_dir(name: str, state_dir: str | Path | None = None, project=None) -> Path | None:
+    """Where the poller ``name`` keeps its cursor, emitted ids and counters: ``state_dir`` itself
+    when given (a test's), else ``<state>/kits/pollers/<name>/`` of ``project``; None without either."""
+    if state_dir:
+        return Path(state_dir)
+    return project.state_dir / "kits" / "pollers" / name if project is not None else None
 
 
 def stamp_of(type: str, data: Any) -> str:
@@ -85,8 +93,8 @@ class Poller:
         if state_dir:
             root, default_metrics = Path(state_dir), Path(state_dir) / "metrics.prom"
         else:
-            kits = self._load_project().state_dir / "kits"
-            root, default_metrics = kits / "pollers" / name, kits / "metrics" / f"{name}.prom"
+            project = self._load_project()
+            root, default_metrics = poll_dir(name, None, project), project.state_dir / "kits" / "metrics" / f"{name}.prom"
         self.state = PollState(root)
         self.metrics_path = metrics_path if metrics_path is not None else default_metrics
         self.events = events

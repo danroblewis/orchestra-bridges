@@ -40,6 +40,7 @@ class MachineFile:
     clearance: str = "needs approval"
     data_class: str = "unknown"
     extra: dict[str, Any] = field(default_factory=dict)      # the kit's own settings (jql, channels, queries)
+    poll_dir: Path | None = None        # where its poller keeps its cursor and counters (set by the runner)
 
 
 def read(path: str | Path) -> MachineFile:

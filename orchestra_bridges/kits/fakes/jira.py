@@ -7,8 +7,11 @@ which a read-only machine never does, but a test may, to change the world). The 
 It understands a small JQL: clauses joined by ``AND``, each ``project = X``, ``project in (X, Y)``,
 ``status = "S"``, ``status in (...)``, ``statusCategory = Done`` / ``!= Done``, ``assignee = x`` /
 ``is EMPTY``, ``updated >= "2026-10-31 08:00"`` (or ``-15m``, against now), and ``ORDER BY updated
-ASC|DESC`` (or ``key``). ``expand=changelog`` adds each issue's status changes with their authors; anything else is a 400, as Jira answers a query it cannot parse. Every
-summary carries the canary."""
+ASC|DESC`` (or ``key``). ``expand=changelog`` adds each issue's changes (status changes, and the
+edits ``edit`` makes) with their authors; anything else is a 400, as Jira answers a query it cannot
+parse. Each issue has its ``creator`` (and ``reporter``) when the fixture names one. Every summary,
+display name and edited value carries the canary. ``create``, ``move`` and ``edit`` change the
+world between polls."""
 
 from __future__ import annotations
 
@@ -147,6 +150,7 @@ class FakeJira(FakeServer):
             "issuetype": {"name": i["issuetype"]}, "priority": {"name": i["priority"]},
             "assignee": {"name": i["assignee"], "key": i["assignee"], "displayName": i["assignee"]} if i.get("assignee") else None,
             "created": i["created"], "updated": i["updated"],
+            "creator": self._person(i.get("creator")), "reporter": self._person(i.get("creator")),
         }
         if fields and "*all" not in fields:
             f = {k: v for k, v in f.items() if k in fields}
@@ -155,9 +159,13 @@ class FakeJira(FakeServer):
             hs = i.get("history") or []
             out["changelog"] = {"startAt": 0, "maxResults": len(hs), "total": len(hs), "histories": [
                 {"id": h["id"], "author": {"name": h["by"], "key": h["by"], "displayName": f"{CANARY} {h['by']}"},
-                 "created": h["at"], "items": [{"field": "status", "fieldtype": "jira", "fromString": h["from"],
-                                                "toString": h["to"]}]} for h in hs]}
+                 "created": h["at"], "items": [{"field": h.get("field", "status"), "fieldtype": "jira",
+                                                "fromString": h["from"], "toString": h["to"]}]} for h in hs]}
         return out
+
+    @staticmethod
+    def _person(login: str | None) -> dict | None:
+        return {"name": login, "key": login, "displayName": f"{CANARY} {login}"} if login else None
 
     def _record(self, i: dict, to: str, by: str | None, at: datetime) -> None:
         hist = i.setdefault("history", [])
@@ -169,6 +177,25 @@ class FakeJira(FakeServer):
         return next((i for i in self.data["issues"] if i["key"] == key or i["id"] == key), None)
 
     # the test's controls
+    def create(self, key: str, status: str = "Open", by: str | None = "alice", at: datetime | None = None) -> None:
+        """A new issue ``key`` (its project is the key's prefix) in ``status``, created by ``by``."""
+        with self._lock:
+            t = stamp(at or datetime.now(UTC))
+            n = 10000 + len(self.data["issues"]) + 1
+            self.data["issues"].append({"id": str(n), "key": key, "project": key.split("-")[0],
+                                        "summary": f"{CANARY}: {key}", "status": status, "issuetype": "Task",
+                                        "priority": "Medium", "assignee": None, "creator": by,
+                                        "created": t, "updated": t})
+
+    def edit(self, key: str, field: str = "priority", by: str | None = "alice", at: datetime | None = None) -> None:
+        """``key``'s ``field`` changed by ``by`` (not its status), recorded in its changelog."""
+        with self._lock:
+            i, t = self._find(key), at or datetime.now(UTC)
+            hid = str(20000 + sum(len(x.get("history") or []) for x in self.data["issues"]) + 1)
+            i.setdefault("history", []).append({"id": hid, "by": by or "automation", "at": stamp(t), "field": field,
+                                                "from": f"{CANARY} before", "to": f"{CANARY} after"})
+            i["updated"] = stamp(t)
+
     def move(self, key: str, status: str, by: str | None = "alice", at: datetime | None = None) -> None:
         """``key`` moves to ``status`` by ``by``, recorded in its changelog."""
         with self._lock:

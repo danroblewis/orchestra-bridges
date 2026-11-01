@@ -1,0 +1,31 @@
+# chronosphere_series: a measurement scaffolded from the orchestra-bridges kit `promql`: series from a
+# Prometheus API, printed for a [[collect]] entry (an instrument; it publishes nothing).
+# Read by its own program (chronosphere_series.py: [settings], clearance) and by the Supervisor; never by Orchestra.
+# First consider a [[sources]] entry: Orchestra reads such a store in place (INTEGRATING.md).
+name = "chronosphere_series"
+kit = "promql"
+description = "Runs a few PromQL queries against the company's Prometheus API each minute and prints their answers as gauges."
+engagement = "scheduled"
+created_by = "orchestra bridges scaffold"
+# The compliance check: until the owner approves reading the store (then "approved", with the data
+# class), the program reads only a fake on this machine.
+clearance = "needs approval"
+data_class = "unknown"
+
+[settings]
+base_url = "https://acme.chronosphere.io/data/metrics"   # the API root that serves /api/v1/query
+token_env = "PROMETHEUS_TOKEN"    # the NAME of the variable holding the API token; never the token
+per_minute = 30
+ttl = "50s"                       # under the [[collect]] entry's every
+max_series = 200                  # an answer with more series fails: narrow the query
+aliases = { k8s_cluster = "cluster" }   # the store's label -> the project's name for it
+
+[[settings.queries]]
+name = "http_requests"
+query = 'sum by (service) (http_requests_total{k8s_cluster="prod-1"})'
+help = "Requests served, by service (a counter's current total)."
+
+[[settings.queries]]
+name = "queue_depth"
+query = "queue_depth"
+help = "Messages waiting, by queue."

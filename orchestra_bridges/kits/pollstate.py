@@ -66,3 +66,15 @@ class PollState:
         tmp = self.cursor_file.with_suffix(".tmp")
         tmp.write_text(json.dumps({"cursor": self.cursor, "counters": self.counters}), encoding="utf-8")
         os.replace(tmp, self.cursor_file)
+
+
+def counters_at(root: str | Path | None) -> dict:
+    """The counters' totals a poller saved under ``root`` after its last good poll, read without
+    creating anything (``{}`` when there are none): what a measurement prints of them."""
+    if root is None:
+        return {}
+    try:
+        d = json.loads((Path(root) / "cursor.json").read_text(encoding="utf-8"))
+        return d.get("counters") or {}
+    except (OSError, ValueError, AttributeError):
+        return {}
