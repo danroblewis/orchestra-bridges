@@ -9,7 +9,8 @@ Jira (``[settings] flavour``):
   (``user_env`` or ``user_file`` names the email; the token file holds the token as issued).
 
 ``python {{name}}.py`` (the poller): each poll searches the issues in scope (``[settings] jql``)
-updated since the last poll (less ``overlap``), with their changelog, fresh, and publishes once each,
+updated since the last poll (less ``overlap``), with their changelog, fresh, and publishes each change
+made since the poller began once,
 with the issue key as the subject and who acted as the source (``person.jira.<account>``;
 ``bot.jira`` when no one did):
 
@@ -17,7 +18,15 @@ with the issue key as the subject and who acted as the source (``person.jira.<ac
   ``created``), and ``jira.issue.assigned`` with it when it was created assigned (Jira writes no
   changelog for that);
 - ``jira.issue.assigned`` for each change of assignee (data: the account it went to);
-- ``jira.issue.transitioned`` for each status change (data: from, to).
+- ``jira.issue.transitioned`` for each status change (data: from, to);
+- ``jira.comment.added`` for each comment (as its author; data: the issue and the author's account:
+  never its text).
+
+**The first run** starts at ``[settings] since`` (``now`` by default; or a duration back, ``"1d"``,
+or a time: ``start_of``), never at the beginning of the project's history: no change made before it
+is relayed, and of a catch-up window it relays only the issues not yet done (status category
+``done``), so a finished ticket is never relayed as assigned. Later polls relay every change, a
+move to Done included.
 
 The JQL's time is relative (``updated >= "-15m"``), so Jira's time zone for the token's user does not
 matter. ``python {{name}}.py measure`` (for a ``[[collect]]`` entry) prints ``jira_issues{status,
@@ -38,7 +47,7 @@ from pathlib import Path
 from orchestra.config import parse_duration
 
 from orchestra_bridges.kits import runner
-from orchestra_bridges.kits.poller import actor_source
+from orchestra_bridges.kits.poller import actor_source, start_of
 
 HERE = Path(__file__).resolve().parent
 PAGE = 100
@@ -46,7 +55,7 @@ PAGE = 100
 
 def flavour(settings) -> str:
     """``cloud`` or ``datacenter``: ``[settings] flavour``, or for ``auto`` the configured site's host
-    (machine.toml's ``base_url``, never a test's fake)."""
+    (poller.toml's ``base_url``, never a test's fake)."""
     f = str(settings.extra.get("flavour") or "auto")
     if f in ("cloud", "datacenter"):
         return f
@@ -91,9 +100,13 @@ def keep_changes(body: dict) -> dict:
                        "to": status.get("toString") if status else None,
                        "assignee_changed": assignee is not None,
                        "assigned": assignee.get("to") if assignee else None})
+        comments = [{"id": str(c["id"]), "by": _id(c.get("author")), "at": c["created"]}
+                    for c in (f.get("comment") or {}).get("comments") or [] if c.get("created")]
+        status = f.get("status") or {}
         out.append({"key": i["key"], "created": f.get("created"), "creator": _id(f.get("creator")),
-                    "assignee": _id(f.get("assignee")), "status": (f.get("status") or {}).get("name"),
-                    "changes": hs})
+                    "assignee": _id(f.get("assignee")), "status": status.get("name"),
+                    "category": (status.get("statusCategory") or {}).get("key"), "changes": hs,
+                    "comments": comments})
     return page_of(body, out)
 
 
@@ -131,7 +144,8 @@ def search(api, settings, jql: str, keep, ttl_s: float | None = None, **params) 
 
 def relay(p, issue: dict, began: float) -> None:
     key = issue["key"]
-    changes = sorted(issue["changes"], key=lambda c: (parse_time(c["at"]), int(c["id"]) if c["id"].isdigit() else 0))
+    changes = sorted((c for c in issue["changes"] if parse_time(c["at"]).timestamp() >= began),   # none from before
+                     key=lambda c: (parse_time(c["at"]), int(c["id"]) if c["id"].isdigit() else 0))
     creator = actor_source("jira", issue["creator"])
     if issue["created"] and parse_time(issue["created"]).timestamp() >= began:
         at = rfc3339(issue["created"])
@@ -147,25 +161,35 @@ def relay(p, issue: dict, began: float) -> None:
         if c["to"] is not None:
             p.emit("jira.issue.transitioned", key, {"from": c["from"], "to": c["to"]}, source=who, stamp=c["id"],
                    time=at)
+    for c in issue.get("comments") or []:
+        if parse_time(c["at"]).timestamp() >= began:
+            p.emit("jira.comment.added", key, {"issue": key, "author": c["by"]}, source=actor_source("jira", c["by"]),
+                   stamp=f"comment:{c['id']}", time=rfc3339(c["at"]))
 
 
 def make_poll(api, settings):
     scope = settings.extra.get("jql", "project = ABC")
-    lookback = parse_duration(settings.extra.get("lookback"), 86400.0)
     overlap = parse_duration(settings.extra.get("overlap"), 600.0)
 
     def poll(p):
         started = time.time()
         cursor = p.cursor if isinstance(p.cursor, dict) else {}
-        since = float(cursor.get("since") or started - lookback)
-        began = float(cursor.get("began") or since)
+        # No cursor yet: the first run reads from [settings] since, never history; it relays what it
+        # keeps of that window, and later polls only what was done after it began (``live``), so an
+        # issue the first run passed over (done) is never relayed from before. Whole seconds: the
+        # other system's times may have no fraction (a change in the same second counts).
+        first = not cursor.get("since")
+        since = float(cursor.get("since") or math.floor(start_of(settings.extra.get("since"), started)))
+        began = since if first else float(cursor.get("live") or cursor.get("began") or since)
         minutes = math.ceil((started - since + overlap) / 60)
         jql = f'({scope}) AND updated >= "-{minutes}m" ORDER BY updated ASC'
         # changes are read fresh (ttl 0): a cached answer would hide the newest
-        for issue in search(api, settings, jql, keep_changes, fields="status,assignee,creator,created",
+        for issue in search(api, settings, jql, keep_changes, fields="status,assignee,creator,created,comment",
                             expand="changelog", ttl_s=0):
+            if first and issue["category"] == "done":
+                continue                                # a catch-up relays the work not yet done
             relay(p, issue, began)
-        p.cursor = {"since": started, "began": began}
+        p.cursor = {"since": started, "live": math.floor(started) if first else began}
 
     return poll
 

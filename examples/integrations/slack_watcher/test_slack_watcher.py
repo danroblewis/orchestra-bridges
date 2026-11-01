@@ -134,8 +134,8 @@ def test_measure_prints_the_messages_and_the_mentions(fake, tmp_path, capsys):
 def test_publish_mentions_filters_to_the_mentions_and_their_answers(fake, tmp_path):
     d = tmp_path / "copy"
     shutil.copytree(HERE, d, ignore=shutil.ignore_patterns("__pycache__"))
-    toml = (d / "machine.toml").read_text().replace('publish = "all"', 'publish = "mentions"')
-    (d / "machine.toml").write_text(toml)
+    toml = (d / "poller.toml").read_text().replace('publish = "all"', 'publish = "mentions"')
+    (d / "poller.toml").write_text(toml)
     ev = tmp_path / "events.jsonl"
     mod = program(d / "slack_watcher.py")
     assert mod.main(["--once", "--events-file", str(ev), *common(fake, tmp_path)]) == 0

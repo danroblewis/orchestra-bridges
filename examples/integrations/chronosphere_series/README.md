@@ -24,12 +24,12 @@ It prints what Orchestra's own `orchestra sources check` prints (the auth by kin
 comes from, never its value; whether the store answers), then reads the declared series through
 `orchestra.sources` and lists them with their labels; exit 0 when the entry is accepted, the store
 answers, series came back and no series still carries a spelling the aliases rename. It reads
-nothing until `machine.toml` says `clearance = "approved"` (a fake on this machine aside). Then the
+nothing until `poller.toml` says `clearance = "approved"` (a fake on this machine aside). Then the
 Supervisor adds the tables through `config_edit` (the overlay by default).
 
 ## Fallback: a collector (`chronosphere_series.py measure`)
 
-When a series must be computed or stored here: each `[[settings.queries]]` in `machine.toml` once
+When a series must be computed or stored here: each `[[settings.queries]]` in `poller.toml` once
 (instant, at now), printed as a gauge named by its `name` with the answer's labels (aliases
 applied); an answer over `max_series` fails the round. Its `[[collect]]` entry:
 

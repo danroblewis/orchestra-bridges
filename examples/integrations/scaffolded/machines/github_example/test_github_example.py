@@ -1,5 +1,7 @@
 """github_example against the kit's GitHub fake: three polls (a restart between each) relay each issue's and
-pull request's change once, as who made it (a push, a label, a review, the checks, a merge); a
+pull request's change once, as who made it (a push, a label, a review, the checks, a merge); the
+first run starts now (or at ``since``: then only the items still open), never at the beginning of
+history; a
 filter of branches or labels follows only those pull requests; ``measure`` prints the open issues
 and the open pull requests by review state; the fake gets only the runner's placeholder, never a
 real token; no text or token leaves.
@@ -19,9 +21,10 @@ from orchestra_bridges.kits.testing import fake_token, set_args, settings, token
 HERE = Path(__file__).resolve().parent
 TOKEN = fake_token(HERE)        # the placeholder the runner sends a fake on this machine
 REAL = "real-token-never-sent-to-a-fake"   # in the environment, yet never read for a fake
-TOKEN_ENV = token_env(HERE, "GITHUB_TOKEN")          # machine.toml's, so the owner's variable works too
+TOKEN_ENV = token_env(HERE, "GITHUB_TOKEN")          # poller.toml's, so the owner's variable works too
 REPO = settings(HERE).get("repo") or "acme/service"  # the fake serves the owner's repository's name
-SCOPE = set_args(branches=[], labels=[], issues=True)   # the fake's world: follow everything
+SCOPE = set_args(branches=[], labels=[], issues=True, since="1d")   # follow everything; the first run reads a day
+NOW = set_args(branches=[], labels=[], issues=True, since="now")
 
 
 def program(here=HERE):
@@ -49,7 +52,8 @@ def args(fake, tmp, *extra, scope=SCOPE):
 
 def poll_once(fake, tmp, scope=SCOPE):
     assert program().main(args(fake, tmp, "--once", "--events-file", str(tmp / "events.jsonl"), scope=scope)) == 0
-    return [json.loads(x) for x in (tmp / "events.jsonl").read_text().splitlines()]
+    log = tmp / "events.jsonl"                      # none published: no file
+    return [json.loads(x) for x in log.read_text().splitlines()] if log.exists() else []
 
 
 def changes(events):
@@ -63,8 +67,8 @@ def test_polls_relay_each_change_once(fake, tmp_path):
         ("github.pr.opened", pr1, "person.github.alice"), ("github.pr.labeled", pr1, "person.github.alice"),
         ("github.checks.completed", pr1, "bot.github.github-actions"),
         ("github.pr.opened", pr2, "person.github.bob"), ("github.pr.approved", pr2, "person.github.carol"),
-        ("github.issue.opened", i3, "person.github.carol"), ("github.issue.labeled", i3, "person.github.carol"),
-        ("github.issue.opened", i4, "bot.github.dependabot"), ("github.issue.closed", i4, "person.github.bob")])
+        ("github.issue.opened", i3, "person.github.carol"), ("github.issue.labeled", i3, "person.github.carol")])
+    assert not [c for c in first if c[1] == i4]                       # closed before: a catch-up passes it over
     fake.push(1, "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3")
     fake.check("c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3", "failure")
     fake.check("b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2", "success")      # PR 2's checks finish
@@ -96,8 +100,28 @@ def test_polls_relay_each_change_once(fake, tmp_path):
     assert fake.requests and all(r.authorized for r in fake.requests)  # the placeholder, never REAL
 
 
+def test_the_first_run_starts_now(fake, tmp_path):
+    """No cursor and ``since = "now"``: nothing done before the poller began is relayed (the
+    fixture's labels, review and finished checks of the last hours: PR 1's ``SAIL``), and what is done after it is."""
+    assert changes(poll_once(fake, tmp_path, NOW)) == []
+    fake.label(1, "ready", by="bob")
+    fake.review(2, "CHANGES_REQUESTED", by="carol")
+    assert sorted(changes(poll_once(fake, tmp_path, NOW))) == sorted([
+        ("github.pr.labeled", f"{REPO}#1", "person.github.bob"),
+        ("github.pr.changes_requested", f"{REPO}#2", "person.github.carol")])
+
+
+def test_a_catch_up_relays_only_the_items_still_open(fake, tmp_path):
+    """``since = "1d"``: an item already closed when the poller first runs is never relayed; once
+    the poller runs, its later changes are."""
+    got = changes(poll_once(fake, tmp_path))
+    assert not [c for c in got if c[1] == f"{REPO}#4"]               # opened and closed before: passed over
+    fake.reopen(4, by="carol")
+    assert changes(poll_once(fake, tmp_path))[len(got):] == [("github.issue.reopened", f"{REPO}#4", "person.github.carol")]
+
+
 def test_follows_only_the_branches_or_labels_named(fake, tmp_path):
-    got = changes(poll_once(fake, tmp_path, scope=set_args(branches=["fix/*"], labels=[], issues=False)))
+    got = changes(poll_once(fake, tmp_path, scope=set_args(branches=["fix/*"], labels=[], issues=False, since="1d")))
     assert {s for _, s, _ in got} == {f"{REPO}#2"}
 
 

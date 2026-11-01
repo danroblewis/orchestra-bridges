@@ -2,7 +2,7 @@
 a file outside the repository.
 
 In order: the variable ``<NAME>`` (say ``JIRA_API_TOKEN``); else the file ``<NAME>_FILE`` names;
-else the file a ``machine.toml``'s ``token_file`` names; else, when given, a default file under
+else the file a ``poller.toml``'s ``token_file`` names; else, when given, a default file under
 ``~/.config/orchestra-bridges/``. A file must not be inside the repository (where it could be
 committed) and must be readable by its owner only (``chmod 600``), as ssh asks of a key. The token
 is read once and kept in memory only; errors name where it looked, never what it found."""

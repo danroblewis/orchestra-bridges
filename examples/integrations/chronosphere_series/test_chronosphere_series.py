@@ -85,7 +85,7 @@ def test_two_rounds_print_the_series_again_from_a_fake_with_no_token(tmp_path, m
 
 def test_the_fallback_reads_only_a_fake_until_cleared(tmp_path, monkeypatch):
     monkeypatch.setenv("CHRONOSPHERE_TOKEN", TOKEN)
-    assert program().main(["measure", "--state-dir", str(tmp_path / "s")]) == 2      # machine.toml's real URL
+    assert program().main(["measure", "--state-dir", str(tmp_path / "s")]) == 2      # poller.toml's real URL
 
 
 def test_the_sources_entry_is_accepted_answers_and_its_aliases_apply(fake, tmp_path, capsys):

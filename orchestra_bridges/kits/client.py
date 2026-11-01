@@ -21,7 +21,7 @@ standard library.
   ``chmod 600``), sent as ``auth_format`` in ``Authorization``. ``{basic}`` in ``auth_format`` is
   HTTP Basic's base64 of ``basic_user:token`` (Jira Cloud: the account's email and its API token,
   ``"Basic {basic}"``), so the token file holds the token as issued and the account comes from
-  elsewhere (``machine.toml``'s ``user_env`` or ``user_file``). It is never logged, never in a
+  elsewhere (``poller.toml``'s ``user_env`` or ``user_file``). It is never logged, never in a
   cache key or file, never in an error or repr.
 - **``dry_run``**: answers only from the cache, of any age, and raises ``NotCached`` on a miss: a
   rehearsal that sends nothing.

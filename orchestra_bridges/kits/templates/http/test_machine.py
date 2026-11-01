@@ -17,15 +17,15 @@ from orchestra_bridges.kits.testing import fake_token, set_args, token_env, uncl
 HERE = Path(__file__).resolve().parent
 TOKEN = fake_token(HERE)        # the placeholder the runner sends a fake on this machine
 REAL = "real-token-never-sent-to-a-fake"   # in the environment, yet never read for a fake
-TOKEN_ENV = token_env(HERE, "{{token_env}}")         # machine.toml's, so the owner's variable works too
+TOKEN_ENV = token_env(HERE, "{{token_env}}")         # poller.toml's, so the owner's variable works too
 # The shape FakeAPI answers in. When you change FakeAPI to your API's real shapes, change these to
-# match (or drop them, and the run reads machine.toml's own).
+# match (or drop them, and the run reads poller.toml's own).
 SCOPE = set_args(system="example", thing="item", list_path="/api/items", params={}, items="items", key="id",
                  stamp="updated_at", state="status", actor="updated_by", actor_is_bot="", time="updated_at")
 
 
 class FakeAPI(FakeServer):
-    """The list endpoint of machine.toml's settings, in the shape they read; every text has the canary."""
+    """The list endpoint of poller.toml's settings, in the shape they read; every text has the canary."""
 
     def route(self, method, path, query, body):
         if method == "GET" and path == "/api/items":

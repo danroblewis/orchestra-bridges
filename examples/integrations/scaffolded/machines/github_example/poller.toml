@@ -26,7 +26,7 @@ repo = "acme/service"             # guess: ask the owner (owner/name; `git remot
 branches = []                     # follow pull requests whose head branch matches one of these globs ("agent/*"),
 labels = []                       # or that carry one of these labels ("SAIL"); with neither, every pull request
 issues = true                     # relay the repository's issues too (pull requests are always relayed)
-lookback = "1d"                   # how far back the first poll reads
+since = "now"                     # where the first run starts: "now", a duration back ("1d"; open items only), or an ISO time
 overlap = "10m"                   # each poll re-reads this much before the last one
 
 [[publishes]]

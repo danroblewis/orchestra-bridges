@@ -2,7 +2,10 @@
 that relays what people and bots did in another system, and its measurement) from a kit template
 (``templates/<kind>/``), written as
 
-    <root>/machines/<name>/{machine.toml, <name>.py, test_<name>.py, AGENTS.md}
+    <root>/machines/<name>/{poller.toml, <name>.py, test_<name>.py, AGENTS.md}
+
+(``poller.toml``, not ``machine.toml``: the folder name is shared with the agents' specs, and one
+filename means one thing; ``machinefile.locate`` still reads a poller scaffolded before.)
 
 The roots:
 
@@ -63,8 +66,9 @@ KINDS = {
                       "source: `person.pagerduty.<user id>`, or `bot.pagerduty` when the service changed it)",
                       "`pagerduty_incidents_open{service, urgency}` (the open incidents; a sum over its labels needs no series of its own)"),
     "jira": Kind("Jira (Data Center or Cloud: `[settings] flavour`)", "JIRA_API_TOKEN", "FakeJira",
-                 "`jira.issue.created`, `jira.issue.assigned` and `jira.issue.transitioned` once per change (subject: "
-                 "the issue key; source: `person.jira.<account>`; data: the status, the assignee's account, from and to)",
+                 "`jira.issue.created`, `jira.issue.assigned` and `jira.issue.transitioned` once per change, and "
+                 "`jira.comment.added` once per comment (subject: the issue key; source: `person.jira.<account>`; "
+                 "data: the status, the assignee's account, from and to; a comment's issue and author, never its text)",
                  "`jira_issues{status, category}` (the issues in scope by status)"),
     "slack": Kind("Slack", "SLACK_TOKEN", "FakeSlack",
                   "`slack.message.posted` (subject: `<channel>/<thread ts>`; source: `person.slack.<member id>` or "
@@ -152,8 +156,8 @@ def scaffold(kind: str, name: str, target_root: Path, shown_root: str | Path | N
     k, src = KINDS[kind], TEMPLATES / kind
     values = {"name": name, "kind": kind, "system": k.system, "system_key": k.key or kind, "token_env": k.token_env,
               "fake": k.fake, "events": k.events, "series": k.series, "dir": shown}
-    values["entries"] = entries(name, shown, k.poller, every_of((src / "machine.toml").read_text(encoding="utf-8")))
-    files = {"machine.toml": src / "machine.toml", f"{name}.py": src / "machine.py",
+    values["entries"] = entries(name, shown, k.poller, every_of((src / "poller.toml").read_text(encoding="utf-8")))
+    files = {"poller.toml": src / "poller.toml", f"{name}.py": src / "machine.py",
              f"test_{name}.py": src / "test_machine.py", "AGENTS.md": TEMPLATES / "AGENTS.md"}
     target.mkdir(parents=True)
     for out, tpl in files.items():
@@ -185,12 +189,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"scaffold: {e}", file=sys.stderr)
         return 2
     k = KINDS[a.kind]
-    print(f"wrote {target}/ (machine.toml, {a.name}.py, test_{a.name}.py, AGENTS.md)")
+    print(f"wrote {target}/ (poller.toml, {a.name}.py, test_{a.name}.py, AGENTS.md)")
     # Orchestra's own Python: it has the kits and pytest; the repository's own environment may have neither
     print(f"test it:  {shlex.quote(sys.executable)} -m pytest {shlex.quote(str(target / f'test_{a.name}.py'))} -q")
     print("run it for good, once the owner approved: these entries through config_edit (the overlay by default):\n")
     print(entries(a.name, f"{shown}/machines/{a.name}", k.poller,
-                  every_of((target / "machine.toml").read_text(encoding="utf-8"))))
+                  every_of((target / "poller.toml").read_text(encoding="utf-8"))))
     return 0
 
 

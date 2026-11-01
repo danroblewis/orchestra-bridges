@@ -21,7 +21,7 @@ broken without updating the spec and saying so in the commit.
    an environment variable a setting names (`secret.read_token`, the one reader), is kept in
    memory, and is sent only to the configured host, never to a fake on this machine (the runner
    sends placeholders there). It is never written, logged, cached, printed or put in a test.
-5. **Clearance.** A scaffolded script reads only a fake on this machine until its `machine.toml`
+5. **Clearance.** A scaffolded script reads only a fake on this machine until its `poller.toml`
    says `clearance = "approved"`, which only the owner's approval writes.
 6. **A relay, never a machine** (Orchestra's rule 2, D19). A poller publishes only as the person or
    bot who acted (`kits/poller.py` refuses any other source), announces each of them once (with

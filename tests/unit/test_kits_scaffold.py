@@ -34,8 +34,8 @@ def proj(tmp_path, monkeypatch):
 def test_writes_the_four_files_into_the_repository_by_default(proj, capsys):
     assert bridges_main(["scaffold", "pagerduty", "pd_alerts"]) == 0
     d = proj.repo_root / ".orchestra" / "machines" / "pd_alerts"
-    assert sorted(p.name for p in d.iterdir()) == ["AGENTS.md", "machine.toml", "pd_alerts.py", "test_pd_alerts.py"]
-    toml = tomllib.loads((d / "machine.toml").read_text())
+    assert sorted(p.name for p in d.iterdir()) == ["AGENTS.md", "pd_alerts.py", "poller.toml", "test_pd_alerts.py"]
+    toml = tomllib.loads((d / "poller.toml").read_text())
     assert toml["name"] == "pd_alerts" and toml["clearance"] == "needs approval"
     assert toml["settings"]["token_env"] == "PAGERDUTY_TOKEN" and "token" not in toml["settings"]
     agents = (d / "AGENTS.md").read_text()
@@ -138,15 +138,15 @@ def test_a_scaffolded_pagerduty_poller_runs_two_intervals_and_stops(tmp_path, mo
 
 def test_clearance(tmp_path):
     d = scaffold("pagerduty", "pd_alerts", tmp_path)
-    m = read(d / "machine.toml")
+    m = read(d / "poller.toml")
     require_clearance(m, "http://127.0.0.1:9999")                  # a fake: always
     with pytest.raises(MachineFileError, match="not cleared"):
         require_clearance(m, "https://api.pagerduty.com")
-    (d / "machine.toml").write_text((d / "machine.toml").read_text().replace('"needs approval"', '"approved"'))
-    require_clearance(read(d / "machine.toml"), "https://api.pagerduty.com")
-    (d / "machine.toml").write_text((d / "machine.toml").read_text().replace("\n[settings]\n", '\n[settings]\ntoken = "x"\n'))
+    (d / "poller.toml").write_text((d / "poller.toml").read_text().replace('"needs approval"', '"approved"'))
+    require_clearance(read(d / "poller.toml"), "https://api.pagerduty.com")
+    (d / "poller.toml").write_text((d / "poller.toml").read_text().replace("\n[settings]\n", '\n[settings]\ntoken = "x"\n'))
     with pytest.raises(MachineFileError, match="token"):
-        read(d / "machine.toml")
+        read(d / "poller.toml")
 
 
 def test_kits_settings_and_check():
@@ -173,23 +173,23 @@ def _measure(d, fake, tmp_path):
 
 def test_the_runner_reads_credentials_only_for_the_real_host(tmp_path, monkeypatch):
     """K4: against a fake on this machine the runner reads no token and no account (placeholders
-    instead); against the real host, the references machine.toml names."""
+    instead); against the real host, the references poller.toml names."""
     d = scaffold("jira", "jira_poll", tmp_path / "root")
     secret = tmp_path / "secrets" / "jira-token"
     secret.parent.mkdir()
     secret.write_text(REAL + "\n")
     secret.chmod(0o600)
-    (d / "machine.toml").write_text((d / "machine.toml").read_text().replace(
+    (d / "poller.toml").write_text((d / "poller.toml").read_text().replace(
         "\n[settings]\n", f'\n[settings]\ntoken_file = "{secret}"\nuser_env = "JIRA_EMAIL"\n'))
     monkeypatch.setenv("JIRA_EMAIL", "owner@example.com")
-    m = read(d / "machine.toml")
+    m = read(d / "poller.toml")
     assert credentials(m, "http://127.0.0.1:9999") == {"token": FAKE_TOKEN, "basic_user": FAKE_USER}
     real = credentials(m, "https://jira.example.com")
     assert real == {"token_env": "JIRA_API_TOKEN", "token_file": str(secret), "basic_user": "owner@example.com",
                     "repo_root": None}
-    (d / "machine.toml").write_text((d / "machine.toml").read_text().replace(
+    (d / "poller.toml").write_text((d / "poller.toml").read_text().replace(
         "\n[settings]\n", '\n[settings]\nfake_token = "the-fakes-own"\n'))
-    assert credentials(read(d / "machine.toml"), "http://localhost:1")["token"] == "the-fakes-own"
+    assert credentials(read(d / "poller.toml"), "http://localhost:1")["token"] == "the-fakes-own"
 
 
 def test_a_real_token_is_never_sent_to_a_fake(tmp_path, monkeypatch):
@@ -199,7 +199,7 @@ def test_a_real_token_is_never_sent_to_a_fake(tmp_path, monkeypatch):
     secret.parent.mkdir()
     secret.write_text(REAL + "\n")
     secret.chmod(0o600)
-    (d / "machine.toml").write_text((d / "machine.toml").read_text().replace(
+    (d / "poller.toml").write_text((d / "poller.toml").read_text().replace(
         "\n[settings]\n", f'\n[settings]\ntoken_file = "{secret}"\n'))
     with FakePagerDuty(token=FAKE_TOKEN) as fake:
         r = subprocess.run([sys.executable, str(d / "pd_alerts.py"), "measure", "--base-url", fake.url, "--state-dir",
@@ -235,15 +235,15 @@ OWNERS = {     # what the owner's answers look like once filled in: another vari
 
 @pytest.mark.parametrize("kind", sorted(KINDS))
 def test_each_kinds_own_test_still_passes_with_the_owners_values(kind, tmp_path):
-    """The scaffolded test reads the token's variable and the scope from machine.toml: after the
+    """The scaffolded test reads the token's variable and the scope from poller.toml: after the
     owner's values and approval are written (as approve_integration does), it still passes."""
     d = scaffold(kind, f"my_{kind}", tmp_path / "root")
-    toml = (d / "machine.toml").read_text()
+    toml = (d / "poller.toml").read_text()
     for old, new in [*OWNERS[kind], (f'token_env = "{KINDS[kind].token_env}"', 'token_env = "OWNERS_OWN_TOKEN"'),
                      ('clearance = "needs approval"', 'clearance = "approved"')]:
         assert old in toml, old
         toml = toml.replace(old, new, 1)
-    (d / "machine.toml").write_text(toml)
+    (d / "poller.toml").write_text(toml)
     r = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", str(d / f"test_my_{kind}.py")],
                        capture_output=True, text=True, timeout=300, cwd=tmp_path, env=checkout_env(), check=False)
     assert r.returncode == 0, r.stdout[-3000:] + r.stderr[-2000:]
@@ -252,19 +252,19 @@ def test_each_kinds_own_test_still_passes_with_the_owners_values(kind, tmp_path)
 def test_the_jira_kits_own_test_passes_for_cloud_too(tmp_path):
     """Jira Cloud: the owner's site on atlassian.net makes the flavour cloud (v3, /search/jql, Basic)."""
     d = scaffold("jira", "jira_cloud", tmp_path / "root")
-    toml = (d / "machine.toml").read_text().replace('"https://jira.example.com"', '"https://acme.atlassian.net"')
-    (d / "machine.toml").write_text(toml.replace("\n[settings]\n", '\n[settings]\nuser_env = "JIRA_EMAIL"\n'))
+    toml = (d / "poller.toml").read_text().replace('"https://jira.example.com"', '"https://acme.atlassian.net"')
+    (d / "poller.toml").write_text(toml.replace("\n[settings]\n", '\n[settings]\nuser_env = "JIRA_EMAIL"\n'))
     r = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", str(d / "test_jira_cloud.py")],
                        capture_output=True, text=True, timeout=300, cwd=tmp_path, env=checkout_env(), check=False)
     assert r.returncode == 0, r.stdout[-3000:] + r.stderr[-2000:]
-    assert "4 passed" in r.stdout
+    assert "6 passed" in r.stdout
 
 
 def test_guessed_values_are_marked():
     """A tool reading a template knows which values to ask the owner for."""
     for kind, keys in {"github": ["repo"], "jira": ["base_url", "jql"], "slack": ["channels"], "promql": ["base_url", "aliases"],
                        "http": ["base_url", "system", "thing", "list_path"]}.items():
-        lines = (TEMPLATES / kind / "machine.toml").read_text().splitlines()
+        lines = (TEMPLATES / kind / "poller.toml").read_text().splitlines()
         for key in keys:
             [line] = [x for x in lines if x.startswith(f"{key} =")]
             assert "# guess:" in line, (kind, line)
@@ -281,7 +281,7 @@ def test_the_runner_set_overrides_only_the_kits_own_settings(tmp_path, monkeypat
 
 def test_an_uncleared_poller_waits_for_approval_instead_of_exiting(tmp_path):
     """A [[machines]] entry written before the owner's approval does not crash-loop: the poller logs
-    once, reads nothing, re-reads machine.toml on its interval, and polls once it is cleared."""
+    once, reads nothing, re-reads poller.toml on its interval, and polls once it is cleared."""
     d = scaffold("pagerduty", "pd_alerts", tmp_path / "root")
     ev = tmp_path / "events.jsonl"
     env = checkout_env(PAGERDUTY_TOKEN=REAL, ORCHESTRATOR_HOME=str(tmp_path / "home"))
@@ -292,8 +292,8 @@ def test_an_uncleared_poller_waits_for_approval_instead_of_exiting(tmp_path):
         try:
             time.sleep(2.0)
             assert proc.poll() is None and not ev.exists() and not fake.requests     # alive, reading nothing
-            toml = (d / "machine.toml").read_text()                                   # the fake is configured:
-            (d / "machine.toml").write_text(toml.replace('"https://api.pagerduty.com"', f'"{fake.url}"'))
+            toml = (d / "poller.toml").read_text()                                   # the fake is configured:
+            (d / "poller.toml").write_text(toml.replace('"https://api.pagerduty.com"', f'"{fake.url}"'))
             deadline = time.time() + 30
             while time.time() < deadline and len(events_of(ev)) < 2:
                 time.sleep(0.05)

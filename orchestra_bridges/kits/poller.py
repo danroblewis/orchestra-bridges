@@ -29,7 +29,10 @@ the people and bots there did as events on the project's bus.
   is logged by its exception's type and message and tried again next interval; its cursor and
   counters are not saved.
 - **The cursor** (``poller.cursor``): whatever the poll sets, saved in ``cursor.json`` after each
-  good poll and read back at start (``pollstate.py``).
+  good poll and read back at start (``pollstate.py``). **The first run** (no cursor yet) starts
+  where ``[settings] since`` says (``start_of``): now by default, never at the beginning of the
+  other system's history, so a new poller relays what happens from now on, not a replay of what
+  was done before it (a stand-in answering a label added last week).
 - **Idempotent emission**: the id is ``<name>:<type>:<key>@<stamp>``, the key being the item's id
   in the other system (the subject, by default) and the stamp its change (an updated time, a
   version; by default a hash of the data). An id already emitted is skipped, across restarts too.
@@ -48,9 +51,11 @@ import sys
 import threading
 import time
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from orchestra.config import ConfigError, parse_duration
 from orchestra.events import Events
 
 from ..identity import People, people_file
@@ -61,7 +66,7 @@ from .pollstate import PollState
 NAME = re.compile(r"^[a-z][a-z0-9_]{1,40}$")
 STARTED = "orchestra.machine.started"
 ACTORS = ("person.", "bot.")            # the only sources a poller publishes as: who acted
-__all__ = ["ACTORS", "Poller", "RelayError", "actor_source", "poll_dir"]
+__all__ = ["ACTORS", "Poller", "RelayError", "actor_source", "poll_dir", "start_of"]
 
 
 class RelayError(ValueError):
@@ -78,6 +83,29 @@ def actor_source(system: str, account: str | None = None, *, bot: bool = False) 
     if not account:
         return f"bot.{_safe(system)}"
     return f"{'bot' if bot else 'person'}.{_safe(system)}.{_safe(account)}"
+
+
+def start_of(since: Any, now: float) -> float:
+    """Where a poller with no cursor starts reading, from ``[settings] since``: ``"now"`` (the
+    default, also for none), a duration back from now (``"2h"``, ``"1d"``: a catch-up window), or a
+    time (ISO 8601; UTC unless it names its zone). Never the beginning of the other system's history:
+    a time in the future is now."""
+    if since is None or (isinstance(since, str) and since.strip().lower() in ("", "now")):
+        return now
+    if isinstance(since, datetime):
+        t = since
+    else:
+        try:
+            return now - parse_duration(since, 0.0)
+        except ConfigError:
+            pass
+        try:
+            t = datetime.fromisoformat(str(since).strip())
+        except ValueError:
+            raise ValueError(f"[settings] since = {since!r}: \"now\", a duration back (\"2h\") or an ISO time") from None
+    if t.tzinfo is None:
+        t = t.replace(tzinfo=UTC)
+    return min(t.timestamp(), now)
 
 
 def poll_dir(name: str, state_dir: str | Path | None = None, project=None) -> Path | None:

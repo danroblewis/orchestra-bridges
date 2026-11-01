@@ -1,12 +1,12 @@
-# {{name}}: a poller scaffolded from the orchestra-bridges kit `jira`: a relay of what people did in
+# jira_example: a poller scaffolded from the orchestra-bridges kit `jira`: a relay of what people did in
 # Jira, never a machine itself (the machines are the actors it publishes as).
-# Read by its own program ({{name}}.py: [settings], clearance) and by the Supervisor (description,
+# Read by its own program (jira_example.py: [settings], clearance) and by the Supervisor (description,
 # engagement, [[publishes]]); never by Orchestra, which knows the actors by their events.
-name = "{{name}}"
+name = "jira_example"
 # kit: the template it came from, and the system's name in [bridges.kits] tokens: when token_env
 # below is not set, the token's variable is the project's tokens.<kit> (tokens = { jira = "JIRA_API_TOKEN" }).
 kit = "jira"
-description = "Polls Jira every 5 minutes and relays each issue created, assigned and moved (jira.issue.created, .assigned, .transitioned), as who did it; measure prints the issues in scope by status."
+description = "Polls Jira every 5 minutes and relays each issue created, assigned and moved and each comment added (jira.issue.created, .assigned, .transitioned, jira.comment.added), as who did it; measure prints the issues in scope by status."
 engagement = "scheduled"
 created_by = "orchestra bridges scaffold"
 # The compliance check: until the owner approves reading Jira (then "approved", with the data
@@ -21,13 +21,13 @@ base_url = "https://jira.example.com"   # guess: ask the owner (a Data Center ho
 # *.atlassian.net, else datacenter (a Cloud site on its own domain needs "cloud")
 flavour = "auto"
 token_env = "JIRA_API_TOKEN"      # the NAME of the variable holding the token; never the token
-# token_file = "~/.config/orchestra-bridges/{{kind}}-token"   # instead: a chmod 600 file outside any repository
-# user_file = "~/.config/orchestra-bridges/{{kind}}-email"    # Cloud: the account the token belongs to (or user_env)
+# token_file = "~/.config/orchestra-bridges/jira-token"   # instead: a chmod 600 file outside any repository
+# user_file = "~/.config/orchestra-bridges/jira-email"    # Cloud: the account the token belongs to (or user_env)
 every = "5m"
 per_minute = 20
 ttl = "4m"
 jql = "project = ABC"             # guess: ask the owner (the issues in scope; no ORDER BY, the poller adds its own)
-lookback = "1d"                   # how far back the first poll reads
+since = "now"                     # where the first run starts: "now", a duration back ("1d"; issues not yet done only), or an ISO time
 overlap = "10m"                   # each poll re-reads this much before the last one
 
 [[publishes]]
@@ -47,3 +47,9 @@ type = "jira.issue.transitioned"
 subject = "the issue key"
 source = "who moved it: person.jira.<account> (bot.jira when no one)"
 data = "from, to: the status names"
+
+[[publishes]]
+type = "jira.comment.added"
+subject = "the issue key"
+source = "the comment's author: person.jira.<account>"
+data = "issue, author: the issue key and the author's account (never the comment's text)"

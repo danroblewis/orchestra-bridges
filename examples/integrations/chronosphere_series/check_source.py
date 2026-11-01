@@ -9,7 +9,7 @@ limits); nothing is stored and no credential is printed.
 ``--sources`` is the entry to check (this directory's ``sources.toml`` by default); ``--project``
 checks the entry as the project's configuration has it instead (once added). ``--url`` points it
 at another server (a fake's, in a test). The compliance check comes first, as in the kit's
-programs: until ``machine.toml`` says ``clearance = "approved"``, only a fake on this machine is
+programs: until ``poller.toml`` says ``clearance = "approved"``, only a fake on this machine is
 read. A fake needs no credentials: with the token's variable unset, a loopback URL is read without
 ``auth``. Exit 0: all good; 1: a check failed (each named); 2: refused before any read."""
 
@@ -73,7 +73,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         raw, repo = entry(a)
         raw = pointed(raw, a.url)
-        m = read(HERE / "machine.toml")
+        m = read(HERE / "poller.toml")
         if not raw["sources"]:
             print("no [[sources]] to check", file=sys.stderr)
             return 2

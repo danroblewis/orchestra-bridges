@@ -3,9 +3,9 @@ scaffolded from them under the project's roots (``scaffold.ROOTS``: the state di
 private overlay, the repository's ``.orchestra/``), each with its kit, clearance and data class, the
 NAME of its token's variable (never a value; ``token_file`` is shown as ``file``), what schedules
 its poller (``[[machines]]``; ``every``: a Workflows ``workflows.every.<item>`` whose role is the
-poller's name, with the ``machine.json`` the floor runs it from beside its ``machine.toml``; or
+poller's name, with the ``machine.json`` the floor runs it from beside its ``poller.toml``; or
 ``no``), whether its ``[[collect]]`` entry is in the configuration, and how many values in its
-``machine.toml`` are still marked ``# guess``. It changes nothing."""
+``poller.toml`` are still marked ``# guess``. It changes nothing."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ import tomllib
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from .machinefile import MachineFileError, read
+from .machinefile import LEGACY, MachineFileError, locate, read
 from .scaffold import KINDS, ROOTS, root_dir
 from .settings import read as read_settings
 
@@ -53,9 +53,9 @@ def schedule(name: str, folder: Path, machines: set[str], roles: set[str]) -> st
     return "every" if name in roles and (folder / "machine.json").is_file() else "no"
 
 
-def scaffolded(machine_toml: Path) -> bool:
+def scaffolded(path: Path) -> bool:
     try:
-        raw = tomllib.loads(machine_toml.read_text(encoding="utf-8"))
+        raw = tomllib.loads(path.read_text(encoding="utf-8"))
     except (OSError, tomllib.TOMLDecodeError):
         return True                     # a broken one is listed with its error
     return raw.get("kit") in KINDS or raw.get("created_by") == "orchestra bridges scaffold"
@@ -74,9 +74,9 @@ def listing(project) -> list[Integration]:
         if base.resolve() in seen:
             continue                    # the overlay beside the state directory: one root, listed once
         seen.add(base.resolve())
-        for f in sorted(base.glob("*/machine.toml")) if base.is_dir() else []:
-            if not scaffolded(f):
-                continue                # another machine spec (orchestra-agents keeps its own here)
+        for f in sorted(locate(d) for d in base.iterdir() if d.is_dir()) if base.is_dir() else []:
+            if not f.exists() or (f.name == LEGACY and not scaffolded(f)):
+                continue                # another machine's files (orchestra-agents keeps its specs here)
             text = f.read_text(encoding="utf-8", errors="replace")
             guesses = sum("# guess" in line for line in text.splitlines())
             try:

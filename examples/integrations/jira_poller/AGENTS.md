@@ -6,7 +6,7 @@ You are a coding tool working on this directory. Read this first; it is the whol
 
 `jira_poller.py` is a small program with two halves:
 
-- **the poller** (`python jira_poller.py`): every few minutes (`machine.toml`, `[settings] every`; 5
+- **the poller** (`python jira_poller.py`): every few minutes (`poller.toml`, `[settings] every`; 5
   minutes by default) it reads what changed in Jira and relays it as events on the project's
   Orchestra bus: `jira.issue.created` (source: the creator), `jira.issue.transitioned` (data: from and to status) and `jira.issue.updated` (data: the changed fields' names), once each (subject: the issue key; source: `person.jira.<login>`, `bot.jira` when no one);
 - **the measurement** (`python jira_poller.py measure`): one read, printed as Prometheus text, which a
@@ -24,7 +24,7 @@ The measurement is an instrument: it measures, never publishes.
 
 The counters are counted by the poller as it relays (Orchestra counts events by type and source
 only, never their `data`) and kept with its cursor; `measure` prints them from there. Files: `README.md`
-(what it emits and measures), `machine.toml` (its settings, clearance and the events it publishes), `jira_poller.py` (what it
+(what it emits and measures), `poller.toml` (its settings, clearance and the events it publishes), `jira_poller.py` (what it
 reads, keeps and publishes: `meta`/`keep_*`, `make_poll`, `measure`), `test_jira_poller.py` (its test
 against the kit's fake), this file.
 
@@ -50,9 +50,9 @@ against the kit's fake), this file.
 - **Never write to Jira.** Read-only: no comments, no transitions, no acknowledgements.
 - **Credentials by environment name only.** The token is read from `$JIRA_API_TOKEN` (the name is
   `[settings] token_env`), kept in memory, sent only to `base_url`'s host. Never put a token in
-  `machine.toml`, `orchestra.toml`, a test, a log line or a commit; never print it or ask for it in
+  `poller.toml`, `orchestra.toml`, a test, a log line or a commit; never print it or ask for it in
   a chat. If it is missing, say which variable to set, and stop.
-- **The compliance check.** `clearance = "needs approval"` in `machine.toml` means the program
+- **The compliance check.** `clearance = "needs approval"` in `poller.toml` means the program
   reads only a fake on this machine (a loopback URL); it refuses Jira itself before any
   request. Only the owner approves reading a company system (then `clearance = "approved"` and
   `data_class`); you never change it on your own.
