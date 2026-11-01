@@ -8,6 +8,7 @@ A fake's ``route(method, path, query, body)`` returns ``(status, body)``, ``body
 
 from __future__ import annotations
 
+import base64
 import json
 import threading
 import urllib.parse
@@ -40,9 +41,10 @@ class FakeServer:
     fixture_name = ""
     auth_format = "Bearer {token}"
 
-    def __init__(self, fixture: str | Path | dict | None = None, token: str | None = None):
+    def __init__(self, fixture: str | Path | dict | None = None, token: str | None = None,
+                 basic_user: str | None = None):
         self.data = load_fixture(fixture, self.fixture_name)
-        self.token = token
+        self.token, self.basic_user = token, basic_user
         self.requests: list[Request] = []
         self._fail: list[tuple[int, dict[str, str]]] = []
         self._lock = threading.Lock()
@@ -52,6 +54,12 @@ class FakeServer:
     # what a subclass implements
     def route(self, method: str, path: str, query: dict[str, list[str]], body: Any) -> tuple[int, Any]:
         raise NotImplementedError
+
+    def expected_auth(self) -> str:
+        """The ``Authorization`` a request must carry: ``auth_format`` with the token (``{basic}``:
+        base64 of ``basic_user:token``, as ``CachedClient`` sends it)."""
+        pair = f"{self.basic_user}:{self.token}" if self.basic_user else str(self.token)
+        return self.auth_format.format(token=self.token, basic=base64.b64encode(pair.encode()).decode())
 
     # the test's controls
     def fail_next(self, status: int, headers: dict[str, str] | None = None, count: int = 1) -> None:
@@ -89,7 +97,7 @@ class FakeServer:
                         body = json.loads(raw) if raw else None
                     except ValueError:
                         body = raw.decode("utf-8", "replace")
-                expected = fake.auth_format.format(token=fake.token) if fake.token else None
+                expected = fake.expected_auth() if fake.token else None
                 authorized = expected is not None and self.headers.get("Authorization") == expected
                 with fake._lock:
                     fake.requests.append(Request(method, u.path, query, body, authorized))
@@ -120,6 +128,12 @@ class FakeServer:
 
             def do_POST(self):
                 self._serve("POST")
+
+            def do_PUT(self):
+                self._serve("PUT")
+
+            def do_DELETE(self):
+                self._serve("DELETE")
 
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self._server.daemon_threads = True
