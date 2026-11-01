@@ -6,16 +6,19 @@ small parts a coding tool or the Supervisor builds a poller from, and a scaffold
 - ``promql.Prometheus``: instant, range and series queries against a Prometheus API, as plain series;
 - ``poller.Poller``: the interval loop, the cursor, idempotent emission, the series a
   ``[[collect]]`` entry reads, the announcement, a clean stop;
-- ``fakes``: HTTP fakes of Jira, Slack, PagerDuty and a Prometheus API for tests;
-- ``scaffold``: ``orchestra bridges scaffold <kind> <name> [--root state|overlay|repo]``;
+- ``fakes``: HTTP fakes of GitHub, Jira (Data Center and Cloud), Slack, PagerDuty and a Prometheus
+  API for tests;
+- ``scaffold``: ``orchestra bridges scaffold <kind> <name> [--root repo|state|overlay]``, the
+  repository's ``.orchestra/machines/`` by default;
+- ``notes``: what a machine says of itself on its card (``fake``, ``stand_in``, ``disabled``);
 - ``settings``: ``[bridges.kits]``; ``machinefile``: a machine's ``machine.toml`` and its clearance;
 - ``testing``: what a scaffolded test reads from its ``machine.toml`` (the token's variable, the scope);
 - ``integrations``: ``orchestra bridges integrations``, the scaffolded machines and their clearance.
 
 A poller built from a kit is a relay, never a machine (Orchestra's rule 2, D19; the bridges' SPEC §2):
 it publishes only as the people and bots who acted (``person.<system>.<account>``, ``bot.<system>``),
-announces each of them once, and never announces itself or publishes under its own name. It differs
-from a bridge only in keeping state of its own in the state directory (SPEC §8, AGENTS.md rule 4)."""
+announces each of them once, and never announces itself or publishes under its own name. It keeps
+its cursor, the ids it emitted and a cache of only what it kept in the state directory (SPEC §8)."""
 
 from .client import CachedClient, HTTPFailure, KitError, NotCached, TokenMissing
 from .poller import Poller

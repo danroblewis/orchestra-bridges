@@ -13,7 +13,7 @@ strategy = "conservation"
 [[sources]]
 name = "rabbit"
 url = "http://127.0.0.1:8441"
-preset = "~/orchestra-bridges/orchestra_bridges/rabbitmq/preset.toml"
+preset = "~/orchestra-bridges/tests/rabbitmq_rig/preset.toml"
 settle = "30s"                # VictoriaMetrics hides the newest 30 s from range queries (-search.latencyOffset), not from raw reads
 
 [sources.producers]           # RabbitMQ cannot say who publishes: orders-api is declared, the others are left unattributed

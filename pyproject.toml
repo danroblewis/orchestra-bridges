@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "orchestra-bridges"
 version = "0.1.0"
-description = "Bridges for Orchestra: machines that poll systems which are buses in all but name (GitHub issues and pull requests, Jira, Slack pings) and publish what people did there as metadata-only events on a project's Orchestra bus."
+description = "The bridges for Orchestra: a library (kits, fakes, templates, a scaffold and a clearance gate) from which a Supervisor or a coding tool writes, in the owner's repository, the scripts that bring an outside system's events and measurements into a project."
 requires-python = ">=3.12"
 # orchestra: ours is 1.0.0a1; <1.0.0rc0 keeps out the unrelated `orchestra` on PyPI (1.0.0 and up)
 # pytest: a scaffolded collector's own test runs in Orchestra's Python, beside the kits (kits/scaffold.py)

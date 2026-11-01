@@ -1,7 +1,7 @@
 """A simulated fleet of services talking over RabbitMQ, for testing counted traffic: three publish,
 four consume, and one consumer is too slow at peak.
 
-    uv run --no-project --with pika python orchestra_bridges/rabbitmq/fleet.py --port 5682
+    uv run --no-project --with pika python tests/rabbitmq_rig/fleet.py --port 5682
 
 It is a test system, not a bridge: it never touches Orchestra. Orchestra sees it only through
 RabbitMQ's own per-queue counts (``preset.toml``), never a message.
