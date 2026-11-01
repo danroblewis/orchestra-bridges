@@ -185,3 +185,31 @@ def test_redact_and_retry_after():
     assert retry_after("5", 0) == 5
     assert retry_after("Wed, 21 Oct 2015 07:28:00 GMT", 1445412480 - 10) == pytest.approx(10)
     assert retry_after(None, 0) is None
+
+
+def test_basic_auth_joins_the_account_and_the_token(tmp_path):
+    """``Basic {basic}``: the token file holds the token as issued (Jira Cloud's API token) and the
+    account (its email) comes apart from it; the fake checks base64 of ``account:token``. PUT reaches
+    a fake too."""
+    from orchestra_bridges.kits.fakes import FakeServer
+
+    class Fake(FakeServer):
+        auth_format = "Basic {basic}"
+
+        def route(self, method, path, query, body):
+            return 200, {"method": method}
+
+    tfile = tmp_path / "token"
+    tfile.write_text(TOKEN + "\n")
+    tfile.chmod(0o600)
+    with Fake({}, token=TOKEN, basic_user="me@example.invalid") as f:
+        api = CachedClient(f.url, token_file=tfile, auth_format="Basic {basic}", basic_user="me@example.invalid",
+                           cache_dir=tmp_path / "c", rate_dir=tmp_path / "r", per_minute=6000)
+        assert api.get("/x") == {"method": "GET"}
+        assert api.request("PUT", "/x", body=b"{}", content_type="application/json") == {"method": "PUT"}
+        assert all(r.authorized for r in f.requests) and len(f.requests) == 2
+        wrong = CachedClient(f.url, token_file=tfile, auth_format="Basic {basic}", basic_user="other@example.invalid",
+                             cache_dir=tmp_path / "c", rate_dir=tmp_path / "r", per_minute=6000, retries=0)
+        with pytest.raises(HTTPFailure):
+            wrong.get("/x")
+        assert TOKEN not in repr(api)
