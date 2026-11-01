@@ -4,7 +4,7 @@ applied, refuses an uncleared store before any read, and fails when an alias doe
 fallback: ``measure`` prints each query's answer as gauges with the aliases applied (twice: two
 ``[[collect]]`` rounds), and refuses an answer over ``max_series``; no token leaves.
 
-Run: ``uv run python -m pytest examples/integrations/chronosphere_series/test_chronosphere_series.py`` (in an environment with orchestra-bridges)."""
+Run with Orchestra's own Python (the one ``orchestra`` runs in, which has the kits): ``python -m pytest examples/integrations/chronosphere_series/test_chronosphere_series.py``."""
 
 import importlib.util
 import time
@@ -14,9 +14,11 @@ from types import SimpleNamespace
 import pytest
 
 from orchestra_bridges.kits.fakes import FakePrometheus
+from orchestra_bridges.kits.testing import fake_token
 
 HERE = Path(__file__).resolve().parent
-TOKEN = "test-token-not-real"
+TOKEN = fake_token(HERE)        # the placeholder the runner sends a fake on this machine
+REAL = "real-token-never-sent-to-a-fake"   # in the environment, yet never read for a fake
 
 
 def load(name):
@@ -63,10 +65,10 @@ def test_too_many_series_fails(fake, tmp_path, capsys):
 def test_no_token_leaves(fake, tmp_path, capsys):
     measure(fake, tmp_path)
     out = capsys.readouterr()
-    assert TOKEN not in out.out + out.err
+    assert REAL not in out.out + out.err
     for p in tmp_path.rglob("*"):
         if p.is_file():
-            assert TOKEN not in p.read_text(errors="replace"), p
+            assert REAL not in p.read_text(errors="replace"), p
 
 
 def test_two_rounds_print_the_series_again_from_a_fake_with_no_token(tmp_path, monkeypatch, capsys):
@@ -91,7 +93,7 @@ def test_the_sources_entry_is_accepted_answers_and_its_aliases_apply(fake, tmp_p
     out = capsys.readouterr().out
     assert "answers" in out and "ok: the store answers and the aliases apply" in out
     assert "chrono:queue_depth {cluster=prod-2, queue=orders}" in out                  # k8s_cluster -> cluster
-    assert "k8s_cluster=" not in out and TOKEN not in out
+    assert "k8s_cluster=" not in out and REAL not in out
     assert "CHRONOSPHERE_TOKEN: present" in out                                       # named, never shown
     assert fake.requests and all(r.authorized for r in fake.requests)
 

@@ -1,7 +1,9 @@
-"""{{name}} against the kit's Jira fake: two polls (a restart between them) relay each status
-change once, as who made it; ``measure`` prints the issues by status; no text or token leaves.
+"""{{name}} against the kit's Jira fake, in the flavour machine.toml names (Data Center or Cloud):
+two polls (a restart between them) relay each creation, assignment and status change once, as who
+made it; ``measure`` prints the issues by status; the fake gets only the runner's placeholders,
+never a real token; no text or token leaves.
 
-Run: ``uv run python -m pytest {{dir}}/test_{{name}}.py`` (in an environment with orchestra-bridges)."""
+Run with Orchestra's own Python (the one ``orchestra`` runs in, which has the kits): ``python -m pytest {{dir}}/test_{{name}}.py``."""
 
 import importlib.util
 import json
@@ -14,10 +16,12 @@ import pytest
 from orchestra_bridges.kits.fakes import CANARY, FakeJira
 from orchestra_bridges.kits.fakes.base import load_fixture
 from orchestra_bridges.kits.fakes.jira import stamp
-from orchestra_bridges.kits.testing import set_args, settings, token_env
+from orchestra_bridges.kits.machinefile import read
+from orchestra_bridges.kits.testing import fake_token, fake_user, set_args, settings, token_env, uncleared
 
 HERE = Path(__file__).resolve().parent
-TOKEN = "test-token-not-real"
+TOKEN = fake_token(HERE)        # the placeholder the runner sends a fake on this machine
+REAL = "real-token-never-sent-to-a-fake"   # in the environment, yet never read for a fake
 TOKEN_ENV = token_env(HERE, "JIRA_API_TOKEN")        # machine.toml's, so the owner's variable works too
 # The fake holds one project: the first machine.toml's JQL names (ABC when it names none), and the
 # run is given `project = <it>` (the rest of the owner's JQL is theirs; the fake knows only projects).
@@ -26,11 +30,14 @@ PROJECT = _named.group(1) if _named and _named.group(1) != "OPS" else "ABC"   # 
 SCOPE = set_args(jql=f"project = {PROJECT}")
 
 
-def program():
-    spec = importlib.util.spec_from_file_location("{{name}}", HERE / "{{name}}.py")
+def program(here=HERE):
+    spec = importlib.util.spec_from_file_location("{{name}}", here / "{{name}}.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
+
+
+FLAVOUR = program().flavour(read(HERE / "machine.toml"))     # the owner's site decides: cloud or datacenter
 
 
 def recent_world() -> dict:
@@ -39,18 +46,19 @@ def recent_world() -> dict:
     for n, issue in enumerate(world["issues"]):
         if issue["project"] == "ABC":                # the fixture's project in scope (OPS stays out)
             issue["key"], issue["project"] = f"{PROJECT}-{issue['key'].split('-')[1]}", PROJECT
-        t = stamp(now - timedelta(hours=3 - n))
-        issue["updated"] = t
+        t = stamp(now - timedelta(days=3, hours=-n))   # created before the first poll's day
+        issue["created"] = t
+        issue["updated"] = stamp(now - timedelta(hours=3 - n))
         for h in issue.get("history") or []:
-            h["at"] = t
+            h["at"] = issue["updated"]
     return world
 
 
 @pytest.fixture
 def fake(tmp_path, monkeypatch):
     monkeypatch.setenv("ORCHESTRATOR_HOME", str(tmp_path / "home"))
-    monkeypatch.setenv(TOKEN_ENV, TOKEN)
-    with FakeJira(recent_world(), token=TOKEN) as f:
+    monkeypatch.setenv(TOKEN_ENV, REAL)
+    with FakeJira(recent_world(), token=TOKEN, basic_user=fake_user(HERE), flavour=FLAVOUR) as f:
         yield f
 
 
@@ -64,20 +72,27 @@ def poll_once(fake, tmp):
 
 
 def changes(events):
-    return [(e["type"], e["subject"], e["source"], e["data"]["to"]) for e in events
+    return [(e["type"], e["subject"], e["source"], e["data"]) for e in events
             if e["type"] != "orchestra.machine.started"]
 
 
 def test_two_polls_relay_each_change_once(fake, tmp_path):
     assert changes(poll_once(fake, tmp_path)) == [("jira.issue.transitioned", f"{PROJECT}-2", "person.jira.bob",
-                                                    "In Progress")]
+                                                    {"from": "Open", "to": "In Progress"})]
     fake.move(f"{PROJECT}-1", "In Progress", by="alice")
-    events = poll_once(fake, tmp_path)
-    assert changes(events)[1:] == [("jira.issue.transitioned", f"{PROJECT}-1", "person.jira.alice",
-                                                  "In Progress")]
-    assert {e["source"] for e in events if e["type"] == "orchestra.machine.started"} == {"person.jira.bob",
-                                                                                     "person.jira.alice"}
-    assert all(r.authorized for r in fake.requests)
+    fake.assign(f"{PROJECT}-1", "bob", by="alice")
+    fake.create(f"{PROJECT}-9", by="carol", assignee="alice")
+    events = poll_once(fake, tmp_path)                                  # a restart: the cursor is read back
+    assert changes(events)[1:] == [
+        ("jira.issue.transitioned", f"{PROJECT}-1", "person.jira.alice", {"from": "Open", "to": "In Progress"}),
+        ("jira.issue.assigned", f"{PROJECT}-1", "person.jira.alice", {"assignee": "bob"}),
+        ("jira.issue.created", f"{PROJECT}-9", "person.jira.carol", {"status": "Open"}),
+        ("jira.issue.assigned", f"{PROJECT}-9", "person.jira.carol", {"assignee": "alice"})]
+    announced = {e["source"]: e["data"] for e in events if e["type"] == "orchestra.machine.started"}
+    assert set(announced) == {"person.jira.bob", "person.jira.alice", "person.jira.carol"}     # each actor once
+    assert all(a["fake"] for a in announced.values())        # their cards say they were relayed from a fake
+    assert not any(e["source"] == "{{name}}" for e in events)          # a relay never publishes as itself
+    assert fake.requests and all(r.authorized for r in fake.requests)  # the placeholder, never REAL
 
 
 def test_measure_counts_by_status(fake, tmp_path, capsys):
@@ -91,8 +106,16 @@ def test_no_text_or_token_leaves(fake, tmp_path, capsys):
     poll_once(fake, tmp_path)
     program().main(args(fake, tmp_path, "measure"))
     out = capsys.readouterr()
-    assert CANARY not in out.out + out.err and TOKEN not in out.out + out.err
+    assert CANARY not in out.out + out.err and REAL not in out.out + out.err
     for p in tmp_path.rglob("*"):
         if p.is_file():
             text = p.read_text(errors="replace")
-            assert CANARY not in text and TOKEN not in text, p
+            assert CANARY not in text and REAL not in text, p
+
+
+def test_refuses_an_uncleared_system(tmp_path, monkeypatch):
+    monkeypatch.setenv(TOKEN_ENV, REAL)
+    copy = uncleared(HERE, tmp_path / "copy", "{{name}}.py")      # holds after the owner's approval too
+    rc = program(copy).main(["--once", "--base-url", "https://jira.example.com", "--state-dir", str(tmp_path / "s"),
+                             "--events-file", str(tmp_path / "e.jsonl")])
+    assert rc == 2 and not (tmp_path / "e.jsonl").exists()

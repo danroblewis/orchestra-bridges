@@ -56,6 +56,25 @@ def test_relays_as_actors_and_announces_each_once(tmp_path):
     assert evs[first + 1]["subject"] == "A-1"                              # announced just before the first event
 
 
+def test_notes_go_on_each_actors_announcement_and_a_change_announces_again(tmp_path):
+    """K7: a poller's notes (relayed from a fake, a stand-in, disabled) are in each actor's own
+    announcement, so they show with that machine; a changed note announces each actor again, once."""
+    p = make(tmp_path, notes={"fake": "relayed from a fake", "disabled": ""})
+    p.run(items_poll([("A-1", "opened", "ann")]), once=True)
+    q = make(tmp_path, notes={"fake": "relayed from a fake"})          # a restart, the same notes: nothing again
+    q.run(items_poll([("A-1", "opened", "ann"), ("A-2", "opened", "ann")]), once=True)
+    r = make(tmp_path, notes={"stand_in": "reviews as comments"})       # the notes changed: announced again
+    r.run(items_poll([("A-3", "opened", "ann")]), once=True)
+    started = [e["data"] for e in read(tmp_path) if e["type"] == "orchestra.machine.started"]
+    assert len(started) == 2
+    assert started[0]["fake"] == "relayed from a fake" and "disabled" not in started[0]
+    assert started[1]["stand_in"] == "reviews as comments" and "fake" not in started[1]
+    with pytest.raises(ValueError, match="no note"):
+        make(tmp_path, notes={"title": "x"})
+    with pytest.raises(ValueError, match="one line"):
+        make(tmp_path, notes={"disabled": "two\nlines"})
+
+
 def test_refuses_any_source_but_an_actor(tmp_path):
     p = make(tmp_path)
     for bad in (None, "demo_poller", "orchestra-host", "bridges.demo"):

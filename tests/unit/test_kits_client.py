@@ -2,10 +2,24 @@
 per-host rate limit, retries with Retry-After, and the token kept out of logs, keys, files and errors."""
 
 import logging
+import shutil
+import ssl
+import subprocess
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
-from orchestra_bridges.kits.client import CachedClient, HTTPFailure, NotCached, TokenMissing, redact, retry_after
+from orchestra_bridges.kits.client import (
+    CachedClient,
+    HTTPFailure,
+    KitError,
+    NotCached,
+    TokenMissing,
+    proxies_for,
+    redact,
+    retry_after,
+)
 from orchestra_bridges.kits.fakes import FakePagerDuty, FakePrometheus
 
 TOKEN = "kits-test-token-0123456789"
@@ -213,3 +227,76 @@ def test_basic_auth_joins_the_account_and_the_token(tmp_path):
         with pytest.raises(HTTPFailure):
             wrong.get("/x")
         assert TOKEN not in repr(api)
+
+
+class Recorder(BaseHTTPRequestHandler):
+    """A plain HTTP proxy (or server) that answers ``{}`` and records the request line it was sent."""
+    seen: list[str] = []          # noqa: RUF012 - the test's own record, reset by the fixture
+
+    def log_message(self, *a):
+        pass
+
+    def do_GET(self):
+        Recorder.seen.append(self.path)
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", "2")
+        self.end_headers()
+        self.wfile.write(b"{}")
+
+
+@pytest.fixture
+def proxy():
+    Recorder.seen = []
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Recorder)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{server.server_address[1]}"
+    server.shutdown()
+    server.server_close()
+
+
+def test_the_environments_proxy_is_used_except_for_no_proxy_and_a_fake(proxy, tmp_path, monkeypatch):
+    for k in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("HTTP_PROXY", proxy)
+    monkeypatch.setenv("HTTPS_PROXY", proxy)
+    monkeypatch.setenv("NO_PROXY", "internal.example.test,localhost")
+    assert proxies_for("api.example.test") == {"http": proxy, "https": proxy}
+    assert proxies_for("internal.example.test") == {} and proxies_for("127.0.0.1") == {}   # NO_PROXY; a fake
+    api = CachedClient("http://api.example.test", cache_dir=tmp_path / "c", rate_dir=tmp_path / "r", retries=0)
+    assert api.get("/v1/items") == {}
+    assert Recorder.seen == ["http://api.example.test/v1/items"]         # through the proxy, by its absolute URL
+    direct = CachedClient("http://internal.example.test", cache_dir=tmp_path / "c", rate_dir=tmp_path / "r", retries=0)
+    with pytest.raises(KitError):                                        # not through the proxy: no such host
+        direct.get("/v1/items")
+    assert len(Recorder.seen) == 1
+
+
+def test_a_ca_file_is_trusted_beside_the_systems(tmp_path):
+    if not shutil.which("openssl"):
+        pytest.skip("openssl is not installed")
+    key, cert = tmp_path / "key.pem", tmp_path / "cert.pem"
+    subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", str(key), "-out", str(cert),
+                    "-days", "1", "-subj", "/CN=127.0.0.1", "-addext", "subjectAltName=IP:127.0.0.1"],
+                   check=True, capture_output=True)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Recorder)
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.load_cert_chain(cert, key)
+    server.socket = ctx.wrap_socket(server.socket, server_side=True)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    url = f"https://127.0.0.1:{server.server_address[1]}"
+    try:
+        Recorder.seen = []
+        untrusted = CachedClient(url, cache_dir=tmp_path / "c", rate_dir=tmp_path / "r", retries=0)
+        with pytest.raises(KitError):                                    # a certificate no CA it trusts signed
+            untrusted.get("/x")
+        trusted = CachedClient(url, cache_dir=tmp_path / "c", rate_dir=tmp_path / "r", retries=0, ca_file=cert)
+        assert trusted.get("/x") == {} and Recorder.seen == ["/x"]
+    finally:
+        server.shutdown()
+        server.server_close()
+    with pytest.raises(KitError, match="no CA file"):
+        CachedClient(url, cache_dir=tmp_path / "c", rate_dir=tmp_path / "r", ca_file=tmp_path / "missing.pem")
+    (tmp_path / "junk.pem").write_text("not a certificate")
+    with pytest.raises(KitError, match="PEM"):
+        CachedClient(url, cache_dir=tmp_path / "c", rate_dir=tmp_path / "r", ca_file=tmp_path / "junk.pem")

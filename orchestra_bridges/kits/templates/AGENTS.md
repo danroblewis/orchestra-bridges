@@ -58,8 +58,16 @@ still passes once the owner's values are in), this file.
   a chat. If it is missing, say which variable to set, and stop. How it is sent is `auth_format` in
   `{{name}}.py`'s `runner.main(...)`: `"Bearer {token}"` (the default: Jira Data Center, Slack,
   most APIs), `"Token token={token}"` (PagerDuty), `"Basic {token}"` (Basic auth: the variable
-  holds base64 of `user:api_token`, as Jenkins wants), or a header of the API's own through
-  `headers=` with `auth_format` for `Authorization`. A fake on this machine needs no token.
+  holds base64 of `user:api_token`, as Jenkins wants), `"Basic {basic}"` (an account and a token
+  kept apart: `user_env` or `user_file` names the account, as Jira Cloud wants), or a header of
+  the API's own through `headers=` with `auth_format` for `Authorization`.
+- **A fake never gets a credential.** Against a loopback URL the runner reads no token and no
+  account: it sends `[settings] fake_token` (and `fake_user`), or the kit's placeholders, and the
+  test starts the fake with the same (`testing.fake_token`). Never pass a real token to a fake.
+- **Behind a corporate proxy**: `HTTPS_PROXY` and `NO_PROXY` in `orchestra run`'s environment are
+  honoured (a fake on this machine never goes through a proxy); a proxy that re-signs TLS needs its
+  CA: `[settings] ca_file` (a PEM bundle, trusted beside the system's), or `[bridges.kits] ca_file`
+  for every collector.
 - **The compliance check.** `clearance = "needs approval"` in `machine.toml` means the program
   reads only a fake on this machine (a loopback URL); it refuses {{system}} itself before any
   request. Only the owner approves reading a company system (then `clearance = "approved"` and
@@ -73,8 +81,12 @@ still passes once the owner's values are in), this file.
 ## How to test it
 
 ```bash
-uv run python -m pytest {{dir}}/test_{{name}}.py -q
+python -m pytest {{dir}}/test_{{name}}.py -q
 ```
+
+with Orchestra's own Python (the one `orchestra` runs in: the scaffold printed its full path),
+which has the kits and pytest; `uv run` in this repository uses the repository's own environment,
+which may have neither.
 
 The test starts `{{fake}}` from `orchestra_bridges.kits.fakes` on a random port, runs the poller
 `--once` against it twice (a restart between), runs `measure`, and checks the events (types,
@@ -94,6 +106,11 @@ process, and the instrument that stores its measurement:
 ```toml
 {{entries}}
 ```
+
+Against a fake, each actor's announcement says so (`fake`, shown with the machine), and a
+`[notes]` table in `machine.toml` adds what else the owner should know on each card: `stand_in`
+(it acts for someone who cannot here), `disabled` (it runs and does nothing, and why). One line
+each, the program's own words, never text from {{system}}.
 
 Then the Instruments page lists `{{name}}` (its rounds, points and last error), `orchestra events info`
 shows the events arriving on the bus, and the Machines page shows the people and bots it relays

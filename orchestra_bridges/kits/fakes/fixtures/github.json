@@ -1,0 +1,29 @@
+{
+  "repo": "acme/service",
+  "me": "alice",
+  "pulls": [
+    {"number": 1, "branch": "feature/login", "head": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1", "author": "alice",
+     "created": "-3h", "labels": ["SAIL"]},
+    {"number": 2, "branch": "fix/timeout", "head": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2", "author": "bob",
+     "created": "-2h", "labels": []}
+  ],
+  "issues": [
+    {"number": 3, "author": "carol", "created": "-150m", "labels": ["bug"]},
+    {"number": 4, "author": "dependabot[bot]", "created": "-5h", "closed": "-1h", "labels": []}
+  ],
+  "events": {
+    "1": [{"id": 8001, "event": "labeled", "label": "SAIL", "actor": "alice", "at": "-170m"}],
+    "3": [{"id": 8002, "event": "labeled", "label": "bug", "actor": "carol", "at": "-149m"}],
+    "4": [{"id": 8003, "event": "closed", "actor": "bob", "at": "-1h"}]
+  },
+  "reviews": {
+    "2": [{"id": 7001, "user": "carol", "state": "APPROVED", "commit": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2", "at": "-90m"}]
+  },
+  "runs": {
+    "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1": [{"id": 6001, "name": "ci", "status": "completed", "conclusion": "success",
+                                                   "app": "github-actions", "at": "-160m"}],
+    "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2": [{"id": 6002, "name": "ci", "status": "in_progress", "app": "github-actions",
+                                                   "at": "-100m"}]
+  },
+  "statuses": {}
+}

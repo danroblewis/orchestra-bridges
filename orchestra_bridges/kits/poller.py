@@ -17,7 +17,9 @@ the people and bots there did as events on the project's bus.
   never announces itself and never publishes under its own name. Each actor is **announced** once,
   just before their first event: ``orchestra.machine.started`` from their source, with ``mode``
   (``ad hoc``), ``kind`` (``person``, or ``program`` for a bot), ``listens_for`` (none) and
-  ``package`` (the poller's name). An announcement is emitted once, across restarts too.
+  ``package`` (the poller's name), and the poller's notes (``notes.py``: ``fake``, ``stand_in``,
+  ``disabled``), so the actor's own card says it was relayed from a fake. An announcement is
+  emitted once, across restarts too; a changed note announces each actor again, at their next event.
 - **The interval loop**: ``run(poll)`` calls ``poll(poller)`` now and every ``every_s`` until
   SIGTERM or SIGINT (or ``stop()``), which ends it between polls or in the wait. A poll that raises
   is logged by its exception's type and message and tried again next interval; its cursor and
@@ -47,13 +49,18 @@ from typing import Any
 
 from orchestra.events import Events
 
-from ..relay import ACTORS, RelayError
+from . import notes as note
 from .exposition import Registry
 from .pollstate import PollState
 
 NAME = re.compile(r"^[a-z][a-z0-9_]{1,40}$")
 STARTED = "orchestra.machine.started"
+ACTORS = ("person.", "bot.")            # the only sources a poller publishes as: who acted
 __all__ = ["ACTORS", "Poller", "RelayError", "actor_source", "poll_dir"]
+
+
+class RelayError(ValueError):
+    """A publish under a source that is not a person or a bot (the poller's own name, say)."""
 
 
 def _safe(s: str) -> str:
@@ -83,12 +90,13 @@ def stamp_of(type: str, data: Any) -> str:
 class Poller:
     def __init__(self, name: str, every_s: float = 300.0, state_dir: str | Path | None = None, *,
                  events: Events | None = None, metrics_path: str | Path | None = None, project=None,
-                 package: str | None = None, log=None):
+                 package: str | None = None, log=None, notes: dict[str, str] | None = None):
         if not NAME.match(name):
             raise ValueError(f"{name!r}: a poller's name is lower case letters, digits and _ (2 to 41)")
         if every_s <= 0:
             raise ValueError("every_s must be positive")
         self.name, self.every_s, self.package = name, float(every_s), package or name
+        self.notes = note.check(notes)
         self._project = project
         if state_dir:
             root, default_metrics = Path(state_dir), Path(state_dir) / "metrics.prom"
@@ -135,13 +143,14 @@ class Poller:
         return ev
 
     def announce(self, source: str, time: str | None = None, **about: Any) -> dict | None:
-        """``orchestra.machine.started`` for an actor, once: None when it was announced before.
-        ``about`` (a name, a team) goes to the package's card unread."""
-        eid = f"{self.name}:announce:{source}"
+        """``orchestra.machine.started`` for an actor, once (once more after the notes change): None
+        when it was announced before. ``about`` (a name, a team) and the notes go to its card unread."""
+        notes = note.check(self.notes)
+        eid = f"{self.name}:announce:{source}" + (f"#{note.stamp(notes)}" if notes else "")
         if self.state.seen(eid):
             return None
         data = {"mode": "ad hoc", "kind": "program" if source.startswith("bot.") else "person",
-                "listens_for": [], "package": self.package, **about}
+                "listens_for": [], "package": self.package, **notes, **about}
         return self._publish(eid, STARTED, data, source, **({"time": time} if time else {}))
 
     def emit(self, type: str, subject: str | None, data: Any = None, source: str | None = None, *,

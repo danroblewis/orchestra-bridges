@@ -1,6 +1,7 @@
 """Each kit fake: its endpoints in the real shapes, its fixture, its token check, injected failures,
 and the requests it recorded."""
 
+import base64
 import json
 import urllib.error
 import urllib.parse
@@ -8,7 +9,7 @@ import urllib.request
 
 import pytest
 
-from orchestra_bridges.kits.fakes import CANARY, FakeJira, FakePagerDuty, FakePrometheus, FakeSlack
+from orchestra_bridges.kits.fakes import CANARY, FakeGitHub, FakeJira, FakePagerDuty, FakePrometheus, FakeSlack
 
 
 def call(fake, path, params=None, *, method="GET", body=None, auth=None, form=None):
@@ -125,3 +126,75 @@ def test_a_fake_can_be_seeded_from_the_tests_own_fixture(tmp_path):
 def test_url_before_start_raises():
     with pytest.raises(RuntimeError):
         _ = FakeSlack().url
+
+
+def test_jira_cloud_searches_by_page_token_with_basic_auth_and_account_ids():
+    basic = "Basic " + base64.b64encode(b"me@acme.com:tok").decode()
+    with FakeJira(token="tok", basic_user="me@acme.com", flavour="cloud", me="acct-me") as j:
+        assert call(j, "/rest/api/3/myself", auth="Bearer tok")[0] == 401          # Cloud is Basic
+        assert call(j, "/rest/api/3/myself", auth=basic) == (200, {"accountId": "acct-me", "displayName": f"{CANARY} acct-me",
+                                                                   "emailAddress": CANARY})
+        assert call(j, "/rest/api/3/search", {"jql": "project = ABC"}, auth=basic)[0] == 410   # removed from Cloud
+        st, page = call(j, "/rest/api/3/search/jql", {"jql": "project = ABC ORDER BY key", "maxResults": 1,
+                                                     "expand": "changelog"}, auth=basic)
+        assert st == 200 and [i["key"] for i in page["issues"]] == ["ABC-1"] and page["isLast"] is False
+        assert "total" not in page and page["issues"][0]["fields"]["assignee"]["accountId"] == "alice"
+        assert "name" not in page["issues"][0]["fields"]["assignee"]
+        st, page = call(j, "/rest/api/3/search/jql", {"jql": "project = ABC ORDER BY key", "maxResults": 1,
+                                                     "nextPageToken": page["nextPageToken"], "expand": "changelog"},
+                        auth=basic)
+        assert [i["key"] for i in page["issues"]] == ["ABC-2"] and page["isLast"] is True and "nextPageToken" not in page
+        assert page["issues"][0]["changelog"]["histories"][0]["author"]["accountId"] == "bob"
+        assert call(j, "/rest/api/2/search", {"jql": "project = ABC"}, auth=basic)[0] == 404   # no v2 on this fake
+
+
+def test_jira_assign_is_in_the_changelog_by_account():
+    with FakeJira(token="t") as j:
+        j.assign("ABC-1", "bob", by="carol")
+        _, body = call(j, "/rest/api/2/issue/ABC-1", {"expand": "changelog"}, auth="Bearer t")
+        [item] = body["changelog"]["histories"][-1]["items"]
+        assert (item["field"], item["from"], item["to"], item["toString"]) == ("assignee", "alice", "bob", CANARY)
+        assert body["fields"]["assignee"]["name"] == "bob"
+
+
+def test_github_reads_and_label_writes():
+    with FakeGitHub(token="gh") as g:
+        r = "/repos/acme/service"
+        assert call(g, f"{r}/pulls")[0] == 401
+        auth = "Bearer gh"
+        st, pulls = call(g, f"{r}/pulls", {"state": "all", "sort": "updated", "direction": "desc"}, auth=auth)
+        assert st == 200 and {p["number"] for p in pulls} == {1, 2} and CANARY in pulls[0]["title"]
+        assert call(g, f"{r}/pulls", {"head": "acme:fix/timeout"}, auth=auth)[1][0]["number"] == 2
+        st, issues = call(g, f"{r}/issues", {"state": "all"}, auth=auth)
+        assert {i["number"]: "pull_request" in i for i in issues} == {1: True, 2: True, 3: False, 4: False}
+        assert call(g, f"{r}/issues", {"state": "open", "per_page": 2, "page": 2}, auth=auth)[1][0]["number"] in (1, 2, 3)
+        assert [e["event"] for e in call(g, f"{r}/issues/4/events", auth=auth)[1]] == ["closed"]
+        assert call(g, f"{r}/pulls/2/reviews", auth=auth)[1][0]["state"] == "APPROVED"
+        runs = call(g, f"{r}/commits/{'a1' * 20}/check-runs", auth=auth)[1]
+        assert runs["check_runs"][0]["conclusion"] == "success" and CANARY in runs["check_runs"][0]["output"]["title"]
+        assert call(g, f"{r}/commits/{'a1' * 20}/status", auth=auth)[1]["state"] == "pending"
+        # the writes a test (or the Outbox) makes: labels added, replaced and taken off, each an event
+        assert call(g, f"{r}/labels", method="POST", body={"name": "SAILED"}, auth=auth)[0] == 201
+        st, labels = call(g, f"{r}/issues/2/labels", method="POST", body={"labels": ["SAIL"]}, auth=auth)
+        assert st == 200 and [x["name"] for x in labels] == ["SAIL"]
+        st, labels = call(g, f"{r}/issues/2/labels", method="PUT", body={"labels": ["SAILED"]}, auth=auth)
+        assert [x["name"] for x in labels] == ["SAILED"]
+        assert call(g, f"{r}/issues/2/labels/SAILED", method="DELETE", auth=auth)[0] == 200
+        assert call(g, f"{r}/issues/2/labels/SAILED", method="DELETE", auth=auth)[0] == 404
+        assert [e["event"] for e in call(g, f"{r}/issues/2/events", auth=auth)[1]] == [
+            "labeled", "unlabeled", "labeled", "unlabeled"]
+        # the owner cannot approve their own pull request; a comment review and a merge are fine
+        assert call(g, f"{r}/pulls/1/reviews", method="POST", body={"event": "APPROVE"}, auth=auth)[0] == 422
+        assert call(g, f"{r}/pulls/1/reviews", method="POST", body={"event": "COMMENT"}, auth=auth)[1]["state"] == "COMMENTED"
+        assert call(g, f"{r}/pulls/1/merge", method="PUT", body={}, auth=auth)[1]["merged"] is True
+        assert call(g, f"{r}/pulls/1/merge", method="PUT", body={}, auth=auth)[0] == 405
+        assert call(g, f"{r}/pulls", method="POST", body={"head": "feature/x", "base": "main"}, auth=auth)[0] == 201
+        assert call(g, f"{r}/pulls", method="POST", body={"head": "feature/x"}, auth=auth)[0] == 422
+        assert call(g, f"{r}/git/refs/heads/feature/x", method="DELETE", auth=auth)[0] == 204
+        assert call(g, "/repos/other/repo/pulls", auth=auth)[0] == 404
+
+
+def test_github_fixture_times_are_recent():
+    with FakeGitHub() as g:
+        created = call(g, "/repos/acme/service/issues/3")[1]["created_at"]
+        assert created.startswith("20") and created.endswith("Z") and not created.startswith("-")

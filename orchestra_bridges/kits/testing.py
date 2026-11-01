@@ -1,7 +1,9 @@
 """What a scaffolded machine's own test reads from its ``machine.toml``, so the test still passes
 after the owner's values are set (another token variable, their JQL, their channels): the token's
 variable is the one the program will read, and the scope the fake holds is given to the run with
-``--set`` (``runner.overrides``) instead of being whatever the template guessed."""
+``--set`` (``runner.overrides``) instead of being whatever the template guessed. A fake is started
+with the placeholders the runner sends it (``fake_token``, ``fake_user``), never a real token: the
+runner reads no credential for a fake on this machine."""
 
 from __future__ import annotations
 
@@ -23,6 +25,18 @@ def settings(here: str | Path) -> dict[str, Any]:
 def token_env(here: str | Path, default: str) -> str:
     """The NAME of the variable the program reads its token from (``[settings] token_env``)."""
     return settings(here).get("token_env") or default
+
+
+def fake_token(here: str | Path) -> str:
+    """The token the runner sends a fake on this machine (``[settings] fake_token``, else the kit's)."""
+    from .runner import FAKE_TOKEN
+    return settings(here).get("fake_token") or FAKE_TOKEN
+
+
+def fake_user(here: str | Path) -> str:
+    """The HTTP Basic account the runner sends a fake (``[settings] fake_user``, else the kit's)."""
+    from .runner import FAKE_USER
+    return settings(here).get("fake_user") or FAKE_USER
 
 
 def toml_value(v: Any) -> str:

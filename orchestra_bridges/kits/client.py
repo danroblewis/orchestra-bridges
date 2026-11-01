@@ -21,7 +21,11 @@ standard library.
   the token as issued and the account comes from elsewhere (``machine.toml``'s ``user_env`` or
   ``user_file``). It is never logged, never in a cache key or file, never in an error or repr.
 - **``dry_run``**: answers only from the cache, of any age, and raises ``NotCached`` on a miss: a
-  rehearsal that sends nothing."""
+  rehearsal that sends nothing.
+- **Behind a proxy**: ``HTTPS_PROXY`` and ``HTTP_PROXY`` from the environment are used, except for
+  a host ``NO_PROXY`` names and for a fake on this machine (a loopback host never goes through a
+  proxy). ``ca_file`` is a PEM bundle trusted beside the system's CAs (a corporate proxy that
+  re-signs TLS); ``SSL_CERT_FILE`` in the environment replaces the system's bundle for everything."""
 
 from __future__ import annotations
 
@@ -32,6 +36,7 @@ import json
 import logging
 import os
 import re
+import ssl
 import stat
 import time
 import urllib.error
@@ -85,6 +90,31 @@ def _loopback(host: str) -> bool:
         return host == "localhost"
 
 
+def proxies_for(host: str) -> dict[str, str]:
+    """The proxies a request to ``host`` goes through: ``HTTPS_PROXY``/``HTTP_PROXY`` from the
+    environment, none for a host ``NO_PROXY`` names, and none for a loopback host (a fake)."""
+    if _loopback(host):
+        return {}
+    env = urllib.request.getproxies_environment()
+    if env.get("no") and urllib.request.proxy_bypass_environment(host, env):
+        return {}
+    return {k: v for k, v in env.items() if k in ("http", "https")}
+
+
+def tls_context(ca_file: str | Path | None) -> ssl.SSLContext:
+    """The system's CAs (or ``SSL_CERT_FILE``'s), and ``ca_file``'s beside them when given."""
+    ctx = ssl.create_default_context()
+    if ca_file:
+        p = Path(ca_file).expanduser()
+        if not p.is_file():
+            raise KitError(f"no CA file at {p}")
+        try:
+            ctx.load_verify_locations(cafile=str(p))
+        except ssl.SSLError as e:
+            raise KitError(f"{p} is not a PEM bundle of CA certificates: {e.reason or e}") from None
+    return ctx
+
+
 def read_token(token_env: str | None, token_file: str | Path | None) -> str | None:
     """The token from ``$token_env``, else from ``token_file``; None when neither is named. Errors
     name where it looked, never what it found."""
@@ -136,14 +166,16 @@ class CachedClient:
                  keep: Callable[[Any], Any] | None = None, dry_run: bool = False, retries: int = 3,
                  backoff_s: float = 1.0, max_wait_s: float = 300.0, timeout_s: float = 30.0,
                  rate_dir: str | Path | None = None, sleep: Callable[[float], None] = time.sleep,
-                 clock: Callable[[], float] = time.time, basic_user: str | None = None):
+                 clock: Callable[[], float] = time.time, basic_user: str | None = None,
+                 token: str | None = None, ca_file: str | Path | None = None):
         u = urllib.parse.urlsplit(base_url)
         if u.scheme not in ("http", "https") or not u.hostname:
             raise ValueError(f"base_url must be an http(s) URL, not {base_url!r}")
         self.base_url = base_url.rstrip("/")
         self.origin = f"{u.scheme}://{u.netloc}".lower()
         self.host = (u.hostname or "").lower()
-        self._token = read_token(token_env, token_file)
+        # ``token``: a value already in memory (the runner's placeholder for a fake); else read once
+        self._token = token if token is not None else read_token(token_env, token_file)
         if self._token and u.scheme != "https" and not _loopback(self.host):
             raise ValueError(f"{self.origin}: a token goes only over https (or to a fake on this machine)")
         self.auth_format = auth_format
@@ -160,19 +192,24 @@ class CachedClient:
         self.limit = RateLimit(per_minute / 60.0, max(1.0, per_minute / 4.0), bucket / "kits.rate",
                                what=f"the host {self.host}", sleep=sleep, clock=clock)
         self._sleep, self._clock = sleep, clock
+        self.proxies = proxies_for(self.host)
+        self._opener = urllib.request.build_opener(urllib.request.ProxyHandler(self.proxies),
+                                                   urllib.request.HTTPSHandler(context=tls_context(ca_file)))
         self.sent = 0                       # requests that reached the network, for tests and logs
         self.hits = 0
 
     @classmethod
     def for_project(cls, project, base_url: str, system: str | None = None, token_env: str | None = None,
                     **kw) -> CachedClient:
-        """A client with ``[bridges.kits]``'s cache directory and TTL unless given, the host's rate
+        """A client with ``[bridges.kits]``'s cache directory, TTL and CA file unless given, the host's rate
         (or ``per_minute``, when lower) and the system's token variable (``tokens.<system>``) unless given."""
         from .settings import cache_dir, read
         s = read(project.config.raw)
         host = (urllib.parse.urlsplit(base_url).hostname or "").lower()
         kw.setdefault("cache_dir", cache_dir(s, project.state_dir))
         kw.setdefault("ttl_s", s.ttl_s)
+        if not kw.get("ca_file"):
+            kw["ca_file"] = s.ca_file
         limit = s.per_minute_for(host)          # the project's limit for the host; a machine may ask for less
         kw["per_minute"] = min(int(kw.get("per_minute") or limit), limit)
         return cls(base_url, token_env=token_env or (s.token_env(system) if system else None), **kw)
@@ -246,7 +283,7 @@ class CachedClient:
             wait: float | None = None
             try:
                 self.sent += 1
-                with urllib.request.urlopen(req, timeout=self.timeout_s) as r:
+                with self._opener.open(req, timeout=self.timeout_s) as r:
                     raw = r.read()
                     log.info("%s %s -> %s", method, shown, r.status)
                     return r.status, _parse(raw)

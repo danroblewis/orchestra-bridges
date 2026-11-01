@@ -3,8 +3,7 @@ status change and other change once, as who made it; a restart publishes nothing
 prints the issues and the oldest's age by status and the moves between statuses; it reads only a
 fake until cleared; no text or token leaves.
 
-Run: ``uv run python -m pytest examples/integrations/jira_poller/test_jira_poller.py`` (in an
-environment with orchestra-bridges)."""
+Run with Orchestra's own Python (the one ``orchestra`` runs in, which has the kits): ``python -m pytest examples/integrations/jira_poller/test_jira_poller.py``."""
 
 import importlib.util
 import json
@@ -20,10 +19,12 @@ import pytest
 from orchestra_bridges.kits.fakes import CANARY, FakeJira
 from orchestra_bridges.kits.fakes.base import load_fixture
 from orchestra_bridges.kits.fakes.jira import stamp
+from orchestra_bridges.kits.testing import fake_token
 
 HERE = Path(__file__).resolve().parent
 PROGRAM = HERE / "jira_poller.py"
-TOKEN = "test-token-not-real"
+TOKEN = fake_token(HERE)        # the placeholder the runner sends a fake on this machine
+REAL = "real-token-never-sent-to-a-fake"   # in the environment, yet never read for a fake
 STARTED = "orchestra.machine.started"
 
 
@@ -144,23 +145,23 @@ def test_a_status_emptied_reads_zero(fake, tmp_path, capsys):
 
 
 def test_no_text_or_token_leaves(tmp_path, capsys, monkeypatch):
-    monkeypatch.setenv("JIRA_API_TOKEN", TOKEN)
+    monkeypatch.setenv("JIRA_API_TOKEN", REAL)
     monkeypatch.setenv("ORCHESTRATOR_HOME", str(tmp_path / "home"))
     with FakeJira(recent_world(), token=TOKEN) as f:
-        _, log = run_two_intervals(f, tmp_path, change, JIRA_API_TOKEN=TOKEN)
+        _, log = run_two_intervals(f, tmp_path, change, JIRA_API_TOKEN=REAL)
         assert program().main(["measure", *common(f, tmp_path)]) == 0
         assert f.requests and all(r.authorized for r in f.requests)
     out = capsys.readouterr()
     for text in (out.out, out.err, log):
-        assert CANARY not in text and TOKEN not in text
+        assert CANARY not in text and REAL not in text
     for p in tmp_path.rglob("*"):
         if p.is_file():
             text = p.read_text(errors="replace")
-            assert CANARY not in text and TOKEN not in text, p
+            assert CANARY not in text and REAL not in text, p
 
 
 def test_reads_only_a_fake_until_cleared(tmp_path, monkeypatch):
-    monkeypatch.setenv("JIRA_API_TOKEN", TOKEN)
+    monkeypatch.setenv("JIRA_API_TOKEN", REAL)
     rc = program().main(["--once", "--base-url", "https://jira.example.com", "--state-dir", str(tmp_path / "s"),
                          "--events-file", str(tmp_path / "e.jsonl")])
     assert rc == 2 and not (tmp_path / "e.jsonl").exists()

@@ -1,7 +1,7 @@
 """{{name}} against the kit's Slack fake: two polls (a restart between them) relay each message
 once, as who posted it; ``measure`` prints the messages per channel; no text or token leaves.
 
-Run: ``uv run python -m pytest {{dir}}/test_{{name}}.py`` (in an environment with orchestra-bridges)."""
+Run with Orchestra's own Python (the one ``orchestra`` runs in, which has the kits): ``python -m pytest {{dir}}/test_{{name}}.py``."""
 
 import importlib.util
 import json
@@ -12,10 +12,11 @@ import pytest
 
 from orchestra_bridges.kits.fakes import CANARY, FakeSlack
 from orchestra_bridges.kits.fakes.base import load_fixture
-from orchestra_bridges.kits.testing import set_args, settings, token_env
+from orchestra_bridges.kits.testing import fake_token, set_args, settings, token_env
 
 HERE = Path(__file__).resolve().parent
-TOKEN = "test-token-not-real"
+TOKEN = fake_token(HERE)        # the placeholder the runner sends a fake on this machine
+REAL = "real-token-never-sent-to-a-fake"   # in the environment, yet never read for a fake
 TOKEN_ENV = token_env(HERE, "SLACK_TOKEN")           # machine.toml's, so the owner's variable works too
 CHANNEL = (settings(HERE).get("channels") or ["C001"])[0]   # the fake holds machine.toml's first channel
 SCOPE = set_args(channels=[CHANNEL])
@@ -44,7 +45,7 @@ def recent_world() -> dict:
 @pytest.fixture
 def fake(tmp_path, monkeypatch):
     monkeypatch.setenv("ORCHESTRATOR_HOME", str(tmp_path / "home"))
-    monkeypatch.setenv(TOKEN_ENV, TOKEN)
+    monkeypatch.setenv(TOKEN_ENV, REAL)
     with FakeSlack(recent_world(), token=TOKEN) as f:
         yield f
 
@@ -80,8 +81,8 @@ def test_no_text_or_token_leaves(fake, tmp_path, capsys):
     poll_once(fake, tmp_path)
     program().main(args(fake, tmp_path, "measure"))
     out = capsys.readouterr()
-    assert CANARY not in out.out + out.err and TOKEN not in out.out + out.err
+    assert CANARY not in out.out + out.err and REAL not in out.out + out.err
     for p in tmp_path.rglob("*"):
         if p.is_file():
             text = p.read_text(errors="replace")
-            assert CANARY not in text and TOKEN not in text, p
+            assert CANARY not in text and REAL not in text, p

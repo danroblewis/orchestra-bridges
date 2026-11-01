@@ -415,12 +415,12 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "orchestra", extra = ["sd"] },
+    { name = "pytest" },
 ]
 
 [package.optional-dependencies]
 dev = [
     { name = "orchestra", extra = ["sd"] },
-    { name = "pytest" },
     { name = "ruff" },
 ]
 
@@ -428,7 +428,7 @@ dev = [
 requires-dist = [
     { name = "orchestra", specifier = ">=1.0.0a1,<1.0.0rc0" },
     { name = "orchestra", extras = ["sd"], marker = "extra == 'dev'" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
+    { name = "pytest", specifier = ">=8.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6" },
 ]
 provides-extras = ["dev"]

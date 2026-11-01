@@ -3,8 +3,7 @@ incident's change once, as whoever made it; a restart publishes nothing again; `
 the open incidents by urgency and the incidents that opened and closed; it reads only a fake until
 cleared; no title, name or token leaves.
 
-Run: ``uv run python -m pytest examples/integrations/pagerduty_alerts/test_pagerduty_alerts.py`` (in
-an environment with orchestra-bridges)."""
+Run with Orchestra's own Python (the one ``orchestra`` runs in, which has the kits): ``python -m pytest examples/integrations/pagerduty_alerts/test_pagerduty_alerts.py``."""
 
 import importlib.util
 import json
@@ -17,10 +16,12 @@ from pathlib import Path
 import pytest
 
 from orchestra_bridges.kits.fakes import CANARY, FakePagerDuty
+from orchestra_bridges.kits.testing import fake_token
 
 HERE = Path(__file__).resolve().parent
 PROGRAM = HERE / "pagerduty_alerts.py"
-TOKEN = "test-token-not-real"
+TOKEN = fake_token(HERE)        # the placeholder the runner sends a fake on this machine
+REAL = "real-token-never-sent-to-a-fake"   # in the environment, yet never read for a fake
 STARTED = "orchestra.machine.started"
 
 
@@ -115,23 +116,23 @@ def test_measure_prints_the_open_incidents_and_their_flows(fake, tmp_path, capsy
 
 
 def test_no_text_or_token_leaves(tmp_path, capsys, monkeypatch):
-    monkeypatch.setenv("PAGERDUTY_TOKEN", TOKEN)
+    monkeypatch.setenv("PAGERDUTY_TOKEN", REAL)
     monkeypatch.setenv("ORCHESTRATOR_HOME", str(tmp_path / "home"))
     with FakePagerDuty(token=TOKEN) as f:
-        _, log = run_two_intervals(f, tmp_path, change, PAGERDUTY_TOKEN=TOKEN)
+        _, log = run_two_intervals(f, tmp_path, change, PAGERDUTY_TOKEN=REAL)
         assert program().main(["measure", *common(f, tmp_path)]) == 0
         assert f.requests and all(r.authorized for r in f.requests)
     out = capsys.readouterr()
     for text in (out.out, out.err, log):
-        assert CANARY not in text and TOKEN not in text
+        assert CANARY not in text and REAL not in text
     for p in tmp_path.rglob("*"):
         if p.is_file():
             text = p.read_text(errors="replace")
-            assert CANARY not in text and TOKEN not in text, p
+            assert CANARY not in text and REAL not in text, p
 
 
 def test_reads_only_a_fake_until_cleared(tmp_path, monkeypatch):
-    monkeypatch.setenv("PAGERDUTY_TOKEN", TOKEN)
+    monkeypatch.setenv("PAGERDUTY_TOKEN", REAL)
     rc = program().main(["--once", "--base-url", "https://api.pagerduty.com", "--state-dir", str(tmp_path / "s"),
                          "--events-file", str(tmp_path / "e.jsonl")])
     assert rc == 2 and not (tmp_path / "e.jsonl").exists()
