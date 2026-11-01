@@ -38,7 +38,7 @@ subject = "the incident's id"
 source = "person.pagerduty.<user id> who resolved it, or bot.pagerduty (an auto-resolve)"
 
 [[measures]]
-series = "pagerduty_incidents_open_total{urgency}"
+series = "pagerduty_incidents_open{urgency}"
 kind = "gauge: the open (triggered or acknowledged) incidents of each urgency (a level)"
 
 [[measures]]

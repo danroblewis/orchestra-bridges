@@ -84,7 +84,7 @@ def pagerduty(rng, bus: Bus, t: float, st: dict, out: list[Point], minute: bool)
                                                                 "bot.pagerduty"]), t)
     if minute:
         for urgency in pd.URGENCIES:
-            out.append(collected("pagerduty_alerts", "pagerduty_incidents_open_total",
+            out.append(collected("pagerduty_alerts", "pagerduty_incidents_open",
                                  sum(1 for i in incidents if i["urgency"] == urgency), t, {"urgency": urgency}))
             for what in ("triggered", "resolved"):
                 out.append(collected("pagerduty_alerts", f"pagerduty_incidents_{what}_total", c[(what, urgency)], t,
@@ -114,7 +114,7 @@ def jira(rng, bus: Bus, t: float, st: dict, out: list[Point], minute: bool) -> N
     if minute:
         out.append(collected("jira_poller", jp.CREATED, c[(jp.CREATED, "Open")], t, {"status": "Open"}))
         for s in STATUSES:
-            out.append(collected("jira_poller", "jira_issues_total", sum(1 for i in issues if i["status"] == s), t,
+            out.append(collected("jira_poller", "jira_issues", sum(1 for i in issues if i["status"] == s), t,
                                  {"status": s}))
             if s in FLOW:
                 to = FLOW[s][0]
@@ -147,7 +147,7 @@ def slack(rng, bus: Bus, t: float, st: dict, out: list[Point], minute: bool) -> 
         out.append(collected("slack_watcher", sw.MESSAGES, c[(sw.MESSAGES, "C001")], t, {"channel": "C001"}))
         out.append(collected("slack_watcher", sw.OPENED, c[sw.OPENED], t))
         out.append(collected("slack_watcher", sw.ANSWERED, c[sw.ANSWERED], t))
-        out.append(collected("slack_watcher", "slack_mentions_open_total", st["open"], t))
+        out.append(collected("slack_watcher", "slack_mentions_open", st["open"], t))
 
 
 def chronosphere(rng, bus: Bus, t: float, st: dict, out: list[Point], minute: bool) -> None:

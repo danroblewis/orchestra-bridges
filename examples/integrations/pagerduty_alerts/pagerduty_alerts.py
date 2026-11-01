@@ -15,7 +15,7 @@ They are kept in the poller's ``cursor.json`` with the cursor: a restart neither
 a count.
 
 ``python pagerduty_alerts.py measure`` (for a ``[[collect]]`` entry): prints
-``pagerduty_incidents_open_total{urgency}`` (a gauge: the open incidents, every urgency printed,
+``pagerduty_incidents_open{urgency}`` (a gauge: the open incidents, every urgency printed,
 0 included) and the poller's two counters.
 
 It keeps metadata only: ids, numbers, states, times, the service's and the user's ids. Never a
@@ -93,7 +93,7 @@ def measure(api, settings, series) -> None:
     for i in open_incidents(api, settings):
         counts[i["urgency"] or ""] = counts.get(i["urgency"] or "", 0) + 1
     for urgency, n in sorted(counts.items()):
-        series.gauge("pagerduty_incidents_open_total", n, {"urgency": urgency},
+        series.gauge("pagerduty_incidents_open", n, {"urgency": urgency},
                      help="Open (triggered or acknowledged) PagerDuty incidents, by urgency (a level).")
     series.load_counters(counters_at(settings.poll_dir))
 

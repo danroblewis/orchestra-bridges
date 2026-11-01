@@ -21,14 +21,14 @@ never publishes as itself.
 
 `python jira_poller.py measure` prints, for its `[[collect]]` entry:
 
-- `jira_issues_total{status}` (gauge): the issues in scope in each status: a level. A status
+- `jira_issues{status}` (gauge): the issues in scope in each status: a level. A status
   emptied reads 0.
 - `jira_issue_age_seconds{status}` (gauge): seconds since the oldest issue not done in the status
   was created. An age, not a quantity: discovery never makes it a stock.
 - `jira_issues_created_total{status}`, `jira_issue_transitions_total{from_status, to_status}`
   (counters): issues created into a status, and moved from one to another (one counter per move, so
   discovery joins the status left to the status entered as one flow), counted by the poller as it
-  relays and kept with its cursor. They balance `jira_issues_total`: Orchestra's own count of the events
+  relays and kept with its cursor. They balance `jira_issues`: Orchestra's own count of the events
   (`orchestra_events_total{type, source}`) cannot, because it never reads `data` (the status).
 
 ## Run it

@@ -106,12 +106,12 @@ def test_measure_prints_the_open_incidents_and_their_flows(fake, tmp_path, capsy
     run_two_intervals(fake, tmp_path, change)
     assert program().main(["measure", *common(fake, tmp_path)]) == 0
     out = capsys.readouterr().out
-    assert 'pagerduty_incidents_open_total{urgency="high"} 0' in out
-    assert 'pagerduty_incidents_open_total{urgency="low"} 2' in out
+    assert 'pagerduty_incidents_open{urgency="high"} 0' in out
+    assert 'pagerduty_incidents_open{urgency="low"} 2' in out
     assert 'pagerduty_incidents_triggered_total{urgency="high"} 1' in out
     assert 'pagerduty_incidents_triggered_total{urgency="low"} 2' in out
     assert 'pagerduty_incidents_resolved_total{urgency="high"} 1' in out
-    assert "# TYPE pagerduty_incidents_open_total gauge" in out
+    assert "# TYPE pagerduty_incidents_open gauge" in out
 
 
 def test_no_text_or_token_leaves(tmp_path, capsys, monkeypatch):

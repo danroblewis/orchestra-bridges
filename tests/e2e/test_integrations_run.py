@@ -121,8 +121,8 @@ def test_orchestra_run_shows_the_actors_as_machines(tmp_path, monkeypatch):
         assert m["publishes"] and m["mode"] == "ad hoc"
     assert seen["person.jira.bob"]["package"] == "jira_poller"
     assert not set(POLLERS) & set(seen)                             # a relay is never a machine
-    assert {"jira_issues_total", "jira_issue_age_seconds", "slack_mentions_open_total", "slack_messages_total",
-            "pagerduty_incidents_open_total", "pagerduty_incidents_triggered_total"} <= stored, sorted(stored)
+    assert {"jira_issues", "jira_issue_age_seconds", "slack_mentions_open", "slack_messages_total",
+            "pagerduty_incidents_open", "pagerduty_incidents_triggered_total"} <= stored, sorted(stored)
     state_logs = [p for p in project.state_dir.rglob("*") if p.is_file() and p.suffix in (".log", ".json", ".jsonl")]
     for p in state_logs:
         assert CANARY not in p.read_text(errors="replace"), p

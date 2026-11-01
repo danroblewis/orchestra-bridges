@@ -14,7 +14,7 @@ integration, an auto-resolve). Data: `number`, `urgency`, `service` (its id). Ne
 
 `python pagerduty_alerts.py measure` prints, for its `[[collect]]` entry:
 
-- `pagerduty_incidents_open_total{urgency}` (gauge): the open incidents of each urgency (`high`
+- `pagerduty_incidents_open{urgency}` (gauge): the open incidents of each urgency (`high`
   and `low` always printed, 0 included): a level;
 - `pagerduty_incidents_triggered_total{urgency}`, `pagerduty_incidents_resolved_total{urgency}`
   (counters): the incidents first seen open and those that stopped being open, counted by the

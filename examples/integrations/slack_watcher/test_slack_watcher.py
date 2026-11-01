@@ -127,7 +127,7 @@ def test_measure_prints_the_messages_and_the_mentions(fake, tmp_path, capsys):
     out = capsys.readouterr().out
     assert 'slack_messages_total{channel="C001"} 6' in out                               # not counted twice
     assert "slack_mentions_total 2" in out and "slack_mentions_answered_total 1" in out
-    assert "slack_mentions_open_total 1" in out and "# TYPE slack_mentions_open_total gauge" in out
+    assert "slack_mentions_open 1" in out and "# TYPE slack_mentions_open gauge" in out
 
 
 def test_publish_mentions_filters_to_the_mentions_and_their_answers(fake, tmp_path):

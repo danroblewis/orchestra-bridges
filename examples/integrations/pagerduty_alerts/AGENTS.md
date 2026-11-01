@@ -10,7 +10,7 @@ You are a coding tool working on this directory. Read this first; it is the whol
   minutes by default) it reads what changed in PagerDuty and relays it as events on the project's
   Orchestra bus: `pagerduty.incident.triggered`, `.acknowledged`, `.resolved` once per change (subject: the incident's id; source: `person.pagerduty.<user id>`, or `bot.pagerduty` when the service changed it);
 - **the measurement** (`python pagerduty_alerts.py measure`): one read, printed as Prometheus text, which a
-  `[[collect]]` entry runs and stores: `pagerduty_incidents_open_total{urgency}` (the open incidents) and the poller's counters `pagerduty_incidents_triggered_total{urgency}`, `pagerduty_incidents_resolved_total{urgency}`.
+  `[[collect]]` entry runs and stores: `pagerduty_incidents_open{urgency}` (the open incidents) and the poller's counters `pagerduty_incidents_triggered_total{urgency}`, `pagerduty_incidents_resolved_total{urgency}`.
 
 It was built with `orchestra bridges scaffold pagerduty pagerduty_alerts` from the orchestra-bridges kits, then completed
 (`orchestra_bridges.kits`: `CachedClient`, `Prometheus`, `Poller`, `runner`).

@@ -42,7 +42,7 @@ source = "who changed it: person.jira.<login> (bot.jira when no one)"
 data = "fields: the names of the fields changed (never their values)"
 
 [[measures]]
-series = "jira_issues_total{status}"
+series = "jira_issues{status}"
 kind = "gauge: the issues in scope in each status (a level)"
 
 [[measures]]

@@ -23,7 +23,7 @@ message is counted. A mention is found in the text in memory (`<@U001>`); only t
 - `slack_messages_total{channel}` (counter): messages posted in the channel;
 - `slack_mentions_total`, `slack_mentions_answered_total` (counters): mentions of a watched member
   opened, and answered in their thread;
-- `slack_mentions_open_total` (gauge): the mentions not yet answered (a level: the two counters
+- `slack_mentions_open` (gauge): the mentions not yet answered (a level: the two counters
   above are its flows).
 
 ## Run it

@@ -20,7 +20,7 @@ repeats a count): ``slack_messages_total{channel}`` (every message read, publish
 ``slack_mentions_total`` (mentions opened) and ``slack_mentions_answered_total`` (mentions answered).
 
 ``python slack_watcher.py measure`` (for a ``[[collect]]`` entry): prints those counters and
-``slack_mentions_open_total``, a gauge: the mentions not yet answered (opened less answered).
+``slack_mentions_open``, a gauge: the mentions not yet answered (opened less answered).
 
 It keeps metadata only: channel and member ids, timestamps, whether a message is a reply or a
 bot's, the ids it mentions. Never a message's text or a person's name."""
@@ -116,7 +116,7 @@ def make_poll(api, settings):
 def measure(api, settings, series) -> None:
     series.load_counters(counters_at(settings.poll_dir))
     total = {name: sum(t.values()) for name, t in series.counters.items()}
-    series.gauge("slack_mentions_open_total", total.get(OPENED, 0) - total.get(ANSWERED, 0),
+    series.gauge("slack_mentions_open", total.get(OPENED, 0) - total.get(ANSWERED, 0),
                  help="Mentions of a watched member not yet answered in their thread (a level).")
 
 

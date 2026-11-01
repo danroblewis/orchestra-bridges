@@ -18,7 +18,7 @@ counter per move, so discovery can join the status it leaves to the status it en
 Orchestra counts the events by type and source only (it never reads ``data``), so these counters are
 what balances the issues in each status. They are kept in the poller's ``cursor.json``: a restart neither loses nor repeats a count.
 
-``python jira_poller.py measure`` (for a ``[[collect]]`` entry): prints ``jira_issues_total{status}``
+``python jira_poller.py measure`` (for a ``[[collect]]`` entry): prints ``jira_issues{status}``
 (the issues in scope by status, a gauge), ``jira_issue_age_seconds{status}`` (how long ago the oldest
 issue not done in that status was created, a gauge) and the poller's two counters.
 
@@ -139,7 +139,7 @@ def measure(api, settings, series) -> None:
     series.load_counters(counters_at(settings.poll_dir))
     known = {v for t in series.counters.values() for k in t for n, v in k if n in ("status", "from_status", "to_status")}
     for status in sorted(set(counts) | known):         # a status emptied reads 0, not a gap
-        series.gauge("jira_issues_total", counts.get(status, 0), {"status": status},
+        series.gauge("jira_issues", counts.get(status, 0), {"status": status},
                      help="Jira issues in scope, by status (a level).")
     for status, t in sorted(oldest.items()):
         series.gauge("jira_issue_age_seconds", round(now - t), {"status": status},

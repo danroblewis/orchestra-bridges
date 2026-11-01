@@ -10,7 +10,7 @@ You are a coding tool working on this directory. Read this first; it is the whol
   minutes by default) it reads what changed in Slack and relays it as events on the project's
   Orchestra bus: `slack.message.posted` once per message (subject: `<channel>/<thread ts>`; source: `person.slack.<member id>` or `bot.slack.<id>`; data: channel, reply, bot, the watched members it mentions, whether it answers one), or with `publish = "mentions"` only the mentions of watched members and their answers;
 - **the measurement** (`python slack_watcher.py measure`): one read, printed as Prometheus text, which a
-  `[[collect]]` entry runs and stores: the poller's counters `slack_messages_total{channel}`, `slack_mentions_total`, `slack_mentions_answered_total`, and `slack_mentions_open_total` (the mentions not yet answered).
+  `[[collect]]` entry runs and stores: the poller's counters `slack_messages_total{channel}`, `slack_mentions_total`, `slack_mentions_answered_total`, and `slack_mentions_open` (the mentions not yet answered).
 
 It was built with `orchestra bridges scaffold slack slack_watcher` from the orchestra-bridges kits, then completed
 (`orchestra_bridges.kits`: `CachedClient`, `Prometheus`, `Poller`, `runner`).

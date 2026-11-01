@@ -10,7 +10,7 @@ You are a coding tool working on this directory. Read this first; it is the whol
   minutes by default) it reads what changed in Jira and relays it as events on the project's
   Orchestra bus: `jira.issue.created` (source: the creator), `jira.issue.transitioned` (data: from and to status) and `jira.issue.updated` (data: the changed fields' names), once each (subject: the issue key; source: `person.jira.<login>`, `bot.jira` when no one);
 - **the measurement** (`python jira_poller.py measure`): one read, printed as Prometheus text, which a
-  `[[collect]]` entry runs and stores: `jira_issues_total{status}` (the issues in scope by status), `jira_issue_age_seconds{status}` (the oldest not-done issue's age) and the poller's counters `jira_issues_created_total{status}`, `jira_issue_transitions_total{from_status, to_status}`.
+  `[[collect]]` entry runs and stores: `jira_issues{status}` (the issues in scope by status), `jira_issue_age_seconds{status}` (the oldest not-done issue's age) and the poller's counters `jira_issues_created_total{status}`, `jira_issue_transitions_total{from_status, to_status}`.
 
 It was built with `orchestra bridges scaffold jira jira_poller` from the orchestra-bridges kits, then completed
 (`orchestra_bridges.kits`: `CachedClient`, `Prometheus`, `Poller`, `runner`).

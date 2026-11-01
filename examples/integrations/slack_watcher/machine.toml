@@ -36,7 +36,7 @@ series = "slack_messages_total{channel}"
 kind = "counter: messages posted in the channel"
 
 [[measures]]
-series = "slack_mentions_open_total"
+series = "slack_mentions_open"
 kind = "gauge: mentions of a watched member not yet answered (a level)"
 
 [[measures]]

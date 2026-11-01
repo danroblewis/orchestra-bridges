@@ -16,12 +16,13 @@ from orchestra.sd.rediscover import rediscover
 from orchestra.sd.strategies import CONSERVATION
 
 EXPECTED = {
-    ("pagerduty_incidents_open_total", (("urgency", "high"),)),
-    ("pagerduty_incidents_open_total", (("urgency", "low"),)),
-    ("jira_issues_total", (("status", "Open"),)),
-    ("jira_issues_total", (("status", "In Progress"),)),
-    ("jira_issues_total", (("status", "In Review"),)),
-    ("slack_mentions_open_total", ()),
+    ("pagerduty_incidents_open", (("urgency", "high"),)),
+    ("pagerduty_incidents_open", (("urgency", "low"),)),
+    ("jira_issues", (("status", "Open"),)),
+    ("jira_issues", (("status", "In Progress"),)),
+    ("jira_issues", (("status", "In Review"),)),
+    ("jira_issues", (("status", "Done"),)),           # a gauge named for a level, not `_total`: read as one
+    ("slack_mentions_open", ()),
 }
 FORBIDDEN = {"jira_issue_age_seconds", "queue_depth", "slack_messages_total", "orchestra_events_total"}
 WHO = {"project", "instrument"}
@@ -60,16 +61,18 @@ def test_the_pollers_counters_are_the_flows_and_join_the_statuses(model):
     stock_of = {s.id: what(s.series) for s in model.stocks}
     ends = {(f.counter.name, tuple(sorted((k, v) for k, v in f.counter.labels.items() if k not in WHO))):
             (stock_of.get(f.src), stock_of.get(f.dst)) for f in model.flows if f.counter}
-    pd_high = ("pagerduty_incidents_open_total", (("urgency", "high"),))
+    pd_high = ("pagerduty_incidents_open", (("urgency", "high"),))
     assert ends[("pagerduty_incidents_triggered_total", (("urgency", "high"),))] == (None, pd_high)
     assert ends[("pagerduty_incidents_resolved_total", (("urgency", "high"),))] == (pd_high, None)
-    status = {s: ("jira_issues_total", (("status", s),)) for s in ("Open", "In Progress", "In Review")}
+    status = {s: ("jira_issues", (("status", s),)) for s in ("Open", "In Progress", "In Review", "Done")}
     assert ends[("jira_issues_created_total", (("status", "Open"),))] == (None, status["Open"])
     assert ends[("jira_issue_transitions_total", (("from_status", "Open"), ("to_status", "In Progress")))] == (
         status["Open"], status["In Progress"])                    # one flow from the status left to the one entered
     assert ends[("jira_issue_transitions_total", (("from_status", "In Progress"), ("to_status", "In Review")))] == (
         status["In Progress"], status["In Review"])
-    mentions = ("slack_mentions_open_total", ())
+    assert ends[("jira_issue_transitions_total", (("from_status", "In Review"), ("to_status", "Done")))] == (
+        status["In Review"], status["Done"])
+    mentions = ("slack_mentions_open", ())
     assert ends[("slack_mentions_total", ())] == (None, mentions)
     assert ends[("slack_mentions_answered_total", ())] == (mentions, None)
     for f in model.flows:

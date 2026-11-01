@@ -125,7 +125,7 @@ def test_measure_prints_the_issues_their_age_and_the_moves(fake, tmp_path, capsy
     run_two_intervals(fake, tmp_path, change)
     assert program().main(["measure", *common(fake, tmp_path)]) == 0
     out = capsys.readouterr().out
-    assert 'jira_issues_total{status="In Progress"} 2' in out and 'jira_issues_total{status="Open"} 1' in out
+    assert 'jira_issues{status="In Progress"} 2' in out and 'jira_issues{status="Open"} 1' in out
     assert 'jira_issues_created_total{status="Open"} 3' in out
     assert 'jira_issue_transitions_total{from_status="Open",to_status="In Progress"} 2' in out
     assert "jira_issue_transitions_total{" in out and out.count("jira_issue_transitions_total{") == 1
@@ -140,7 +140,7 @@ def test_a_status_emptied_reads_zero(fake, tmp_path, capsys):
     fake.move("ABC-3", "In Progress", by="dave")
     assert program().main(["--once", "--events-file", str(tmp_path / "events.jsonl"), *common(fake, tmp_path)]) == 0
     assert program().main(["measure", *common(fake, tmp_path)]) == 0
-    assert 'jira_issues_total{status="Open"} 0' in capsys.readouterr().out
+    assert 'jira_issues{status="Open"} 0' in capsys.readouterr().out
 
 
 def test_no_text_or_token_leaves(tmp_path, capsys, monkeypatch):
