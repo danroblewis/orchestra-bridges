@@ -341,6 +341,58 @@ Orchestra's own Machines and Instruments pages, map and series.
   `JIRA_URL` and `JIRA_API_TOKEN`): the fake's shapes against a real Jira. Not yet run: there is no
   account.
 
+## 8. Kits for pollers (`orchestra_bridges/kits/`)
+
+The bridges above read what the owner configured. The kits are for what nobody built yet: small
+parts the Supervisor, or the owner's coding tool at work, builds a poller from, and a scaffold
+that writes one (Orchestra's `docs/INTEGRATING.md`, strategy (c); task I2 of M6). One module each:
+
+- `client.py`, `CachedClient(base_url, token_env=None, token_file=None, per_minute=60,
+  cache_dir=<state>/kits/cache, ttl_s=300)`: GET and POST under one origin (any other is refused),
+  a disk TTL cache keyed by method, URL and body holding **only what the caller's `keep` returns**
+  (a request without `keep` is never cached), a per-host token bucket (Orchestra's
+  `orchestra.sources.limits.RateLimit`, in a file every process on the machine shares,
+  `~/.orchestrator/stores/<host key>/kits.rate`), retries on 429, 5xx and dropped connections with
+  a doubling backoff and `Retry-After` honoured (it holds the host's bucket), the token read once
+  from an environment variable or a `chmod 600` file and never logged, keyed, cached or shown, and
+  `dry_run`, which answers from the cache only. `CachedClient.for_project` takes `[bridges.kits]`.
+- `promql.py`, `Prometheus(client, aliases=None, max_series=500)`: `instant`, `range` and `series`
+  against a Prometheus API as plain `Series(name, labels, points)`, labels renamed by `aliases`,
+  an answer over `max_series` refused.
+- `poller.py`, `Poller(name, every_s=300, state_dir=...)`: the interval loop (`run(poll)`, a clean
+  stop on SIGTERM or SIGINT), the cursor in `cursor.json`, idempotent emission (`emit(type, subject,
+  data, source, stamp=...)`, the id `<name>:<type>:<key>@<stamp>`, skipped when emitted before,
+  across restarts: `emitted.log`), and `gauge`/`counter` written as Prometheus text after each good
+  poll. **A poller is a relay** (§2, Orchestra's rule 2, D19): `emit` refuses any source but
+  `person.…` and `bot.…` (`actor_source(system, account)`), and each actor is announced once
+  (`orchestra.machine.started`, mode `ad hoc`, kind `person` or `program`, `listens_for`, `package`)
+  before their first event. The poller never announces itself or publishes as itself.
+- `exposition.py`: the series' text, and `python -m orchestra_bridges.kits.exposition <file>
+  --max-age S` for a `[[collect]]` entry over a poller's file (nothing printed when it is stale).
+- `runner.py`: the command line each scaffolded poller shares: `python <name>.py` polls,
+  `python <name>.py measure` prints one measurement for its `[[collect]]` entry (an instrument,
+  which publishes nothing); both run the compliance check first.
+- `machinefile.py`: a poller's `machine.toml` (`[settings]`: `base_url`, `token_env`, `every`,
+  `per_minute`, `ttl` and the kit's own keys; never a token) and its **clearance**: until
+  `clearance = "approved"` (the owner's say), it reads only a fake on a loopback host.
+- `fakes/`: stdlib HTTP fakes of Jira Data Center (search by JQL with the changelog, an issue,
+  transitions), Slack (`conversations.history`, `users.info`), PagerDuty (incidents, an incident)
+  and a Prometheus API (`query`, `query_range`, `series`), each on a random port, seeded from a JSON
+  fixture, checking a token, recording requests and failing on request; a canary in every text.
+- `scaffold.py`, `orchestra bridges scaffold <kind> <name> [--root state|overlay|repo]`: a poller
+  from a template (`jira`, `slack`, `pagerduty`; `promql`, a measurement only) as
+  `<root>/machines/<name>/{machine.toml, <name>.py, test_<name>.py, AGENTS.md}`: the state
+  directory by default, beside the private overlay, or `.orchestra/` in the repository. It writes no
+  configuration: it prints the `[[machines]]` and `[[collect]]` entries for `config_edit`.
+- `settings.py`: `[bridges.kits]` (`cache_dir`, `ttl`, `per_minute`, `hosts`, `tokens`: system to
+  environment variable NAME), checked by the plugin's `check`.
+
+What differs from a bridge, on purpose (AGENTS.md rule 4): a poller keeps state of its own in the
+state directory: its cursor, the ids it emitted, and the cache of what it kept. A poller is not
+declared by the plugin (it is the Supervisor's, run by a `[[machines]]` entry it adds), and its
+series are stored by the `[[collect]]` entry that runs its `measure`. Every other rule holds:
+never text (`keep`), read only, the token in memory, a relay.
+
 ## 7. Not built yet
 
 Confluence and Drive bridges; webhooks; a team-only mode; the

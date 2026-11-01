@@ -17,9 +17,10 @@ broken without updating the spec and saying so in the commit.
 4. **No state of its own.** What a bridge knows comes from the events it relayed, found on the bus
    by their ids (never by a source of its own: it has none), and the series its instrument stored,
    found by `instrument="bridges.<section>"`, rebuilt at start. Ids are the system's own, so
-   re-reading never duplicates.
+   re-reading never duplicates. (A poller built from the kits, SPEC §8, is the exception: it keeps
+   its cursor, the ids it emitted and a cache of only what it kept, in the state directory.)
 5. **Through Orchestra's library only.** Events go through `orchestra.events.Events` (behind
-   `relay.py`); the store is only read, through `orchestra.metrics`. Processes and instruments are
+   `relay.py`, or the kits' `Poller`, which keeps the same rule); the store is only read, through `orchestra.metrics`. Processes and instruments are
    declared through `orchestra.plugins`, `orchestra.launcher.Process` and
    `orchestra.collect.spec.Collector`. Nothing in the package imports Orchestra's web app, model or
    host (the tests use its Machines view to check rule 6), and nothing in Orchestra knows a bridge

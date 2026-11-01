@@ -4,7 +4,8 @@ refused before it is written, not found in the bridge's log after.
 
 It reads every configured section with the bridge's own reader (``config.py``) and adds what the
 readers let pass silently: a key no bridge reads (a misspelling is otherwise ignored), a section
-under ``[bridges]`` that is no bridge, and two bridges serving ``/metrics`` on one port. It says
+under ``[bridges]`` that is no bridge (``[bridges.kits]`` is the kits' settings, checked by
+``kits/settings.py``), and two bridges serving ``/metrics`` on one port. It says
 nothing about tokens or the network: those are found only when the bridge starts (its log)."""
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from typing import Any
 from orchestra.config import ConfigError
 
 from . import config as cfg
+from .kits.settings import check as kits_check
 from .plugin import PORTS, SYSTEMS
 
 POLLING = {"every", "lookback", "max_catchup", "overlap", "host", "port"}
@@ -54,6 +56,9 @@ def check(raw: dict[str, Any], repo_root: Path | None = None) -> list[str]:
     ports: dict[int, str] = {}
     for name, s in bridges.items():
         if name == "people":
+            continue
+        if name == "kits":                        # the kits' settings, not a bridge (kits/settings.py)
+            out += kits_check(raw)
             continue
         if not isinstance(s, dict) or (name not in SYSTEMS and not cfg.JIRA_SECTION.match(name)):
             out.append(f"[bridges.{name}] is no bridge: the bridges are {', '.join(SYSTEMS)}, jira and jira_<name>")

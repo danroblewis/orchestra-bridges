@@ -1,0 +1,14 @@
+{
+  "users": [
+    {"id": "U001", "name": "alice", "real_name": "CANARY-TEXT-NEVER-LEAVES Alice", "is_bot": false, "tz": "America/Denver"},
+    {"id": "U002", "name": "bob", "real_name": "CANARY-TEXT-NEVER-LEAVES Bob", "is_bot": false, "tz": "Europe/London"},
+    {"id": "B001", "name": "deploybot", "real_name": "CANARY-TEXT-NEVER-LEAVES Deploy", "is_bot": true, "tz": "UTC"}
+  ],
+  "channels": {
+    "C001": [
+      {"ts": "1793000000.000100", "user": "U001", "text": "CANARY-TEXT-NEVER-LEAVES hello"},
+      {"ts": "1793000060.000200", "user": "U002", "text": "CANARY-TEXT-NEVER-LEAVES hi", "thread_ts": "1793000000.000100"},
+      {"ts": "1793000120.000300", "user": "B001", "text": "CANARY-TEXT-NEVER-LEAVES deployed", "subtype": "bot_message", "bot_id": "B001"}
+    ]
+  }
+}
