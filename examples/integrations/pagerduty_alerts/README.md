@@ -23,8 +23,8 @@ integration, an auto-resolve). Data: `number`, `urgency`, `service` (its id). Ne
 
 ## Run it
 
-As `jira_poller` (its README): export `PAGERDUTY_TOKEN`, the owner's clearance, then the
-`[[machines]]` entry (`python <dir>/pagerduty_alerts.py`) and the `[[collect]]` entry
-(`python <dir>/pagerduty_alerts.py measure`) through `config_edit`.
+As `jira_poller` (its README): the token by file (or `PAGERDUTY_TOKEN`), the owner's clearance, then the
+`[[machines]]` entry (`python .orchestra/machines/pagerduty_alerts/pagerduty_alerts.py`) and the `[[collect]]` entry
+(`python .orchestra/machines/pagerduty_alerts/pagerduty_alerts.py measure`) through `config_edit`.
 
 Test: `uv run python -m pytest examples/integrations/pagerduty_alerts -q`.

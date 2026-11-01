@@ -30,7 +30,7 @@ message is counted. A mention is found in the text in memory (`<@U001>`); only t
 
 As `jira_poller` (its README): copy the directory, set `channels` and `watch`, export
 `SLACK_TOKEN` (`channels:history`, `users:read`), the owner's clearance, then the `[[machines]]`
-entry (`python <dir>/slack_watcher.py`, `restart = "always"`) and the `[[collect]]` entry
-(`python <dir>/slack_watcher.py measure`, every 60 s) through `config_edit`.
+entry (`python .orchestra/machines/slack_watcher/slack_watcher.py`, `restart = "always"`) and the `[[collect]]` entry
+(`python .orchestra/machines/slack_watcher/slack_watcher.py measure`, every 5 minutes) through `config_edit`.
 
 Test: `uv run python -m pytest examples/integrations/slack_watcher -q`.

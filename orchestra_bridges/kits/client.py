@@ -10,7 +10,7 @@ standard library.
 - **A TTL cache on disk** (``cache.py``) keyed by method, URL and body, of **only what ``keep``
   returns**: ``keep`` (per client or per request) is applied to an answer before it is cached or
   returned, and a request without one is never cached. A poller keeps metadata only (ids, states,
-  times), so no title or body is ever written to disk (the bridges' rule 1).
+  times), so no title or body is ever written to disk (the bridges' rule 2).
 - **A per-host rate limit**: Orchestra's own token bucket (``orchestra.sources.limits.RateLimit``),
   in a file every process on this machine shares for the host (by default beside the buckets of
   Orchestra's ``[[sources]]``, ``~/.orchestrator/stores/<host key>/kits.rate``).

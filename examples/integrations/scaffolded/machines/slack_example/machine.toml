@@ -2,7 +2,7 @@
 # few channels, never a machine itself (the machines are the people and bots it publishes as).
 # Read by its own program (slack_example.py: [settings], clearance) and by the Supervisor (description,
 # engagement, [[publishes]]); never by Orchestra, which knows the actors by their events.
-# For mentions of you and whether you answered, the bridges' own Slack reader ([bridges.slack]) is the tool.
+# Mentions of you and whether you answered need a search with your user token (search:read): adapt this script.
 name = "slack_example"
 # kit: the template it came from, and the system's name in [bridges.kits] tokens: when token_env
 # below is not set, the token's variable is the project's tokens.<kit> (tokens = { jira = "JIRA_API_TOKEN" }).

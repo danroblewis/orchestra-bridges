@@ -33,21 +33,22 @@ never publishes as itself.
 
 ## Run it
 
-Copy this directory into the project (its state directory, `<state>/machines/jira_poller/`, by
-default), set `base_url` and `jql`, export `JIRA_API_TOKEN`, and have the owner approve
+Copy this directory into the owner's repository (`.orchestra/machines/jira_poller/`; the state
+directory only when they ask), set `base_url` and `jql`, name where the token is (a `chmod 600`
+`token_file` outside any repository, else `token_env`), and have the owner approve
 (`clearance = "approved"`, `data_class`). The Supervisor adds, through `config_edit`:
 
 ```toml
 [[machines]]
 name = "jira_poller"
-command = "python <dir>/jira_poller.py"
+command = "python .orchestra/machines/jira_poller/jira_poller.py"
 restart = "always"
 
 [[collect]]
 name = "jira_poller"
-command = "python <dir>/jira_poller.py measure"
-every = "60s"
-timeout = "30s"
+command = "python .orchestra/machines/jira_poller/jira_poller.py measure"
+every = "5m"
+timeout = "60s"
 ```
 
 Test: `uv run python -m pytest examples/integrations/jira_poller -q` (two intervals of the running

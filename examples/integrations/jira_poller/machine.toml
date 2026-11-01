@@ -2,7 +2,6 @@
 # Jira, never a machine itself (the machines are the actors it publishes as).
 # Read by its own program (jira_poller.py: [settings], clearance) and by the Supervisor (description,
 # engagement, [[publishes]]); never by Orchestra, which knows the actors by their events.
-# Before writing one: the bridges' own Jira reader ([bridges.jira]) may already read what you need.
 name = "jira_poller"
 kit = "jira"
 description = "Polls Jira (Data Center) every 5 minutes and relays each issue's creation, status change and other change (jira.issue.created, .transitioned, .updated) as who made it; measure prints the issues in scope by status, the oldest one's age by status, and the moves into and out of each status."

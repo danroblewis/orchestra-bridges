@@ -36,8 +36,8 @@ applied); an answer over `max_series` fails the round. Its `[[collect]]` entry:
 ```toml
 [[collect]]
 name = "chronosphere_series"
-command = "python <dir>/chronosphere_series.py measure"
-every = "60s"
+command = "python .orchestra/machines/chronosphere_series/chronosphere_series.py measure"
+every = "5m"
 timeout = "30s"
 ```
 
