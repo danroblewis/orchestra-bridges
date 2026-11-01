@@ -113,7 +113,8 @@ def test_a_scaffolded_pagerduty_poller_runs_two_intervals_and_stops(tmp_path, mo
     assert {e["source"] for e in events_of(ev) if e["type"] == "orchestra.machine.started"} == {
         "bot.pagerduty", "person.pagerduty.puser01", "person.pagerduty.puser02"}
     assert "poll 2" in log and "stopped" in log
-    assert measured.returncode == 0 and "pagerduty_incidents_open_total 1" in measured.stdout
+    assert measured.returncode == 0 and 'pagerduty_incidents_open{service="PSVC002",urgency="low"} 1' in measured.stdout
+    assert "PSVC001" not in measured.stdout
     for p in tmp_path.rglob("*"):
         if p.is_file() and p.suffix in (".json", ".jsonl", ".log", ".prom"):
             text = p.read_text(errors="replace")
@@ -178,4 +179,4 @@ def test_a_fake_needs_no_token(tmp_path, monkeypatch):
     d = scaffold("pagerduty", "pd_alerts", tmp_path / "root")
     with FakePagerDuty() as fake:                     # a fake that checks no token
         r = _measure(d, fake, tmp_path)
-    assert r.returncode == 0 and "pagerduty_incidents_open_total 2" in r.stdout, r.stderr
+    assert r.returncode == 0 and 'pagerduty_incidents_open{service="PSVC001",urgency="high"} 1' in r.stdout, r.stderr
