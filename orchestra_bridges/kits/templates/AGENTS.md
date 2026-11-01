@@ -49,7 +49,11 @@ against the kit's fake), this file.
 - **Credentials by environment name only.** The token is read from `${{token_env}}` (the name is
   `[settings] token_env`), kept in memory, sent only to `base_url`'s host. Never put a token in
   `machine.toml`, `orchestra.toml`, a test, a log line or a commit; never print it or ask for it in
-  a chat. If it is missing, say which variable to set, and stop.
+  a chat. If it is missing, say which variable to set, and stop. How it is sent is `auth_format` in
+  `{{name}}.py`'s `runner.main(...)`: `"Bearer {token}"` (the default: Jira Data Center, Slack,
+  most APIs), `"Token token={token}"` (PagerDuty), `"Basic {token}"` (Basic auth: the variable
+  holds base64 of `user:api_token`, as Jenkins wants), or a header of the API's own through
+  `headers=` with `auth_format` for `Authorization`. A fake on this machine needs no token.
 - **The compliance check.** `clearance = "needs approval"` in `machine.toml` means the program
   reads only a fake on this machine (a loopback URL); it refuses {{system}} itself before any
   request. Only the owner approves reading a company system (then `clearance = "approved"` and
@@ -80,5 +84,6 @@ process, and the instrument that stores its measurement:
 {{entries}}
 ```
 
-Then `orchestra check` lists the instrument, the Machines page shows the people and bots it relays
-once they act, and the Instruments page shows `{{name}}`'s rounds and points.
+Then the Instruments page lists `{{name}}` (its rounds, points and last error), `orchestra events info`
+shows the events arriving on the bus, and the Machines page shows the people and bots it relays
+once they act (for a `[[sources]]` store, `orchestra sources check` probes it).

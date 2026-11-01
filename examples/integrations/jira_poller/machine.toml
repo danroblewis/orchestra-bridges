@@ -1,0 +1,54 @@
+# jira_poller: a poller scaffolded from the orchestra-bridges kit `jira`: a relay of what people did in
+# Jira, never a machine itself (the machines are the actors it publishes as).
+# Read by its own program (jira_poller.py: [settings], clearance) and by the Supervisor (description,
+# engagement, [[publishes]]); never by Orchestra, which knows the actors by their events.
+# Before writing one: the bridges' own Jira reader ([bridges.jira]) may already read what you need.
+name = "jira_poller"
+kit = "jira"
+description = "Polls Jira (Data Center) every 5 minutes and relays each issue's creation, status change and other change (jira.issue.created, .transitioned, .updated) as who made it; measure prints the issues in scope by status, the oldest one's age by status, and the moves into and out of each status."
+engagement = "scheduled"
+created_by = "orchestra bridges scaffold, then completed (I4)"
+# The compliance check: until the owner approves reading Jira (then "approved", with the data
+# class), the program reads only a fake on this machine.
+clearance = "needs approval"
+data_class = "unknown"
+
+[settings]
+base_url = "https://jira.example.com"   # your Data Center site
+token_env = "JIRA_API_TOKEN"      # the NAME of the variable holding a personal access token; never the token
+# token_file = "~/.config/orchestra-bridges/jira-dc-token"   # instead: a chmod 600 file outside any repository
+every = "5m"
+per_minute = 20
+ttl = "4m"
+jql = "project = ABC"             # the issues in scope; no ORDER BY (the poller adds its own)
+lookback = "1d"                   # how far back the first poll reads
+overlap = "10m"                   # each poll re-reads this much before the last one
+
+[[publishes]]
+type = "jira.issue.created"
+subject = "the issue key (ABC-12)"
+source = "its creator: person.jira.<login> (bot.jira when no one)"
+
+[[publishes]]
+type = "jira.issue.transitioned"
+subject = "the issue key (ABC-12)"
+source = "who moved it: person.jira.<login> (bot.jira when no one)"
+data = "from, to: the status names"
+
+[[publishes]]
+type = "jira.issue.updated"
+subject = "the issue key (ABC-12)"
+source = "who changed it: person.jira.<login> (bot.jira when no one)"
+data = "fields: the names of the fields changed (never their values)"
+
+[[measures]]
+series = "jira_issues{status}"
+kind = "gauge: the issues in scope in each status (a level)"
+
+[[measures]]
+series = "jira_issue_age_seconds{status}"
+kind = "gauge: seconds since the oldest issue not done in the status was created (an age; never a stock)"
+
+[[measures]]
+series = "jira_issues_created_total{status}, jira_issue_transitions_total{from_status, to_status}"
+kind = "counters: issues created into a status, and moved from one status to another (the levels' flows)"

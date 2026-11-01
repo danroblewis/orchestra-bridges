@@ -1,0 +1,34 @@
+# chronosphere_series, the preferred strategy: a [[sources]] entry. Orchestra reads Chronosphere (any
+# Prometheus-API store) in place at each discovery, under its own limits; nothing is copied into the
+# project's store, and no process runs. The Supervisor adds this through config_edit (the overlay by
+# default) once the owner has approved reading the store; `python check_source.py` checks it first.
+# (SPEC §4.4 in Orchestra: every key below is that section's.)
+
+[[sources]]
+name = "chronosphere"
+url = "https://acme.chronosphere.io/data/metrics"   # the API root that serves /api/v1/query
+auth = { bearer_env = "CHRONOSPHERE_TOKEN" }        # the NAME of the variable; never the token
+prefix = "chrono"                                   # series read as chrono:<name>
+machine = "service"                                 # the canonical label that names the measured services
+max_series = 50                                     # at most this many series from the store, all told
+max_per_family = 6
+max_requests_per_day = 5000                         # per store, shared by every project on this machine
+rate = 2.0                                          # requests a second, at most
+infer = false                                       # read only the [[series]] below, never list the tenant
+match = ['{__name__=~"http_requests_total|queue_depth"}']
+
+[sources.labels]                                    # canonical = the store's spellings; the first a series has wins
+cluster = ["k8s_cluster", "cluster"]
+service = ["service", "app", "k8s_app"]
+
+[[series]]
+source = "chronosphere"
+name = "queue_depth"
+query = 'sum by (queue, k8s_cluster) (queue_depth)'
+kind = "level"
+
+[[series]]
+source = "chronosphere"
+name = "http_requests"
+query = 'sum by (service, k8s_cluster) (http_requests_total)'
+kind = "counter"

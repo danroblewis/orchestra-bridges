@@ -612,7 +612,10 @@ It writes `machine.toml` (settings, the token's environment variable NAME, clear
 `AGENTS.md` for a coding tool, and prints the `[[machines]]` and `[[collect]]` entries that run it.
 Like a bridge, a poller is a relay (its events' sources are who acted, each announced once), keeps
 only metadata (its disk cache holds only what `keep` returns), reads only, and keeps the token in
-memory. Until `clearance = "approved"` it reads only a fake on this machine.
+memory. Until `clearance = "approved"` it reads only a fake on this machine. The kits are `jira`,
+`slack`, `pagerduty`, `promql` and `http` (any JSON API no kit knows). Four complete examples built
+from them, with their tests, are in `examples/integrations/` (`jira_poller`, `slack_watcher`,
+`pagerduty_alerts`, `chronosphere_series`, the last a `[[sources]]` entry with its check script).
 
 ```toml
 [bridges.kits]                     # optional

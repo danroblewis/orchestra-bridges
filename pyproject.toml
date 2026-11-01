@@ -31,7 +31,7 @@ override-dependencies = ["orchestra[sd] @ git+https://github.com/danroblewis/orc
 packages = ["orchestra_bridges"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests/unit", "tests/e2e", "tests/contract"]
+testpaths = ["tests/unit", "tests/e2e", "tests/contract", "examples/integrations"]
 pythonpath = ["tests"]          # the tests import conftest and the fakes (fake_*.py)
 
 [tool.ruff]

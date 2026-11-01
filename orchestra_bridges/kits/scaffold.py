@@ -44,7 +44,7 @@ KINDS = {
     "pagerduty": Kind("PagerDuty", "PAGERDUTY_TOKEN", "FakePagerDuty",
                       "`pagerduty.incident.triggered`, `.acknowledged`, `.resolved` (subject: the incident's id; "
                       "source: `person.pagerduty.<user id>`, or `bot.pagerduty` when the service changed it)",
-                      "`pagerduty_incidents_open{service, urgency}`, `pagerduty_incidents_open_total`"),
+                      "`pagerduty_incidents_open{service, urgency}` (the open incidents; a sum over its labels needs no series of its own)"),
     "jira": Kind("Jira", "JIRA_API_TOKEN", "FakeJira",
                  "`jira.issue.transitioned` once per status change (subject: the issue key; source: "
                  "`person.jira.<login>`; data: from and to status)",
@@ -53,6 +53,10 @@ KINDS = {
                   "`slack.message.posted` (subject: `<channel>/<thread ts>`; source: `person.slack.<member id>` or "
                   "`bot.slack.<id>`; data: channel, reply or not, bot or not)",
                   "`slack_channel_messages_last_hour{channel}`"),
+    "http": Kind("a JSON API no kit knows", "API_TOKEN", "FakeAPI (a FakeServer written in the test)",
+                 "`<system>.<thing>.<state>` once per item change (subject: the item's id; source: "
+                 "`person.<system>.<account>`, or `bot.<system>` when no one; settings name the fields)",
+                 "`<system>_<thing>s{state}` (the items listed, by state)"),
     "promql": Kind("a Prometheus API (Prometheus, Chronosphere, Mimir)", "PROMETHEUS_TOKEN", "FakePrometheus",
                    "none: a metrics store has no item events, so it has no poller and no `[[machines]]` entry "
                    "(its `make_poll` does nothing)",

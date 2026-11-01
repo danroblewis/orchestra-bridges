@@ -1,0 +1,44 @@
+# slack_watcher: a poller scaffolded from the orchestra-bridges kit `slack`: a relay of who posted in a
+# few channels, never a machine itself (the machines are the people and bots it publishes as).
+# Read by its own program (slack_watcher.py: [settings], clearance) and by the Supervisor (description,
+# engagement, [[publishes]]); never by Orchestra, which knows the actors by their events.
+# For mentions of you and whether you answered, the bridges' own Slack reader ([bridges.slack]) is the tool.
+name = "slack_watcher"
+kit = "slack"
+description = "Polls a few Slack channels every 5 minutes and relays each message (or, with publish = \"mentions\", only those that mention a watched member and their answers) as slack.message.posted, as who posted it; measure prints the messages per channel and the mentions opened, answered and still open."
+engagement = "scheduled"
+created_by = "orchestra bridges scaffold, then completed (I4)"
+# The compliance check: until the owner approves reading Slack (then "approved", with the data
+# class), the program reads only a fake on this machine.
+clearance = "needs approval"
+data_class = "unknown"
+
+[settings]
+base_url = "https://slack.com"
+token_env = "SLACK_TOKEN"         # the NAME of the variable holding the token; never the token
+# token_file = "~/.config/orchestra-bridges/slack-token"   # instead: a chmod 600 file outside any repository
+every = "5m"
+per_minute = 20                   # conversations.history is Tier 3 (50 a minute); stay under it
+ttl = "4m"
+channels = ["C001"]               # channel ids, not names
+lookback_s = 86400                # how far back the first poll reads
+watch = ["U001"]                  # members (ids) whose mentions are followed until they answer in the thread
+publish = "all"                   # "all" messages, or only "mentions" of a watched member and their answers
+
+[[publishes]]
+type = "slack.message.posted"
+subject = "<channel>/<thread ts>"
+source = "who posted it: person.slack.<member id>, or bot.slack.<id> for a bot"
+data = "channel, reply, bot, mentions (the watched members' ids it mentions), answers (a watched member answering)"
+
+[[measures]]
+series = "slack_messages_total{channel}"
+kind = "counter: messages posted in the channel"
+
+[[measures]]
+series = "slack_mentions_open"
+kind = "gauge: mentions of a watched member not yet answered (a level)"
+
+[[measures]]
+series = "slack_mentions_total, slack_mentions_answered_total"
+kind = "counters: mentions opened, and answered (the level's flows)"

@@ -40,7 +40,7 @@ def test_writes_the_four_files_into_the_state_root(proj, capsys):
     assert "{{" not in agents and "$PAGERDUTY_TOKEN" in agents and "[[collect]]" in agents and "measure" in agents
     assert "never a machine" in agents
     out = capsys.readouterr().out
-    assert "[[machines]]" in out and "pd_alerts.py measure" in out
+    assert "[[machines]]" in out and "pd_alerts.py measure" in out and 'restart = "always"' in out
 
 
 def test_roots(proj):
@@ -113,7 +113,8 @@ def test_a_scaffolded_pagerduty_poller_runs_two_intervals_and_stops(tmp_path, mo
     assert {e["source"] for e in events_of(ev) if e["type"] == "orchestra.machine.started"} == {
         "bot.pagerduty", "person.pagerduty.puser01", "person.pagerduty.puser02"}
     assert "poll 2" in log and "stopped" in log
-    assert measured.returncode == 0 and "pagerduty_incidents_open_total 1" in measured.stdout
+    assert measured.returncode == 0 and 'pagerduty_incidents_open{service="PSVC002",urgency="low"} 1' in measured.stdout
+    assert "PSVC001" not in measured.stdout
     for p in tmp_path.rglob("*"):
         if p.is_file() and p.suffix in (".json", ".jsonl", ".log", ".prom"):
             text = p.read_text(errors="replace")
@@ -148,3 +149,34 @@ def test_kits_settings_and_check():
     assert check({"bridges": {"kits": {"per_minute": 0}}})
     assert check({"bridges": {"kits": {"nope": 1}}})
     assert check({"bridges": {"kits": {"hosts": {"a b": 1}}}})
+
+
+def _measure(d, fake, tmp_path):
+    return subprocess.run([sys.executable, str(d / "pd_alerts.py"), "measure", "--base-url", fake.url, "--state-dir",
+                           str(tmp_path / "state"), "--ttl", "0"], capture_output=True, text=True, timeout=60,
+                          env=checkout_env(ORCHESTRATOR_HOME=str(tmp_path / "home")), check=False)
+
+
+def test_the_runner_reads_the_token_from_token_file(tmp_path, monkeypatch):
+    monkeypatch.delenv("PAGERDUTY_TOKEN", raising=False)
+    d = scaffold("pagerduty", "pd_alerts", tmp_path / "root")
+    secret = tmp_path / "secrets" / "pd-token"
+    secret.parent.mkdir()
+    secret.write_text(TOKEN + "\n")
+    secret.chmod(0o600)
+    toml = (d / "machine.toml").read_text().replace("\n[settings]\n", f'\n[settings]\ntoken_file = "{secret}"\n')
+    (d / "machine.toml").write_text(toml)
+    assert read(d / "machine.toml").token_file == str(secret)
+    with FakePagerDuty(token=TOKEN) as fake:
+        r = _measure(d, fake, tmp_path)
+        assert r.returncode == 0, r.stderr
+        assert fake.requests and all(q.authorized for q in fake.requests)
+    assert TOKEN not in r.stdout + r.stderr
+
+
+def test_a_fake_needs_no_token(tmp_path, monkeypatch):
+    monkeypatch.delenv("PAGERDUTY_TOKEN", raising=False)
+    d = scaffold("pagerduty", "pd_alerts", tmp_path / "root")
+    with FakePagerDuty() as fake:                     # a fake that checks no token
+        r = _measure(d, fake, tmp_path)
+    assert r.returncode == 0 and 'pagerduty_incidents_open{service="PSVC001",urgency="high"} 1' in r.stdout, r.stderr

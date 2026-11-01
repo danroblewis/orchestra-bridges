@@ -3,6 +3,8 @@
 # Read by its own program ({{name}}.py: [settings], clearance) and by the Supervisor; never by Orchestra.
 # First consider a [[sources]] entry: Orchestra reads such a store in place (INTEGRATING.md).
 name = "{{name}}"
+# kit: the template it came from, and the system's name in [bridges.kits] tokens: when token_env
+# below is not set, the token's variable is the project's tokens.<kit> (tokens = { jira = "JIRA_API_TOKEN" }).
 kit = "promql"
 description = "Runs a few PromQL queries against the company's Prometheus API each minute and prints their answers as gauges."
 engagement = "scheduled"
@@ -15,6 +17,7 @@ data_class = "unknown"
 [settings]
 base_url = "https://acme.chronosphere.io/data/metrics"   # the API root that serves /api/v1/query
 token_env = "PROMETHEUS_TOKEN"    # the NAME of the variable holding the API token; never the token
+# token_file = "~/.config/orchestra-bridges/{{kind}}-token"   # instead: a chmod 600 file outside any repository
 per_minute = 30
 ttl = "50s"                       # under the [[collect]] entry's every
 max_series = 200                  # an answer with more series fails: narrow the query

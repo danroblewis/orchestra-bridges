@@ -8,7 +8,8 @@ usually). It publishes ``pagerduty.incident.<status>`` once per change, as whoev
 as the subject and its ``last_status_change_at`` as the stamp.
 
 ``python {{name}}.py measure`` (for a ``[[collect]]`` entry): prints
-``pagerduty_incidents_open{service, urgency}`` and ``pagerduty_incidents_open_total``.
+``pagerduty_incidents_open{service, urgency}`` (no total beside it: a sum of its own parts is the same
+level measured twice, and a gauge is never named ``_total``, which discovery reads as a counter).
 
 It keeps metadata only: ids, numbers, states, times, the service's and the user's ids. Never a
 title, summary or name."""
@@ -80,7 +81,6 @@ def measure(api, settings, series) -> None:
     for (service, urgency), n in sorted(counts.items()):
         series.gauge("pagerduty_incidents_open", n, {"service": service, "urgency": urgency},
                      help="Open (triggered or acknowledged) PagerDuty incidents.")
-    series.gauge("pagerduty_incidents_open_total", len(now_open), help="Open PagerDuty incidents, all services.")
 
 
 def main(argv: list[str] | None = None) -> int:

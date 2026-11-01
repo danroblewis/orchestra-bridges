@@ -62,7 +62,7 @@ def test_two_polls_relay_each_change_once(fake, tmp_path):
 def test_measure_prints_the_open_incidents(fake, tmp_path, capsys):
     assert program().main(args(fake, tmp_path, "measure")) == 0
     out = capsys.readouterr().out
-    assert "pagerduty_incidents_open_total 2" in out
+    assert "pagerduty_incidents_open_total" not in out
     assert 'pagerduty_incidents_open{service="PSVC001",urgency="high"} 1' in out
 
 

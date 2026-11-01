@@ -10,8 +10,10 @@ small parts a coding tool or the Supervisor builds a poller from, and a scaffold
 - ``scaffold``: ``orchestra bridges scaffold <kind> <name> [--root state|overlay|repo]``;
 - ``settings``: ``[bridges.kits]``; ``machinefile``: a machine's ``machine.toml`` and its clearance.
 
-A machine built from a kit is a machine (it publishes under its own name), never a bridge (a relay
-for people and bots, SPEC §2): the bridges' relay rule does not apply to it; the rest do (SPEC §8)."""
+A poller built from a kit is a relay, never a machine (Orchestra's rule 2, D19; the bridges' SPEC §2):
+it publishes only as the people and bots who acted (``person.<system>.<account>``, ``bot.<system>``),
+announces each of them once, and never announces itself or publishes under its own name. It differs
+from a bridge only in keeping state of its own in the state directory (SPEC §8, AGENTS.md rule 4)."""
 
 from .client import CachedClient, HTTPFailure, KitError, NotCached, TokenMissing
 from .poller import Poller
