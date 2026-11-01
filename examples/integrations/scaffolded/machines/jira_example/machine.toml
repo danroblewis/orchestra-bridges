@@ -6,7 +6,7 @@ name = "jira_example"
 # kit: the template it came from, and the system's name in [bridges.kits] tokens: when token_env
 # below is not set, the token's variable is the project's tokens.<kit> (tokens = { jira = "JIRA_API_TOKEN" }).
 kit = "jira"
-description = "Polls Jira every 5 minutes and relays each issue created, assigned and moved (jira.issue.created, .assigned, .transitioned), as who did it; measure prints the issues in scope by status."
+description = "Polls Jira every 5 minutes and relays each issue created, assigned and moved and each comment added (jira.issue.created, .assigned, .transitioned, jira.comment.added), as who did it; measure prints the issues in scope by status."
 engagement = "scheduled"
 created_by = "orchestra bridges scaffold"
 # The compliance check: until the owner approves reading Jira (then "approved", with the data
@@ -47,3 +47,9 @@ type = "jira.issue.transitioned"
 subject = "the issue key"
 source = "who moved it: person.jira.<account> (bot.jira when no one)"
 data = "from, to: the status names"
+
+[[publishes]]
+type = "jira.comment.added"
+subject = "the issue key"
+source = "the comment's author: person.jira.<account>"
+data = "issue, author: the issue key and the author's account (never the comment's text)"

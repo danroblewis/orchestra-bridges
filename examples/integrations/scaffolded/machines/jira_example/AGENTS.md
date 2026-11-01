@@ -8,7 +8,7 @@ You are a coding tool working on this directory. Read this first; it is the whol
 
 - **the poller** (`python jira_example.py`): every few minutes (`machine.toml`, `[settings] every`; 5
   minutes by default) it reads what changed in Jira (Data Center or Cloud: `[settings] flavour`) and relays it as events on the project's
-  Orchestra bus: `jira.issue.created`, `jira.issue.assigned` and `jira.issue.transitioned` once per change (subject: the issue key; source: `person.jira.<account>`; data: the status, the assignee's account, from and to);
+  Orchestra bus: `jira.issue.created`, `jira.issue.assigned` and `jira.issue.transitioned` once per change, and `jira.comment.added` once per comment (subject: the issue key; source: `person.jira.<account>`; data: the status, the assignee's account, from and to; a comment's issue and author, never its text);
 - **the measurement** (`python jira_example.py measure`): one read, printed as Prometheus text, which a
   `[[collect]]` entry runs and stores: `jira_issues{status, category}` (the issues in scope by status).
 

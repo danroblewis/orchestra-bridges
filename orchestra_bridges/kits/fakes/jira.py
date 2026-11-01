@@ -18,8 +18,9 @@ It understands a small JQL: clauses joined by ``AND``, each ``project = X``, ``p
 ASC|DESC`` (or ``key``). ``expand=changelog`` adds each issue's changes (status changes, and the
 edits ``edit`` makes) with their authors; anything else is a 400, as Jira answers a query it cannot
 parse. Each issue has its ``creator`` (and ``reporter``) when the fixture names one. Every summary,
-display name and edited value carries the canary. ``create``, ``move`` and ``edit`` change the
-world between polls."""
+display name, edited value and comment's body carries the canary. Each issue's ``comment`` field
+lists its comments (id, author, body, created), as Jira's search returns them. ``create``, ``move``,
+``assign``, ``edit`` and ``comment`` change the world between polls."""
 
 from __future__ import annotations
 
@@ -178,6 +179,9 @@ class FakeJira(FakeServer):
             "assignee": self._user(i.get("assignee")),
             "created": i["created"], "updated": i["updated"],
             "creator": self._user(i.get("creator")), "reporter": self._user(i.get("creator")),
+            "comment": {"startAt": 0, "maxResults": len(i.get("comments") or []), "total": len(i.get("comments") or []),
+                        "comments": [{"id": c["id"], "author": self._user(c["by"]), "body": f"{CANARY} comment",
+                                      "created": c["at"], "updated": c["at"]} for c in i.get("comments") or []]},
         }
         if fields and "*all" not in fields:
             f = {k: v for k, v in f.items() if k in fields}
@@ -228,6 +232,14 @@ class FakeJira(FakeServer):
             i.setdefault("history", []).append({"id": hid, "by": by or "automation", "at": stamp(t), "field": "assignee",
                                                 "from": i.get("assignee"), "to": to})
             i["assignee"], i["updated"] = to, stamp(t)
+
+    def comment(self, key: str, by: str | None = "alice", at: datetime | None = None) -> None:
+        """A comment on ``key`` by ``by`` (its body: the canary)."""
+        with self._lock:
+            i, t = self._find(key), at or datetime.now(UTC)
+            cid = str(30000 + sum(len(x.get("comments") or []) for x in self.data["issues"]) + 1)
+            i.setdefault("comments", []).append({"id": cid, "by": by, "at": stamp(t)})
+            i["updated"] = stamp(t)
 
     def move(self, key: str, status: str, by: str | None = "alice", at: datetime | None = None) -> None:
         """``key`` moves to ``status`` by ``by``, recorded in its changelog."""

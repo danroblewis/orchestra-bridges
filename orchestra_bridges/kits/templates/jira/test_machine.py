@@ -1,5 +1,5 @@
 """{{name}} against the kit's Jira fake, in the flavour machine.toml names (Data Center or Cloud):
-two polls (a restart between them) relay each creation, assignment and status change once, as who
+two polls (a restart between them) relay each creation, assignment, status change and comment once, as who
 made it; the first run starts now (or at ``since``: then only the issues not yet done), never at the
 beginning of history; ``measure`` prints the issues by status; the fake gets only the runner's placeholders,
 never a real token; no text or token leaves.
@@ -85,10 +85,12 @@ def test_two_polls_relay_each_change_once(fake, tmp_path):
     fake.move(f"{PROJECT}-1", "In Progress", by="alice")
     fake.assign(f"{PROJECT}-1", "bob", by="alice")
     fake.create(f"{PROJECT}-9", by="carol", assignee="alice")
+    fake.comment(f"{PROJECT}-1", by="carol")
     events = poll_once(fake, tmp_path, CATCH_UP)                        # a restart: the cursor is read back
     assert changes(events)[1:] == [
         ("jira.issue.transitioned", f"{PROJECT}-1", "person.jira.alice", {"from": "Open", "to": "In Progress"}),
         ("jira.issue.assigned", f"{PROJECT}-1", "person.jira.alice", {"assignee": "bob"}),
+        ("jira.comment.added", f"{PROJECT}-1", "person.jira.carol", {"issue": f"{PROJECT}-1", "author": "carol"}),
         ("jira.issue.created", f"{PROJECT}-9", "person.jira.carol", {"status": "Open"}),
         ("jira.issue.assigned", f"{PROJECT}-9", "person.jira.carol", {"assignee": "alice"})]
     announced = {e["source"]: e["data"] for e in events if e["type"] == "orchestra.machine.started"}
@@ -100,7 +102,8 @@ def test_two_polls_relay_each_change_once(fake, tmp_path):
 
 def test_the_first_run_starts_now(fake, tmp_path):
     """No cursor and ``since = "now"``: nothing done before the poller began is relayed (the
-    fixture's changes of the last hours), and what is done after it is."""
+    fixture's changes of the last hours, a comment), and what is done after it is."""
+    fake.comment(f"{PROJECT}-2", by="carol", at=datetime.now(UTC) - timedelta(hours=1))
     assert changes(poll_once(fake, tmp_path)) == []
     fake.move(f"{PROJECT}-1", "In Progress", by="alice")
     assert changes(poll_once(fake, tmp_path)) == [
@@ -129,7 +132,8 @@ def test_measure_counts_by_status(fake, tmp_path, capsys):
 
 
 def test_no_text_or_token_leaves(fake, tmp_path, capsys):
-    poll_once(fake, tmp_path, CATCH_UP)
+    fake.comment(f"{PROJECT}-2", by="carol")                         # its body carries the canary
+    assert any(e["type"] == "jira.comment.added" for e in poll_once(fake, tmp_path, CATCH_UP))
     program().main(args(fake, tmp_path, "measure"))
     out = capsys.readouterr()
     assert CANARY not in out.out + out.err and REAL not in out.out + out.err

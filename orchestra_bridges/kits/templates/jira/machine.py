@@ -18,7 +18,9 @@ with the issue key as the subject and who acted as the source (``person.jira.<ac
   ``created``), and ``jira.issue.assigned`` with it when it was created assigned (Jira writes no
   changelog for that);
 - ``jira.issue.assigned`` for each change of assignee (data: the account it went to);
-- ``jira.issue.transitioned`` for each status change (data: from, to).
+- ``jira.issue.transitioned`` for each status change (data: from, to);
+- ``jira.comment.added`` for each comment (as its author; data: the issue and the author's account:
+  never its text).
 
 **The first run** starts at ``[settings] since`` (``now`` by default; or a duration back, ``"1d"``,
 or a time: ``start_of``), never at the beginning of the project's history: no change made before it
@@ -98,10 +100,13 @@ def keep_changes(body: dict) -> dict:
                        "to": status.get("toString") if status else None,
                        "assignee_changed": assignee is not None,
                        "assigned": assignee.get("to") if assignee else None})
+        comments = [{"id": str(c["id"]), "by": _id(c.get("author")), "at": c["created"]}
+                    for c in (f.get("comment") or {}).get("comments") or [] if c.get("created")]
         status = f.get("status") or {}
         out.append({"key": i["key"], "created": f.get("created"), "creator": _id(f.get("creator")),
                     "assignee": _id(f.get("assignee")), "status": status.get("name"),
-                    "category": (status.get("statusCategory") or {}).get("key"), "changes": hs})
+                    "category": (status.get("statusCategory") or {}).get("key"), "changes": hs,
+                    "comments": comments})
     return page_of(body, out)
 
 
@@ -156,6 +161,10 @@ def relay(p, issue: dict, began: float) -> None:
         if c["to"] is not None:
             p.emit("jira.issue.transitioned", key, {"from": c["from"], "to": c["to"]}, source=who, stamp=c["id"],
                    time=at)
+    for c in issue.get("comments") or []:
+        if parse_time(c["at"]).timestamp() >= began:
+            p.emit("jira.comment.added", key, {"issue": key, "author": c["by"]}, source=actor_source("jira", c["by"]),
+                   stamp=f"comment:{c['id']}", time=rfc3339(c["at"]))
 
 
 def make_poll(api, settings):
@@ -175,7 +184,7 @@ def make_poll(api, settings):
         minutes = math.ceil((started - since + overlap) / 60)
         jql = f'({scope}) AND updated >= "-{minutes}m" ORDER BY updated ASC'
         # changes are read fresh (ttl 0): a cached answer would hide the newest
-        for issue in search(api, settings, jql, keep_changes, fields="status,assignee,creator,created",
+        for issue in search(api, settings, jql, keep_changes, fields="status,assignee,creator,created,comment",
                             expand="changelog", ttl_s=0):
             if first and issue["category"] == "done":
                 continue                                # a catch-up relays the work not yet done
