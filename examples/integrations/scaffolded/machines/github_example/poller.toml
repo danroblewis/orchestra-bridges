@@ -23,6 +23,14 @@ every = "5m"
 per_minute = 60                   # GitHub allows 5,000 an hour per token, shared with the owner's own use
 ttl = "4m"
 repo = "acme/service"             # guess: ask the owner (owner/name; `git remote -v` names it)
+# Or follow people rather than one repository: their pull requests across an organisation's
+# repositories, found with the search API (one search per author a poll; GitHub allows a token 30
+# searches a minute). With authors set, repo is not read and issues are not relayed.
+authors = []                      # GitHub logins (the team's)
+org = ""                          # the organisation (or user) whose repositories are searched; empty: any
+# Ticket keys (ABC-123) found in a pull request's branch name and title are put on its events as
+# `tickets` (the keys only: the title is never kept); projects narrows them to these keys' prefixes.
+projects = []
 branches = []                     # follow pull requests whose head branch matches one of these globs ("agent/*"),
 labels = []                       # or that carry one of these labels ("SAIL"); with neither, every pull request
 issues = true                     # relay the repository's issues too (pull requests are always relayed)
@@ -51,7 +59,7 @@ data = "repository, number"
 type = "github.pr.opened"
 subject = "the pull request: <owner>/<name>#<number>"
 source = "its author"
-data = "repository, number, branch, head_sha"
+data = "repository, number, branch, head_sha, tickets (the ticket keys in its branch and title; every github.pr.* carries them)"
 
 [[publishes]]
 type = "github.pr.synchronize"

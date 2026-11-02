@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from orchestra_bridges.kits.fakes import CANARY, FakeGitHub
+from orchestra_bridges.kits.fakes import CANARY, FakeGitHub, FakeGitHubOrg
 from orchestra_bridges.kits.fakes.base import load_fixture
 from orchestra_bridges.kits.testing import fake_token, set_args, settings, token_env, uncleared
 
@@ -23,8 +23,8 @@ TOKEN = fake_token(HERE)        # the placeholder the runner sends a fake on thi
 REAL = "real-token-never-sent-to-a-fake"   # in the environment, yet never read for a fake
 TOKEN_ENV = token_env(HERE, "GITHUB_TOKEN")          # poller.toml's, so the owner's variable works too
 REPO = settings(HERE).get("repo") or "acme/service"  # the fake serves the owner's repository's name
-SCOPE = set_args(branches=[], labels=[], issues=True, since="1d")   # follow everything; the first run reads a day
-NOW = set_args(branches=[], labels=[], issues=True, since="now")
+SCOPE = set_args(branches=[], labels=[], issues=True, since="1d", authors=[])   # follow everything; the first run reads a day
+NOW = set_args(branches=[], labels=[], issues=True, since="now", authors=[])
 
 
 def program(here=HERE):
@@ -124,8 +124,40 @@ def test_a_catch_up_relays_only_the_items_still_open(fake, tmp_path):
 
 
 def test_follows_only_the_branches_or_labels_named(fake, tmp_path):
-    got = changes(poll_once(fake, tmp_path, scope=set_args(branches=["fix/*"], labels=[], issues=False, since="1d")))
+    got = changes(poll_once(fake, tmp_path, scope=set_args(branches=["fix/*"], labels=[], issues=False, since="1d", authors=[])))
     assert {s for _, s, _ in got} == {f"{REPO}#2"}
+
+
+def test_people_across_an_organisations_repositories(tmp_path, monkeypatch):
+    """``authors`` and ``org``: the team's pull requests in any of the organisation's repositories,
+    found by the search API, each relayed as in a repository (its subject names the repository it
+    is in), with the ticket keys of its branch and title as ``tickets``; others' are not followed."""
+    monkeypatch.setenv("ORCHESTRATOR_HOME", str(tmp_path / "home"))
+    people = set_args(authors=["dana", "erin"], org="acme", branches=[], labels=[], since="now", projects=["ABC"])
+    with FakeGitHubOrg(["acme/api", "acme/web", "other/lib"], token=TOKEN) as org:
+        assert changes(poll_once(org, tmp_path, people)) == []
+        api, web = org.repo("acme/api"), org.repo("acme/web")
+        n1 = api.open_pr("ABC-12-retry", by="dana")
+        n2 = web.open_pr("feature/login", by="erin", title="ABC-7: the login page")
+        api.open_pr("zed/thing", by="zed")                                   # not the team's
+        org.repo("other/lib").open_pr("ABC-1", by="dana")                    # not the organisation's
+        api.label(n1, "SAIL", by="dana")
+        got = poll_once(org, tmp_path, people)
+        assert sorted(changes(got)) == sorted([
+            ("github.pr.opened", f"acme/api#{n1}", "person.github.dana"),
+            ("github.pr.labeled", f"acme/api#{n1}", "person.github.dana"),
+            ("github.pr.opened", f"acme/web#{n2}", "person.github.erin")])
+        tickets = {e["subject"]: e["data"]["tickets"] for e in got if e["type"].startswith("github.pr.")}
+        assert tickets == {f"acme/api#{n1}": ["ABC-12"], f"acme/web#{n2}": ["ABC-7"]}   # the keys, never the title
+        api.merge(n1, by="erin")
+        assert changes(poll_once(org, tmp_path, people))[len(changes(got)):] == [
+            ("github.pr.merged", f"acme/api#{n1}", "person.github.erin")]
+        assert all("is:pr" in r.query["q"][0] and "org:acme" in r.query["q"][0]
+                   for r in org.requests if r.path == "/search/issues")
+        assert all(r.authorized for r in org.requests)
+    for p in tmp_path.rglob("*"):
+        if p.is_file():
+            assert CANARY not in p.read_text(errors="replace"), p
 
 
 def test_measure_prints_the_open_items(fake, tmp_path, capsys):

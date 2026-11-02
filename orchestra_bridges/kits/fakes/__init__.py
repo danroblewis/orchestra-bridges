@@ -25,7 +25,7 @@ Put the canary (``CANARY``) in every text it serves, so a test can show none of 
 ``scaffold http`` writes a machine whose test has one."""
 
 from .base import CANARY, FakeServer, Request
-from .github import FakeGitHub
+from .github import FakeGitHub, FakeGitHubOrg
 from .jira import FakeJira
 from .pagerduty import FakePagerDuty
 from .prometheus import FakePrometheus
@@ -33,4 +33,4 @@ from .slack import FakeSlack
 from .slack_day import Day
 from .slack_day import day as slack_day
 
-__all__ = ["CANARY", "Day", "FakeGitHub", "FakeJira", "FakePagerDuty", "FakePrometheus", "FakeServer", "FakeSlack", "Request", "slack_day"]
+__all__ = ["CANARY", "Day", "FakeGitHub", "FakeGitHubOrg", "FakeJira", "FakePagerDuty", "FakePrometheus", "FakeServer", "FakeSlack", "Request", "slack_day"]

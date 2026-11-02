@@ -21,6 +21,18 @@ subject (``<owner>/<name>#<number>``) and who acted as the source (``person.gith
 | ``github.issue.opened`` | an issue opened since the poller began (``[settings] issues``) | the author | ``opened`` |
 | ``github.issue.labeled``, ``.unlabeled``, ``.closed``, ``.reopened`` | as for a pull request | who did it | the event's id |
 
+**Two scopes.** One repository (``[settings] repo``): its pull requests (and, with ``issues``, its
+issues), from its lists. Or **people** (``[settings] authors``, the team's logins, and ``org``):
+their pull requests in any of the organisation's repositories, found by the search API
+(``/search/issues?q=is:pr author:<login> org:<org> updated:>=<time>``, one search per author a poll),
+each then read as in a repository (``/repos/<owner>/<name>/pulls/<n>``, its events, reviews and
+checks); the subject names the repository it is in. Issues are not relayed in this scope.
+
+**Ticket keys.** Every ``github.pr.*`` carries ``tickets``: the keys (``ABC-123``) in the pull
+request's branch name and title, sorted (``[settings] projects`` narrows them to those prefixes),
+so a linker machine can relate the pull request to its ticket. Only the keys are kept, never the
+title.
+
 **The first run** starts at ``[settings] since`` (``now`` by default; or a duration back, ``"1d"``,
 or a time: ``start_of``), never at the beginning of the repository's history: nothing done before it
 is relayed (a label, a review, a head's checks completed before it), and of a catch-up window it
@@ -40,6 +52,7 @@ from __future__ import annotations
 
 import fnmatch
 import math
+import re
 import sys
 import time
 from datetime import UTC, datetime
@@ -51,6 +64,7 @@ from orchestra_bridges.kits import runner
 from orchestra_bridges.kits.poller import actor_source, start_of
 
 HERE = Path(__file__).resolve().parent
+KEY = re.compile(r"(?<![A-Za-z0-9])([A-Z][A-Z0-9]{1,9}-[0-9]{1,7})(?![0-9])")   # a ticket's key, ABC-123
 HEADERS = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
 PAGE = 50
 OK = {"success", "neutral", "skipped"}
@@ -75,11 +89,51 @@ def actor(who: dict) -> str:
                         bot=who.get("type") == "Bot" or bool(login and login.endswith("[bot]")))
 
 
+def keys_in(text) -> list[str]:
+    """The ticket keys in a text (a branch name, a title), sorted; nothing else of it."""
+    return sorted(set(KEY.findall(text))) if isinstance(text, str) else []
+
+
 def keep_pulls(body: list) -> list[dict]:
     return [{"number": p["number"], "branch": (p.get("head") or {}).get("ref"), "head": (p.get("head") or {}).get("sha"),
              "author": _who(p.get("user")), "labels": [x.get("name") for x in p.get("labels") or []],
              "created": p.get("created_at"), "updated": p.get("updated_at"), "merged": p.get("merged_at"),
-             "closed": p.get("closed_at")} for p in body or []]
+             "closed": p.get("closed_at"), "title_keys": keys_in(p.get("title"))} for p in body or []]
+
+
+def keep_pull(body: dict) -> dict:
+    return keep_pulls([body])[0]
+
+
+def repo_of(url) -> str | None:
+    """``owner/name`` from a search item's ``repository_url`` (``…/repos/<owner>/<name>``)."""
+    m = re.search(r"/repos/([^/]+/[^/]+)/?$", url or "")
+    return m.group(1) if m else None
+
+
+def keep_search(body: dict) -> dict:
+    return {"total": (body or {}).get("total_count") or 0,
+            "items": [{"repo": repo_of(i.get("repository_url")), "number": i["number"], "updated": i.get("updated_at"),
+                       "closed": i.get("closed_at")} for i in (body or {}).get("items") or [] if "pull_request" in i]}
+
+
+def searched(api, q: str) -> list[dict]:
+    """Every page of a search, newest first (GitHub gives at most 1,000 results)."""
+    out, page = [], 1
+    while True:
+        body = api.get("/search/issues", {"q": q, "sort": "updated", "order": "desc", "per_page": PAGE, "page": page},
+                       keep=keep_search, ttl_s=0)
+        out += body["items"]
+        if len(body["items"]) < PAGE or page * PAGE >= min(body["total"], 1000):
+            return out
+        page += 1
+
+
+def tickets_of(settings, pr: dict) -> list[str]:
+    """The ticket keys in the pull request's branch and title, narrowed to ``[settings] projects``."""
+    keys = set(keys_in(pr.get("branch"))) | set(pr.get("title_keys") or [])
+    projects = [str(x) for x in settings.extra.get("projects") or []]
+    return sorted(k for k in keys if not projects or k.split("-")[0] in projects)
 
 
 def keep_issues(body: list) -> list[dict]:
@@ -153,8 +207,9 @@ def checks(api, repo: str, sha: str) -> dict | None:
             "at": last["at"]}
 
 
-def relay_events(p, api, repo: str, n: int, kind: str, began: str, merged: bool = False) -> None:
-    base = {"repository": repo, "number": n}
+def relay_events(p, api, repo: str, n: int, kind: str, began: str, merged: bool = False,
+                 extra: dict | None = None) -> None:
+    base = {"repository": repo, "number": n, **(extra or {})}
     for e in api.get(f"/repos/{repo}/issues/{n}/events", {"per_page": 100}, keep=keep_events, ttl_s=0):
         if (e["at"] or "") < began or (kind == "issue" and e["event"] in ("merged", "review_requested")):
             continue
@@ -167,18 +222,20 @@ def relay_events(p, api, repo: str, n: int, kind: str, began: str, merged: bool 
                time=e["at"])
 
 
-def relay_pr(p, api, repo: str, pr: dict, began: str, heads: dict) -> None:
+def relay_pr(p, api, repo: str, pr: dict, began: str, heads: dict, settings=None, hkey: str | None = None) -> None:
     n, subject = pr["number"], f"{repo}#{pr['number']}"
-    base, author = {"repository": repo, "number": n}, actor(pr["author"])
+    tickets = {"tickets": tickets_of(settings, pr)} if settings is not None else {}
+    base, author = {"repository": repo, "number": n, **tickets}, actor(pr["author"])
+    hkey = hkey or str(n)
     if (pr["created"] or "") >= began:
         p.emit("github.pr.opened", subject, {**base, "branch": pr["branch"], "head_sha": pr["head"]}, source=author,
                stamp="opened", time=pr["created"])
-    before = heads.get(str(n))
+    before = heads.get(hkey)
     if before and before != pr["head"]:
         p.emit("github.pr.synchronize", subject, {**base, "head_sha": pr["head"], "previous": before}, source=author,
                stamp=pr["head"])
-    heads[str(n)] = pr["head"]
-    relay_events(p, api, repo, n, "pr", began, merged=bool(pr["merged"]))
+    heads[hkey] = pr["head"]
+    relay_events(p, api, repo, n, "pr", began, merged=bool(pr["merged"]), extra=tickets)
     for r in api.get(f"/repos/{repo}/pulls/{n}/reviews", {"per_page": 100}, keep=keep_reviews, ttl_s=0):
         if (r["at"] or "") >= began and r["state"] in VERDICTS:
             p.emit(VERDICTS[r["state"]], subject, {**base, "state": r["state"], "commit_id": r["commit"]},
@@ -199,6 +256,37 @@ def relay_checks(p, api, repo: str, n: int, sha: str, began: str) -> bool:
     return True
 
 
+def authors_of(settings) -> list[str]:
+    return [str(a) for a in settings.extra.get("authors") or [] if str(a).strip()]
+
+
+def search_query(settings, author: str, *, after: str | None = None, open_only: bool = False) -> str:
+    org = str(settings.extra.get("org") or "").strip()
+    return " ".join(x for x in ("is:pr", "is:open" if open_only else "", f"author:{author}",
+                                f"org:{org}" if org else "", f"updated:>={after}" if after else "") if x)
+
+
+def poll_people(p, api, settings, first: bool, began: str, after: str, heads: dict, open_: dict) -> None:
+    """The people's scope: each author's pull requests updated since ``after``, across ``org``."""
+    found: dict[tuple[str, int], dict] = {}
+    for a in authors_of(settings):
+        for it in searched(api, search_query(settings, a, after=after)):
+            if it["repo"]:
+                found[(it["repo"], it["number"])] = it
+    for (repo, n), it in sorted(found.items()):
+        if first and it["closed"]:
+            continue                                     # a catch-up relays the work still open
+        pr = api.get(f"/repos/{repo}/pulls/{n}", keep=keep_pull, ttl_s=0)
+        if not follows(settings, pr):
+            continue
+        key = f"{repo}#{n}"
+        relay_pr(p, api, repo, pr, began, heads, settings, hkey=key)
+        if pr["closed"]:
+            open_.pop(key, None)
+        else:
+            open_[key] = pr["head"]
+
+
 def make_poll(api, settings):
     repo = str(settings.extra.get("repo", "acme/service"))
     overlap = parse_duration(settings.extra.get("overlap"), 600.0)
@@ -215,12 +303,21 @@ def make_poll(api, settings):
         began = iso(since if first else live)
         after = iso(since - overlap)
         heads, open_, checked = dict(cur.get("heads") or {}), dict(cur.get("open") or {}), dict(cur.get("checked") or {})
+        if authors_of(settings):
+            poll_people(p, api, settings, first, began, after, heads, open_)
+            for key, sha in open_.items():                   # checks change no pull request's updated time
+                r, _, n = key.rpartition("#")
+                if checked.get(key) != sha and relay_checks(p, api, r, int(n), sha, began):
+                    checked[key] = sha
+            p.cursor = {"since": started, "live": math.floor(started) if first else live, "heads": heads,
+                        "open": open_, "checked": {k: s for k, s in checked.items() if k in open_}}
+            return
         updated = listed(api, f"/repos/{repo}/pulls", {"state": "all", "sort": "updated", "direction": "desc"},
                          keep_pulls, after)
         for pr in updated:
             if not follows(settings, pr) or (first and pr["closed"]):
                 continue                                 # a catch-up relays the work still open
-            relay_pr(p, api, repo, pr, began, heads)
+            relay_pr(p, api, repo, pr, began, heads, settings)
             if pr["closed"]:
                 open_.pop(str(pr["number"]), None)
             else:
@@ -254,6 +351,17 @@ def verdict(reviews: list[dict]) -> str:
 
 
 def measure(api, settings, series) -> None:
+    if authors_of(settings):
+        counts = dict.fromkeys(REVIEWS, 0)
+        found = {(it["repo"], it["number"]) for a in authors_of(settings)
+                 for it in searched(api, search_query(settings, a, open_only=True)) if it["repo"]}
+        for repo, n in sorted(found):
+            pr = api.get(f"/repos/{repo}/pulls/{n}", keep=keep_pull)
+            if follows(settings, pr):
+                counts[verdict(api.get(f"/repos/{repo}/pulls/{n}/reviews", {"per_page": 100}, keep=keep_reviews))] += 1
+        for review, n in counts.items():
+            series.gauge("github_prs_open", n, {"review": review}, help="Open pull requests followed, by review state.")
+        return
     repo = str(settings.extra.get("repo", "acme/service"))
     issues = listed(api, f"/repos/{repo}/issues", {"state": "open"}, keep_issues)
     series.gauge("github_issues_open", sum(1 for i in issues if not i["pull"]), help="Open issues (not pull requests).")

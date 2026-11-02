@@ -99,8 +99,13 @@ class FakeGitHub(FakeServer):
     def _labels(self, x: dict) -> list[dict]:
         return [{"name": name, "color": "ededed", "description": CANARY} for name in x["labels"]]
 
+    @staticmethod
+    def _title(x: dict) -> str:
+        """The canary, after the title a test gave (a ticket's key in it, say)."""
+        return f"{x['title']} {CANARY}" if x.get("title") else CANARY
+
     def _pr(self, p: dict) -> dict:
-        return {"number": p["number"], "title": CANARY, "body": CANARY, "state": "closed" if p.get("closed") else "open",
+        return {"number": p["number"], "title": self._title(p), "body": CANARY, "state": "closed" if p.get("closed") else "open",
                 "draft": bool(p.get("draft")), "user": user(p["author"]), "labels": self._labels(p),
                 "head": {"ref": p["branch"], "sha": p["head"], "label": f"{self.repo.split('/')[0]}:{p['branch']}"},
                 "base": {"ref": p.get("base", "main")},
@@ -108,8 +113,9 @@ class FakeGitHub(FakeServer):
                 "merged_at": p.get("merged"), "html_url": f"https://github.com/{self.repo}/pull/{p['number']}"}
 
     def _issue(self, x: dict, pull: bool) -> dict:
-        out = {"number": x["number"], "title": CANARY, "body": CANARY, "state": "closed" if x.get("closed") else "open",
+        out = {"number": x["number"], "title": self._title(x), "body": CANARY, "state": "closed" if x.get("closed") else "open",
                "user": user(x["author"]), "labels": self._labels(x), "comments": 0,
+               "repository_url": f"https://api.github.com/repos/{self.repo}",
                "created_at": x["created"], "updated_at": self._updated(x), "closed_at": x.get("closed")}
         if pull:
             out["pull_request"] = {"url": f"https://api.github.com/repos/{self.repo}/pulls/{x['number']}",
@@ -149,11 +155,14 @@ class FakeGitHub(FakeServer):
              "updated_at": s["at"]} for s in rows]}
 
     # the test's controls
-    def open_pr(self, branch: str, by: str = "alice", head: str | None = None, labels: list[str] | None = None) -> int:
+    def open_pr(self, branch: str, by: str = "alice", head: str | None = None, labels: list[str] | None = None,
+                title: str | None = None) -> int:
+        """A pull request from ``branch`` by ``by``; ``title`` (served before the canary) is the test's."""
         with self._lock:
             n = next(self.numbers)
             self.data["pulls"].append({"number": n, "branch": branch, "head": head or f"{n:07x}{'0' * 33}",
-                                       "author": by, "created": now(), "labels": list(labels or [])})
+                                       "author": by, "created": now(), "labels": list(labels or []),
+                                       **({"title": title} if title else {})})
             return n
 
     def push(self, n: int, sha: str) -> None:
@@ -340,3 +349,76 @@ class FakeGitHub(FakeServer):
                     self._event(n, "labeled", me, v)
             return 200, self._labels(x)
         return 405, {"message": "Method Not Allowed"}
+
+
+class FakeGitHubOrg(FakeServer):
+    """Several repositories (each a ``FakeGitHub``'s world, one lock) behind one GitHub API, with the
+    search API across them, as a poller that follows people rather than one repository reads it:
+    ``GET /search/issues`` (``q``: ``is:pr``, ``is:issue``, ``is:open``, ``is:closed``,
+    ``author:<login>`` (several: any of them), ``org:<owner>``, ``user:<owner>``, ``repo:<owner>/<name>``,
+    ``label:<name>``, ``updated:>=<ISO>`` (or ``>``); ``sort=updated``, ``order``, paging by ``page``
+    and ``per_page``; at most 1,000 results, as GitHub), each item in the issues' shape with its
+    ``repository_url``. Every other path is the repository's: ``/repos/<owner>/<name>/...``.
+
+    ``FakeGitHubOrg(["acme/api", "acme/web"])`` (empty repositories) or ``{"acme/api": fixture}``;
+    ``org.repo("acme/api")`` is that repository's ``FakeGitHub``, whose controls change it."""
+
+    def __init__(self, repos, token: str | None = None, basic_user: str | None = None):
+        super().__init__({}, token, basic_user)
+        given = repos if isinstance(repos, dict) else dict.fromkeys(repos)
+        self.repos: dict[str, FakeGitHub] = {}
+        for name, fixture in given.items():
+            r = FakeGitHub({"pulls": [], "issues": [], **(fixture or {}), "repo": name})
+            r._lock = self._lock                       # one world: the server's lock guards every repository
+            self.repos[name] = r
+
+    def repo(self, name: str) -> FakeGitHub:
+        return self.repos[name]
+
+    def route(self, method: str, path: str, query: dict[str, list[str]], body: Any) -> tuple[int, Any]:
+        if path == "/search/issues" and method == "GET":
+            return self._search(query)
+        m = re.match(r"^/repos/([^/]+/[^/]+)(?:/|$)", path)
+        if m and (r := self.repos.get(m.group(1))) is not None:
+            return r.route(method, path, query, body)
+        return 404, {"message": "Not Found"}
+
+    def _search(self, query: dict) -> tuple[int, Any]:
+        terms = (one(query, "q") or "").split()
+        if not terms:
+            return 422, {"message": "Validation Failed", "errors": [{"code": "missing", "field": "q"}]}
+        authors = [t.split(":", 1)[1] for t in terms if t.startswith("author:")]
+        owners = [t.split(":", 1)[1] for t in terms if t.startswith(("org:", "user:"))]
+        repos = [t.split(":", 1)[1] for t in terms if t.startswith("repo:")]
+        labels = [t.split(":", 1)[1] for t in terms if t.startswith("label:")]
+        kinds = {t for t in terms if t in ("is:pr", "is:issue", "type:pr", "type:issue")}
+        states = {t.split(":", 1)[1] for t in terms if t in ("is:open", "is:closed", "state:open", "state:closed")}
+        after = next((t.split(":", 1)[1] for t in terms if t.startswith("updated:")), None)
+        rows = []
+        for name, r in self.repos.items():
+            if (owners and name.split("/")[0] not in owners) or (repos and name not in repos):
+                continue
+            items = ([(x, True) for x in r.data["pulls"]] if kinds & {"is:pr", "type:pr"} or not kinds else []) + \
+                    ([(x, False) for x in r.data["issues"]] if kinds & {"is:issue", "type:issue"} or not kinds else [])
+            for x, pull in items:
+                if authors and x["author"] not in authors:
+                    continue
+                if states and ("closed" if x.get("closed") else "open") not in states:
+                    continue
+                if labels and not set(labels) <= set(x["labels"]):
+                    continue
+                updated = r._updated(x)
+                if after and not _after(updated, after):
+                    continue
+                rows.append((updated, r._issue(x, pull)))
+        rows.sort(key=lambda u: u[0], reverse=one(query, "order", "desc") == "desc")
+        size, page = min(int(one(query, "per_page", "30")), 100), max(int(one(query, "page", "1")), 1)
+        found = [i for _, i in rows][:1000]
+        return 200, {"total_count": len(rows), "incomplete_results": False, "items": found[(page - 1) * size:page * size]}
+
+
+def _after(updated: str, cond: str) -> bool:
+    """``updated`` against a search's ``updated:>=T`` or ``updated:>T`` (``T`` ISO, in UTC)."""
+    strict = not cond.startswith(">=")
+    t = cond.removeprefix(">=").removeprefix(">")
+    return updated > t if strict else updated >= t
