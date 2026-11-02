@@ -1,25 +1,32 @@
 """{{name}}: a poller that relays the threads of a few Slack channels, as who acted (scaffolded from
 the orchestra-bridges kit ``slack``; edit freely, AGENTS.md says what it may do). A bot token
 (``xoxb-``, the bot added to each channel) with ``channels:history`` and ``channels:read``, and for
-a private channel ``groups:history`` and ``groups:read``; nothing else (``Bearer``). It never posts.
+a private channel ``groups:history`` and ``groups:read``; nothing else (``Bearer``). It never posts
+(posting adds ``chat:write``, and is an Outbox draft's, never this poller's).
 
 ``python {{name}}.py`` (the poller): each poll reads, per channel, its history over the threads it
 follows (``conversations.history``: the top-level messages, each parent with its replies' summary
 and its reactions) and, for a thread with a reply it has not seen, the thread
-(``conversations.replies``). The channel's name is read once a day (``conversations.info``). It
-publishes, each once, with ``<channel>/<thread ts>`` as the subject:
+(``conversations.replies``). The channel's name and the workspace's address are read once a day
+(``conversations.info``, ``auth.test``). It publishes, each once, with ``<channel>/<thread ts>`` as
+the subject, and always as who acted (never as a source of its own):
 
 - ``slack.thread.started``, a new top-level message, as its author (``person.slack.<member id>``,
-  ``bot.slack.<id>`` for a bot's); data: ``channel``, ``channel_name``, ``user``, ``bot``, and with
-  a policy for the channel (``[settings] policies``) ``policy_s`` and ``first_reply_deadline``;
+  ``bot.slack.<id>`` for a bot's); data: ``channel``, ``channel_name``, ``user``, ``bot``,
+  ``permalink`` (the thread's link);
 - ``slack.thread.replied``, each reply, as who replied; data: ``channel``, ``channel_name``,
-  ``user``, ``author`` (the thread's), ``by_author``, ``bot``, ``first`` (the first reply by a
-  person other than the author: neither the author's bump nor a bot's) and, with a policy,
-  ``in_time``;
+  ``permalink``, ``user``, ``author`` (the thread's), ``by_author``, ``bot``, ``first`` (the first
+  reply by a person other than the author: neither the author's bump nor a bot's);
 - ``slack.thread.checked``, the check emoji (``[settings] check_emoji``) added on the parent, as
-  the first who added it; data: ``channel``, ``channel_name``, ``by``, ``emoji``;
-- ``slack.thread.unchecked``, the last check removed, as ``bot.slack`` (Slack does not say who);
+  the first who added it; data: ``channel``, ``channel_name``, ``permalink``, ``by``, ``emoji``;
+- ``slack.thread.unchecked``, the last check removed, as who removed it: only the one who added a
+  reaction can remove it, so it is the one who had checked it (``by``); when several had and all
+  removed theirs between two polls, Slack does not say whose was last, and it is published as the
+  thread's author with ``by: "unknown"``;
 - ``slack.message.posted``, each message, as before (data: channel, reply or not, bot or not).
+
+Facts only: a response policy (how soon a thread is to be answered) is the workflow's setting,
+which computes its own deadline from the thread's start; the poller adds none.
 
 **The cursor** (per channel): the newest top-level message seen and the threads followed (their
 author, the newest reply seen, whether checked), for ``follow`` (2 days) after they started. The
@@ -124,11 +131,28 @@ def who(m: dict) -> str:
     return actor_source("slack", m["user"], bot=m["bot"])
 
 
+def check_emoji(settings) -> str:
+    return settings.extra.get("check_emoji", CHECK)
+
+
+def keep_workspace(body: dict) -> dict:
+    return {"url": _ok(body).get("url") or ""}
+
+
+def workspace(api) -> str:
+    """The workspace's address (``https://<team>.slack.com/``), for a thread's link (``auth.test``
+    needs no scope)."""
+    return api.get("/api/auth.test", {}, keep=keep_workspace, ttl_s=DAY)["url"]
+
+
+def permalink(url: str, channel: str, ts: str) -> str:
+    return f"{url.rstrip('/')}/archives/{channel}/p{ts.replace('.', '')}" if url else ""
+
+
 def make_poll(api, settings):
     channels = settings.extra.get("channels", [])
-    emoji = settings.extra.get("check_emoji", CHECK)
+    emoji = check_emoji(settings)
     follow = parse_duration(settings.extra.get("follow"), 2 * DAY)
-    policies = {str(k): parse_duration(v, 0.0) for k, v in (settings.extra.get("policies") or {}).items()}
 
     def poll(p):
         now = time.time()
@@ -139,34 +163,33 @@ def make_poll(api, settings):
             # No cursor yet: from [settings] since (now by default), never the channel's history.
             seen = float(st.get("seen") or math.floor(start_of(settings.extra.get("since"), now)))
             threads = {ts: dict(t) for ts, t in (st.get("threads") or {}).items() if float(ts) > now - follow}
-            name = channel_name(api, ch)
-            policy = policies.get(ch) or policies.get(name)
-            base = {"channel": ch, "channel_name": name}
+            base = {"channel": ch, "channel_name": channel_name(api, ch)}
+            url = workspace(api)
             # read fresh (ttl 0): a cached history would hide the newest reply and check
             for m in history(api, ch, min([seen, *map(float, threads)]), ttl_s=0):
+                here = {**base, "permalink": permalink(url, ch, m["ts"])}
                 if float(m["ts"]) > seen and m["ts"] not in threads:
-                    threads[m["ts"]] = started(p, m, base, policy)
+                    threads[m["ts"]] = started(p, m, here)
                     seen = max(seen, float(m["ts"]))
                 if m["ts"] in threads:
-                    follow_thread(p, api, m, threads[m["ts"]], base, policy, emoji)
+                    follow_thread(p, api, m, threads[m["ts"]], here, emoji)
             out[ch] = {"seen": seen, "threads": threads}
         p.cursor = out
 
     return poll
 
 
-def started(p, m: dict, base: dict, policy: float | None) -> dict:
+def started(p, m: dict, base: dict) -> dict:
     subject = f"{base['channel']}/{m['ts']}"
     data = {**base, "user": m["user"], "bot": m["bot"]}
-    if policy:
-        data |= {"policy_s": policy, "first_reply_deadline": iso(float(m["ts"]) + policy)}
     p.emit("slack.thread.started", subject, data, source=who(m), stamp="started", time=iso(m["ts"]))
     p.emit("slack.message.posted", subject, {"channel": base["channel"], "reply": False, "bot": m["bot"]},
            source=who(m), key=f"{base['channel']}/{m['ts']}", stamp="posted", time=iso(m["ts"]))
-    return {"author": m["user"], "last": m["ts"], "answered": False, "checked": False, "turns": 0}
+    return {"author": m["user"], "author_bot": m["bot"], "last": m["ts"], "answered": False, "checked": False,
+            "by": [], "turns": 0}
 
 
-def follow_thread(p, api, m: dict, t: dict, base: dict, policy: float | None, emoji: str) -> None:
+def follow_thread(p, api, m: dict, t: dict, base: dict, emoji: str) -> None:
     """A followed thread's new replies (read only when its latest reply is new) and its check."""
     subject = f"{base['channel']}/{m['ts']}"
     if m["latest_reply"] and float(m["latest_reply"]) > float(t["last"]):
@@ -175,8 +198,6 @@ def follow_thread(p, api, m: dict, t: dict, base: dict, policy: float | None, em
             first = not by_author and not r["bot"] and not t["answered"]   # a bot's reply answers nobody
             data = {**base, "user": r["user"], "author": t["author"], "by_author": by_author, "bot": r["bot"],
                     "first": first}
-            if policy:
-                data["in_time"] = float(r["ts"]) - float(m["ts"]) <= policy
             p.emit("slack.thread.replied", subject, data, source=who(r), key=f"{subject}/{r['ts']}", stamp="replied",
                    time=iso(r["ts"]))
             p.emit("slack.message.posted", subject, {"channel": base["channel"], "reply": True, "bot": r["bot"]},
@@ -184,6 +205,7 @@ def follow_thread(p, api, m: dict, t: dict, base: dict, policy: float | None, em
             t["answered"] = t["answered"] or first
             t["last"] = r["ts"]
     by = m["reactions"].get(emoji) or []
+    had, t["by"] = t.get("by") or [], list(by)
     if bool(by) != t["checked"]:
         t["turns"] += 1                   # the stamp: a check, removed, added again is three events
         t["checked"] = bool(by)
@@ -191,12 +213,17 @@ def follow_thread(p, api, m: dict, t: dict, base: dict, policy: float | None, em
             p.emit("slack.thread.checked", subject, {**base, "by": by[0], "emoji": emoji},
                    source=actor_source("slack", by[0]), stamp=f"checked:{t['turns']}")
         else:
-            p.emit("slack.thread.unchecked", subject, {**base, "emoji": emoji}, source=actor_source("slack"),
+            # only who added a reaction can remove it: one who had checked it removed it
+            if len(had) == 1:
+                remover, source = had[0], actor_source("slack", had[0])
+            else:
+                remover, source = "unknown", actor_source("slack", t["author"], bot=t.get("author_bot", False))
+            p.emit("slack.thread.unchecked", subject, {**base, "by": remover, "emoji": emoji}, source=source,
                    stamp=f"unchecked:{t['turns']}")
 
 
 def measure(api, settings, series) -> None:
-    emoji = settings.extra.get("check_emoji", CHECK)
+    emoji = check_emoji(settings)
     window = parse_duration(settings.extra.get("window"), DAY)
     now = time.time()
     for ch in settings.extra.get("channels", []):

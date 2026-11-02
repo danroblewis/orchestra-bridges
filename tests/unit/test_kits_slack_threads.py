@@ -10,13 +10,18 @@ import time
 import urllib.parse
 import urllib.request
 from collections import Counter
+from datetime import datetime
 
 import pytest
 
 from orchestra_bridges.kits.fakes import CANARY, FakeSlack, slack_day
-from orchestra_bridges.kits.fakes.slack_day import CHANNELS, policies
+from orchestra_bridges.kits.fakes.slack_day import CHANNELS, RESPONDERS, policies
 from orchestra_bridges.kits.scaffold import scaffold
 from orchestra_bridges.kits.testing import set_args
+
+
+def parse_iso(t: str) -> float:
+    return datetime.fromisoformat(t).timestamp()
 
 
 def get(fake, path, **params):
@@ -77,7 +82,7 @@ def test_the_poller_relays_the_day_once_with_its_counts(program, tmp_path, monke
     monkeypatch.setenv("ORCHESTRATOR_HOME", str(tmp_path / "home"))
     d = slack_day()
     events_file = tmp_path / "events.jsonl"
-    scope = set_args(channels=[c for c, _, _ in CHANNELS], policies=policies(), since="1d")
+    scope = set_args(channels=[c for c, _, _ in CHANNELS], since="1d")
     with FakeSlack(d.world()) as fake:
         t0 = time.time() - d.length_s - 600
         fake.play(d, t0, auto=False)
@@ -93,19 +98,26 @@ def test_the_poller_relays_the_day_once_with_its_counts(program, tmp_path, monke
         assert by["slack.thread.started"] == want["started"]
         first = [e for e in events if e["type"] == "slack.thread.replied" and e["data"]["first"]]
         assert len(first) == want["answered_in_time"] + want["answered_late"]
-        assert sum(e["data"]["in_time"] for e in first) == want["answered_in_time"]
+        # facts only: the policy is the workflow's; the reply's time against the thread's start says it
+        policy = policies()
+        in_time = [e for e in first if parse_iso(e["time"]) - float(e["subject"].split("/")[1])
+                   <= policy[e["data"]["channel_name"]]]
+        assert len(in_time) == want["answered_in_time"]
+        assert not any(k in e["data"] for e in events for k in ("policy_s", "first_reply_deadline", "in_time"))
         assert by["slack.thread.checked"] == want["checked"] + want["unchecked"]
         assert by["slack.thread.unchecked"] == want["unchecked"]
+        for e in (e for e in events if e["type"] == "slack.thread.unchecked"):   # as who had checked it
+            assert e["source"] == f"person.slack.{e['data']['by'].lower()}" and e["data"]["by"] in RESPONDERS
+        assert all(e["data"]["permalink"].startswith("https://fake.slack.com/archives/")
+                   for e in events if e["type"].startswith("slack.thread."))
         bumps = [e for e in events if e["type"] == "slack.thread.replied" and e["data"]["by_author"]]
         assert len(bumps) == 4 and not any(e["data"]["first"] for e in bumps)  # an author's bump answers nothing
-        started = next(e for e in events if e["type"] == "slack.thread.started" and e["data"]["channel_name"] == "oncall")
-        assert started["data"]["policy_s"] == 1800 and started["data"]["first_reply_deadline"]
         assert {e["source"] for e in events if e["type"] == "slack.thread.started" and e["data"]["bot"]} == {"bot.slack.b001"}
         announced = {e["source"]: e["data"]["kind"] for e in events if e["type"] == "orchestra.machine.started"}
-        assert announced["bot.slack"] == "program" and announced["person.slack.u201"] == "person"
+        assert "bot.slack" not in announced and announced["person.slack.u201"] == "person"
         assert not any(CANARY in json.dumps(e) for e in events)
         assert {r.path for r in fake.requests} == {"/api/conversations.history", "/api/conversations.replies",
-                                                   "/api/conversations.info"}       # no users.info: no users:read
+                                                   "/api/conversations.info", "/api/auth.test"}   # no users:read
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
             assert program.main(["measure", *base]) == 0

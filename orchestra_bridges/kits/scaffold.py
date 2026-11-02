@@ -74,7 +74,7 @@ KINDS = {
                   "`slack.thread.started`, `.replied` (data `first`: the first reply by a person other than the "
                   "author), `.checked`, `.unchecked` (the check emoji on the parent) and `slack.message.posted` "
                   "(subject: `<channel>/<thread ts>`; source: `person.slack.<member id>` or `bot.slack.<id>`, "
-                  "`bot.slack` for a check removed; data: channel, its name, author, never text)",
+                  "a check removed as who had checked it; data: channel, its name, the thread's link, author, never text)",
                   "`slack_channel_messages_last_hour{channel}`, `slack_threads_awaiting_reply{channel}`, "
                   "`slack_threads_unchecked{channel}` (by the channel's name)"),
     "http": Kind("a JSON API no kit knows", "API_TOKEN", "FakeAPI (a FakeServer written in the test)",

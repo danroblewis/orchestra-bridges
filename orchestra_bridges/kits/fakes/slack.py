@@ -10,7 +10,9 @@
 - ``conversations.replies`` (``channel``, ``ts``, ``oldest``/``latest``, ``inclusive``, ``limit``,
   ``cursor``): the parent first, then its replies, oldest first;
 - ``conversations.info`` (``channel``): its id, name and whether it is private;
-- ``users.info`` (``user``).
+- ``users.info`` (``user``);
+- ``auth.test``: the workspace's ``url`` (the fixture's ``workspace_url``, else
+  ``https://fake.slack.com/``), its team and the token's user.
 
 Each answers HTTP 200 with ``ok: false`` and an ``error`` for a bad argument, as Slack does.
 Every message text and real name carries the canary. ``post`` adds a message (a reply with
@@ -120,6 +122,9 @@ class FakeSlack(FakeServer):
             return 200, {"ok": True, "channel": {"id": ch, "name": name, "is_channel": True,
                                                  "is_private": ch in (self.data.get("private") or []),
                                                  "purpose": {"value": f"{CANARY} purpose"}}}
+        if path == "/api/auth.test":
+            return 200, {"ok": True, "url": self.data.get("workspace_url") or "https://fake.slack.com/",
+                         "team": "fake", "team_id": "T000", "user_id": "U000", "bot_id": "B000"}
         if path == "/api/users.info":
             uid = one(query, "user")
             u = next((x for x in self.data["users"] if x["id"] == uid), None)

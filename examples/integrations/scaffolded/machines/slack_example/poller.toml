@@ -1,7 +1,9 @@
 # slack_example: a poller scaffolded from the orchestra-bridges kit `slack`: a relay of the threads of a
 # few channels (started, replied, checked), never a machine itself (the machines are the people
-# and bots it publishes as). It only reads: a bot token with channels:history and channels:read
-# (and groups:history, groups:read for a private channel), nothing else; it never posts.
+# and bots it publishes as). Scopes: reading (this poller) needs channels:history and channels:read
+# (and groups:history, groups:read for a private channel), nothing else; posting would add
+# chat:write, and is an Outbox draft's, never this poller's. It relays facts only: a channel's
+# response policy is the workflow's setting, never this file's.
 # Read by its own program (slack_example.py: [settings], clearance) and by the Supervisor (description,
 # engagement, [[publishes]]); never by Orchestra, which knows the actors by their events.
 # Mentions of you and whether you answered need a search with your user token (search:read): adapt this script.
@@ -29,7 +31,6 @@ since = "now"                     # where the first run starts: "now", a duratio
 follow = "2d"                     # how long a thread is followed for replies and its check
 check_emoji = "white_check_mark"  # the reaction that marks a thread done
 window = "1d"                     # measure: the threads started this far back
-# policies = { C001 = "2h" }      # the first-reply policy per channel (id or name): adds the deadline
 
 [[publishes]]
 type = "slack.thread.started"
