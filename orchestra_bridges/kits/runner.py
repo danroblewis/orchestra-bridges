@@ -6,7 +6,10 @@ what it publishes:
   (``Poller``);
 - ``python <name>.py measure [--base-url URL] [--state-dir DIR] [--ttl S]``: one measurement,
   printed as Prometheus text on standard output, for the ``[[collect]]`` entry that stores it (an
-  instrument: it measures and never publishes).
+  instrument: it measures and never publishes);
+- ``python <name>.py schema [...]``: for a program that gives one (the ``promql`` kit), what the
+  system holds that the operator may choose from (each metric's name and its label names), printed
+  as lines: names only, never a value, a body or a text.
 
 Without ``--state-dir`` and ``--events-file`` it runs in the project at ORCHESTRA_REPO (the launcher
 sets it; else the working directory): events on the project's bus, the cursor under
@@ -38,7 +41,7 @@ running it without ``measure`` refuses, exit 2.
 **Exit codes**, the same for every scaffolded program: 0 done (a poll run that ended, a stop while
 waiting, a measurement printed); 1 a measurement that failed (its read raised); 2 refused before any
 read (a ``poller.toml`` that cannot be read, no project, not cleared for ``--once``/``--rounds``/
-``measure``, a missing token, a poll asked of a measurement-only program)."""
+``measure``/``schema``, a missing token, a poll asked of a measurement-only program)."""
 
 from __future__ import annotations
 
@@ -65,12 +68,14 @@ FAKE_USER = "fake-user"                         # and instead of an HTTP Basic a
 FAKE_RATE = 6000                                # requests a minute to a fake: no real system to spare
 Poll = Callable[[Poller], None]
 Measure = Callable[[CachedClient, MachineFile, Registry], None]
+Schema = Callable[[CachedClient, MachineFile], list[str]]
 
 
 def parser(name: str) -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog=name)
-    ap.add_argument("what", nargs="?", choices=["poll", "measure"], default="poll",
-                    help="poll (the default: relay events on an interval) or measure (print series once)")
+    ap.add_argument("what", nargs="?", choices=["poll", "measure", "schema"], default="poll",
+                    help="poll (the default: relay events on an interval), measure (print series once) "
+                         "or schema (print what may be measured: names only)")
     ap.add_argument("--once", action="store_true", help="poll once and exit")
     ap.add_argument("--rounds", type=int, help="poll this many times and exit")
     ap.add_argument("--every", type=float, help="seconds between polls (poller.toml's every otherwise)")
@@ -152,7 +157,7 @@ def _until_stopped() -> threading.Event:
 
 def main(here: str | Path, make_poll: Callable[[CachedClient, MachineFile], Poll] | None = None,
          argv: list[str] | None = None, *,
-         measure: Measure | None = None, auth_format: str | Callable[[MachineFile], str] = "Bearer {token}",
+         measure: Measure | None = None, schema: Schema | None = None, auth_format: str | Callable[[MachineFile], str] = "Bearer {token}",
          headers: dict[str, str] | None = None) -> int:
     here = Path(here)
     try:
@@ -195,6 +200,18 @@ def main(here: str | Path, make_poll: Callable[[CachedClient, MachineFile], Poll
     except (MachineFileError, KitError, ValueError) as e:
         print(f"{m.name}: {e}", file=sys.stderr)
         return 2
+    if a.what == "schema":
+        if schema is None:
+            print(f"{m.name}: has no schema to show", file=sys.stderr)
+            return 2
+        try:
+            lines = schema(client, m)
+        except Exception as e:  # noqa: BLE001 - say what failed; never a body or a header
+            print(f"{m.name}: schema failed: {type(e).__name__}: {e}", file=sys.stderr)
+            return 1
+        for line in lines:
+            print(line)
+        return 0
     if a.what == "measure":
         if measure is None:
             print(f"{m.name}: measures nothing", file=sys.stderr)

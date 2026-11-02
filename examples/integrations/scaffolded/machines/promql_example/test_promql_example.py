@@ -19,7 +19,8 @@ TOKEN_ENV = token_env(HERE, "PROMETHEUS_TOKEN")      # poller.toml's, so the own
 SCOPE = set_args(aliases={"k8s_cluster": "cluster"}, max_series=200, queries=[
     {"name": "http_requests", "query": 'sum by (service) (http_requests_total{k8s_cluster="prod-1"})',
      "help": "Requests served, by service."},
-    {"name": "queue_depth", "query": "queue_depth", "help": "Messages waiting, by queue."}])
+    {"name": "queue_depth", "query": "queue_depth", "help": "Messages waiting, by queue."}],
+    selectors=['{k8s_cluster="prod-2"}'])
 
 
 def program():
@@ -63,3 +64,24 @@ def test_no_token_leaves(fake, tmp_path, capsys):
     for p in tmp_path.rglob("*"):
         if p.is_file():
             assert REAL not in p.read_text(errors="replace"), p
+
+
+def schema(fake, tmp, *extra):
+    return program().main(["schema", "--base-url", fake.url, "--state-dir", str(tmp / "state"), "--ttl", "0",
+                           *SCOPE, *extra])
+
+
+def test_schema_lists_what_the_selectors_select(fake, tmp_path, capsys):
+    assert schema(fake, tmp_path) == 0
+    out = capsys.readouterr().out.splitlines()
+    assert "queue_depth cluster,queue" in out                              # names and label names only
+    assert all(not line.startswith("http_requests_total") for line in out)  # outside the allowlist
+    asked = [r for r in fake.requests if r.path == "/api/v1/series"]
+    assert asked and all(r.query.get("limit") == ["201"] for r in asked)    # bounded at the store too
+    assert not [r for r in fake.requests if "/label/" in r.path]           # never every name
+
+
+def test_schema_refuses_an_unbounded_selector(fake, tmp_path, capsys):
+    assert schema(fake, tmp_path, *set_args(selectors=['{__name__=~".+"}'])) == 1
+    assert "whole store" in capsys.readouterr().err
+    assert not fake.requests

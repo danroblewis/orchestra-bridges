@@ -20,7 +20,11 @@ token_env = "PROMETHEUS_TOKEN"    # the NAME of the variable holding the API tok
 # token_file = "~/.config/orchestra-bridges/{{kind}}-token"   # instead: a chmod 600 file outside any repository
 per_minute = 30
 ttl = "50s"                       # under the [[collect]] entry's every
-max_series = 200                  # an answer with more series fails: narrow the query
+max_series = 200                  # an answer (or a schema lookup) with more series fails: narrow the query
+# The allowlist `schema` looks within: series selectors that each name the team's part of the store
+# (a job, a namespace), never `{__name__=~".+"}`. `schema` lists each metric they select and its
+# label names (/api/v1/series, bounded by max_series and the last hour), never every name in the store.
+selectors = ['{namespace="team-x"}']   # guess: ask the owner (their job or namespace label values)
 aliases = { k8s_cluster = "cluster" }   # guess: ask the owner (the store's label -> the project's name for it)
 
 [[settings.queries]]               # guess: ask the owner (which series matter; these are examples)

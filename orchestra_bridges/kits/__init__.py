@@ -22,7 +22,18 @@ its cursor, the ids it emitted and a cache of only what it kept in the state dir
 
 from .client import CachedClient, HTTPFailure, KitError, NotCached, TokenMissing
 from .poller import Poller
-from .promql import PromError, Prometheus, Series, TooManySeries
+from .promql import PromError, Prometheus, Series, TooManySeries, Unbounded
 
-__all__ = ["CachedClient", "HTTPFailure", "KitError", "NotCached", "Poller", "PromError", "Prometheus", "Series",
-           "TokenMissing", "TooManySeries"]
+__all__ = [
+           "CachedClient",
+           "HTTPFailure",
+           "KitError",
+           "NotCached",
+           "Poller",
+           "PromError",
+           "Prometheus",
+           "Series",
+           "TokenMissing",
+           "TooManySeries",
+           "Unbounded",
+]

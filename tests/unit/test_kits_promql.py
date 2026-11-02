@@ -3,8 +3,9 @@ queries as plain series, label aliases, the max_series guard, and a bad query's 
 
 import pytest
 
-from orchestra_bridges.kits import CachedClient, PromError, Prometheus, TooManySeries
+from orchestra_bridges.kits import CachedClient, PromError, Prometheus, TooManySeries, Unbounded
 from orchestra_bridges.kits.fakes import FakePrometheus
+from orchestra_bridges.kits.promql import bounded
 
 T0 = 1_793_000_000.0
 
@@ -68,3 +69,32 @@ def test_answers_are_cached(prom):
     p.instant("queue_depth", at=T0)
     p.instant("queue_depth", at=T0)
     assert len(fake.requests_to("/api/v1/query")) == 1
+
+
+def test_a_series_lookup_is_bounded(prom):
+    """Never the whole store: a selector must name something, the window is the last hour, and the
+    store is asked for at most max_series + 1 (Prometheus's ``limit``)."""
+    fake, p = prom
+    for sel in ("{}", '{__name__=~".+"}', '{__name__=~".*"}', '{job!="x"}', ""):
+        assert not bounded(sel)
+        with pytest.raises(Unbounded):
+            p.series(sel)
+    assert not fake.requests                                   # refused before any request
+    assert bounded("up") and bounded('{namespace="team-a"}') and bounded('{job=~"team-.*"}')
+    p.series('{k8s_cluster="prod-1"}')
+    (req,) = fake.requests_to("/api/v1/series")
+    assert req.query["limit"] == ["11"] and float(req.query["end"][0]) - float(req.query["start"][0]) == 3600
+
+
+def test_a_store_that_ignores_the_limit_is_still_refused(prom):
+    fake, p = prom
+    for n in range(20):
+        fake.add_sample({"__name__": "many", "team": "a", "n": str(n)}, 0, 1)
+    with pytest.raises(TooManySeries):
+        p.series('{team="a"}')                  # the fake truncates to 11 with a warning: more than 10
+
+
+def test_schema_is_names_and_label_names(prom):
+    _, p = prom
+    assert p.schema(['{k8s_cluster="prod-1"}', '{k8s_cluster="prod-2"}']) == {
+        "http_requests_total": ["cluster", "service"], "queue_depth": ["cluster", "queue"]}

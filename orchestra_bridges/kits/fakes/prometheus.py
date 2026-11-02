@@ -1,5 +1,5 @@
 """A fake of the Prometheus HTTP query API (what Chronosphere, Mimir, Thanos and VictoriaMetrics
-answer too): ``/api/v1/query``, ``/api/v1/query_range`` and ``/api/v1/series``, by GET or a POSTed
+answer too): ``/api/v1/query``, ``/api/v1/query_range`` and ``/api/v1/series`` (with ``limit``, as Prometheus 2.49 and later), by GET or a POSTed
 form, in the real shapes (``{"status": "success", "data": {"resultType", "result"}}``).
 
 It evaluates a small PromQL: a selector ``name{label="v", label!="v", label=~"re", label!~"re"}``,
@@ -126,8 +126,12 @@ class FakePrometheus(FakeServer):
                 ms = [parse_selector(m) for m in query.get("match[]") or []]
                 if not ms:
                     raise BadQuery("no match[] parameter provided")
-                return 200, {"status": "success", "data": [s["labels"] for s in self.data["series"]
-                                                           if any(m(s["labels"]) for m in ms)]}
+                rows = [s["labels"] for s in self.data["series"] if any(m(s["labels"]) for m in ms)]
+                limit = int(one(query, "limit") or 0)
+                if limit and len(rows) > limit:      # as Prometheus 2.49+: truncated, with a warning
+                    return 200, {"status": "success", "data": rows[:limit],
+                                 "warnings": ["results truncated due to limit"]}
+                return 200, {"status": "success", "data": rows}
         except (BadQuery, TypeError, ValueError) as e:
             return 400, {"status": "error", "errorType": "bad_data", "error": str(e)}
         return 404, {"status": "error", "errorType": "not_found", "error": f"no endpoint {path}"}

@@ -5,7 +5,14 @@ through a ``CachedClient``, answered as plain series.
 
 - ``instant(query, at=None)`` and ``range(query, start, end, step)``: ``/api/v1/query`` and
   ``/api/v1/query_range``, POSTed as forms (long selectors never hit URL limits);
-- ``series(match, start=None, end=None)``: ``/api/v1/series``, the label sets of what matches;
+- ``series(match, start=None, end=None)``: ``/api/v1/series``, the label sets of what matches,
+  **bounded**: each selector must name something (a metric name, or a label matcher that is not
+  ``=~".*"``; ``Unbounded`` otherwise), the window is the last hour unless given, and Prometheus is
+  asked for at most ``max_series + 1`` (``limit``, which Prometheus 2.49 and later honour; a store
+  that ignores it is still refused past ``max_series``). Never ``/api/v1/label/__name__/values``:
+  on a large tenant (Chronosphere's) the list of every name is hundreds of megabytes;
+- ``schema(match)``: what ``series`` finds, as each metric's name and its label names, for an
+  operator choosing the queries;
 - each answer is a list of ``Series(name, labels, points)``, points as ``(unix seconds, value)``;
 - ``aliases`` renames labels (``{"k8s_cluster": "cluster"}``), so series read from a company's
   store carry the names the project uses;
@@ -18,6 +25,8 @@ to have discovery read the store in place, a ``[[sources]]`` entry is the better
 from __future__ import annotations
 
 import math
+import re
+import time
 from dataclasses import dataclass, field
 
 from .client import CachedClient, KitError
@@ -29,6 +38,33 @@ class PromError(KitError):
 
 class TooManySeries(PromError):
     pass
+
+
+class Unbounded(PromError):
+    """A series lookup whose selector would match a whole tenant."""
+
+
+WILD = {"", ".*", ".+", ".*.*", "(.*)", "(.+)"}
+_SEL = re.compile(r"^\s*([a-zA-Z_:][a-zA-Z0-9_:]*)?\s*(?:\{(.*)\})?\s*$", re.DOTALL)
+_MATCH = re.compile(r'\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*(=~|!~|!=|=)\s*"((?:[^"\\]|\\.)*)"\s*,?')
+WINDOW_S = 3600.0
+
+
+def bounded(selector: str) -> bool:
+    """Whether a series selector names something: a metric name, an equality to a value, or a
+    regular expression that is not a wildcard. ``{}``, ``{__name__=~".+"}`` and a selector of only
+    negative matchers are not."""
+    m = _SEL.match(selector or "")
+    if not m:
+        return False
+    if m.group(1):
+        return True
+    for name, op, value in _MATCH.findall(m.group(2) or ""):
+        if op == "=" and value != "":
+            return True
+        if op == "=~" and value not in WILD:
+            return True
+    return False
 
 
 @dataclass
@@ -99,19 +135,35 @@ class Prometheus:
         return self._series(self._data("/api/v1/query_range", form))
 
     def series(self, match: str | list[str], start: float | None = None, end: float | None = None) -> list[dict[str, str]]:
-        form: dict = {"match[]": [match] if isinstance(match, str) else list(match)}
-        if start is not None:
-            form["start"] = f"{start:.3f}"
-        if end is not None:
-            form["end"] = f"{end:.3f}"
+        """The label sets of what ``match`` selects in the window (the last hour unless given), at
+        most ``max_series`` of them: each selector must be ``bounded``."""
+        matches = [match] if isinstance(match, str) else list(match)
+        if not matches:
+            raise Unbounded("a series lookup needs at least one selector")
+        for m in matches:
+            if not bounded(m):
+                raise Unbounded(f"{m!r} would match the whole store: name a metric or a label value "
+                                "(the team's job or namespace)")
+        end = time.time() if end is None else end
+        start = end - WINDOW_S if start is None else start
+        form: dict = {"match[]": matches, "start": f"{start:.3f}", "end": f"{end:.3f}",
+                      "limit": str(self.max_series + 1)}
         data = self.client.post("/api/v1/series", form=form, keep=_answer)
         if not isinstance(data, dict) or data.get("status") != "success":
             raise PromError("/api/v1/series: not a Prometheus answer")
         rows = data.get("data") or []
         if len(rows) > self.max_series:
-            raise TooManySeries(f"{len(rows)} series, more than max_series={self.max_series}: narrow the match")
+            raise TooManySeries(f"more than max_series={self.max_series} series: narrow the match")
         out = []
         for m in rows:
             name, labels = self._labels(m)
             out.append({"__name__": name, **labels})
         return out
+
+    def schema(self, match: str | list[str], start: float | None = None, end: float | None = None) -> dict[str, list[str]]:
+        """Each metric ``match`` selects and its label names (aliases applied), sorted: what an
+        operator reads to choose a query, without reading any value."""
+        out: dict[str, set[str]] = {}
+        for row in self.series(match, start, end):
+            out.setdefault(row["__name__"], set()).update(k for k in row if k != "__name__")
+        return {name: sorted(keys) for name, keys in sorted(out.items())}
