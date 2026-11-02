@@ -36,6 +36,14 @@ the people and bots there did as events on the project's bus.
 - **Idempotent emission**: the id is ``<name>:<type>:<key>@<stamp>``, the key being the item's id
   in the other system (the subject, by default) and the stamp its change (an updated time, a
   version; by default a hash of the data). An id already emitted is skipped, across restarts too.
+- **A replay is marked**: an event whose ``time`` (when it happened in the other system) is
+  older than this run's start by more than the interval was done while the poller was not running
+  (a catch-up window, a pause between a stop and a resume: the cursor is where the last good poll
+  left it, so a resumed run relays what happened in the pause, once). Its ``data`` carries
+  ``replayed: true``, so a workflow's start can refuse it (``"replayed": {"not": [true]}``): a
+  ticket assigned while the poller was stopped is reported, never acted on as if it happened now.
+  The mark is not part of the event's id: an event relayed live and again after a restart is
+  still emitted once.
 - **Counters**: ``counter`` adds to a count kept with the cursor (``cursor.json``) after each
   good poll; the scaffold's ``measure`` (the ``[[collect]]`` entry runs the program with
   ``measure``) prints them beside what it reads itself. The instrument stores them, never the
@@ -142,6 +150,7 @@ class Poller:
         self._log = log or (lambda msg: print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {name}: {msg}",
                                               file=sys.stderr, flush=True))
         self.polls = self.failures = 0
+        self.began = time.time()                 # this run's start (a resume's): older events are replayed
         self.published: list[dict] = []          # this poll's events (announcements included)
 
     def _load_project(self):
@@ -221,10 +230,25 @@ class Poller:
         if self.state.seen(eid):
             return None
         self._announce(source, time, mapped)
+        if self.replayed(time):
+            data = {**(data if isinstance(data, dict) else {} if data is None else {"value": data}), "replayed": True}
         ext = {"subject": str(subject)} if subject is not None else {}
         if time is not None:
             ext["time"] = time
         return self._publish(eid, type, data, source, **ext)
+
+    def replayed(self, at: str | None) -> bool:
+        """Whether an event that happened ``at`` (an ISO time; UTC unless it names its zone) is a
+        replay: older than this run's start by more than the interval. No time: never."""
+        if not at:
+            return False
+        try:
+            t = datetime.fromisoformat(str(at))
+        except ValueError:
+            return False
+        if t.tzinfo is None:
+            t = t.replace(tzinfo=UTC)
+        return t.timestamp() < self.began - self.every_s
 
     def counter(self, name: str, by: float = 1.0, labels: dict[str, str] | None = None, help: str | None = None) -> None:
         self.series.counter(name, by, labels, help)

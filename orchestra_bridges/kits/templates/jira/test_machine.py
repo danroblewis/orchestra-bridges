@@ -85,7 +85,8 @@ def changes(events):
 
 def test_two_polls_relay_each_change_once(fake, tmp_path):
     assert changes(poll_once(fake, tmp_path, CATCH_UP)) == [("jira.issue.transitioned", f"{PROJECT}-2", "person.jira.bob",
-                                                    {"from": "Open", "to": "In Progress"})]
+                                                    {"from": "Open", "to": "In Progress", "replayed": True})]
+    # the fixture's change of hours ago, read by the catch-up: done before the run, so marked replayed
     fake.move(f"{PROJECT}-1", "In Progress", by="alice")
     fake.assign(f"{PROJECT}-1", "bob", by="alice")
     fake.create(f"{PROJECT}-9", by="carol", assignee="alice")

@@ -96,6 +96,31 @@ def test_idempotent_across_a_restart_and_cursor_persisted(tmp_path):
     assert json.loads((tmp_path / "state" / "cursor.json").read_text())["cursor"] == 3
 
 
+def test_an_event_from_before_the_run_by_more_than_the_interval_is_marked_replayed(tmp_path):
+    """A stop, changes in the other system, a resume: the resumed run relays the pause's changes
+    once, each marked ``replayed`` (its time is before this run by more than the interval); a
+    change seen live is not, and a restart never relays one twice because of the mark."""
+    from datetime import UTC, datetime, timedelta
+    iso = lambda dt: dt.isoformat().replace("+00:00", "Z")
+    live = iso(datetime.now(UTC))
+    def poll_live(p):
+        p.emit("demo.item.opened", "A-1", {"status": "opened"}, source="person.demo.ann", stamp="1", time=live)
+    Poller("demo_poller", every_s=60, state_dir=tmp_path / "state", events=Events(tmp_path / "ev.jsonl"),
+           log=lambda m: None).run(poll_live, once=True)
+    paused = iso(datetime.now(UTC) - timedelta(hours=1))   # done during the pause, an hour ago
+    def poll_resumed(p):
+        poll_live(p)                                       # seen again: once, never twice
+        p.emit("demo.item.closed", "A-2", {"status": "closed"}, source="person.demo.ann", stamp="2", time=paused)
+        p.emit("demo.item.moved", "A-3", None, source="person.demo.ann", stamp="3", time=paused)
+        p.emit("demo.item.timeless", "A-4", {"x": 1}, source="person.demo.ann", stamp="4")
+    Poller("demo_poller", every_s=60, state_dir=tmp_path / "state", events=Events(tmp_path / "ev.jsonl"),
+           log=lambda m: None).run(poll_resumed, once=True)
+    got = {e["type"]: e["data"] for e in read(tmp_path) if e["type"] != "orchestra.machine.started"}
+    assert [e["type"] for e in read(tmp_path)].count("demo.item.opened") == 1
+    assert got == {"demo.item.opened": {"status": "opened"}, "demo.item.closed": {"status": "closed", "replayed": True},
+                   "demo.item.moved": {"replayed": True}, "demo.item.timeless": {"x": 1}}
+
+
 def test_event_ids_are_the_items_and_stamps(tmp_path):
     p = make(tmp_path)
     ev = p.emit("demo.item.opened", "A-1", {"n": 1}, source="person.demo.ann", stamp="2026-10-31T08:00:00Z")
