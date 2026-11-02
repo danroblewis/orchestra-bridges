@@ -176,6 +176,7 @@ class FakeJira(FakeServer):
             "summary": i["summary"], "project": {"key": i["project"], "name": i["project"]},
             "status": {"name": i["status"], "statusCategory": {"id": cid, "key": cat, "name": cname}},
             "issuetype": {"name": i["issuetype"]}, "priority": {"name": i["priority"]},
+            "labels": list(i.get("labels") or []),
             "assignee": self._user(i.get("assignee")),
             "created": i["created"], "updated": i["updated"],
             "creator": self._user(i.get("creator")), "reporter": self._user(i.get("creator")),
@@ -204,14 +205,16 @@ class FakeJira(FakeServer):
 
     # the test's controls
     def create(self, key: str, status: str = "Open", by: str | None = "alice", at: datetime | None = None,
-               assignee: str | None = None) -> None:
+               assignee: str | None = None, issuetype: str = "Task", labels: list[str] | None = None) -> None:
         """A new issue ``key`` (its project is the key's prefix) in ``status``, created by ``by``
-        (assigned to ``assignee`` from the start: Jira writes no changelog for that)."""
+        (assigned to ``assignee`` from the start: Jira writes no changelog for that), of
+        ``issuetype``, with ``labels``."""
         with self._lock:
             t = stamp(at or datetime.now(UTC))
             n = 10000 + len(self.data["issues"]) + 1
             self.data["issues"].append({"id": str(n), "key": key, "project": key.split("-")[0],
-                                        "summary": f"{CANARY}: {key}", "status": status, "issuetype": "Task",
+                                        "summary": f"{CANARY}: {key}", "status": status, "issuetype": issuetype,
+                                        "labels": list(labels or []),
                                         "priority": "Medium", "assignee": assignee, "creator": by,
                                         "created": t, "updated": t})
 

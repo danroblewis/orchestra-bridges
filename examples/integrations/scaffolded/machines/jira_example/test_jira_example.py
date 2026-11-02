@@ -74,9 +74,13 @@ def poll_once(fake, tmp, scope=SCOPE):
     return [json.loads(x) for x in log.read_text().splitlines()] if log.exists() else []
 
 
+NOW = ("status", "category", "issuetype", "labels")      # the issue as the poll read it: on every jira.issue.*
+
+
 def changes(events):
-    return [(e["type"], e["subject"], e["source"], e["data"]) for e in events
-            if e["type"] != "orchestra.machine.started"]
+    """What changed: each event's data without the issue's state now (``now_of``)."""
+    return [(e["type"], e["subject"], e["source"], {k: v for k, v in e["data"].items() if k not in NOW})
+            for e in events if e["type"] != "orchestra.machine.started"]
 
 
 def test_two_polls_relay_each_change_once(fake, tmp_path):
@@ -91,7 +95,7 @@ def test_two_polls_relay_each_change_once(fake, tmp_path):
         ("jira.issue.transitioned", f"{PROJECT}-1", "person.jira.alice", {"from": "Open", "to": "In Progress"}),
         ("jira.issue.assigned", f"{PROJECT}-1", "person.jira.alice", {"assignee": "bob"}),
         ("jira.comment.added", f"{PROJECT}-1", "person.jira.carol", {"issue": f"{PROJECT}-1", "author": "carol"}),
-        ("jira.issue.created", f"{PROJECT}-9", "person.jira.carol", {"status": "Open"}),
+        ("jira.issue.created", f"{PROJECT}-9", "person.jira.carol", {}),
         ("jira.issue.assigned", f"{PROJECT}-9", "person.jira.carol", {"assignee": "alice"})]
     announced = {e["source"]: e["data"] for e in events if e["type"] == "orchestra.machine.started"}
     assert set(announced) == {"person.jira.bob", "person.jira.alice", "person.jira.carol"}     # each actor once
@@ -122,6 +126,20 @@ def test_a_catch_up_relays_only_the_issues_not_yet_done(fake, tmp_path):
     fake.move(f"{PROJECT}-5", "Open", by="alice")                  # reopened after the poller began
     assert changes(poll_once(fake, tmp_path, CATCH_UP)) == [
         ("jira.issue.transitioned", f"{PROJECT}-5", "person.jira.alice", {"from": "Done", "to": "Open"})]
+
+
+def test_each_issue_event_carries_the_issue_now_so_a_start_can_refuse_one_already_done(fake, tmp_path):
+    """An issue assigned and then moved to Done between two polls: its assignment is relayed with
+    the issue as the poll read it (done), its type and its labels."""
+    assert changes(poll_once(fake, tmp_path)) == []
+    fake.create(f"{PROJECT}-7", by="carol", issuetype="Bug", labels=["prr"])
+    fake.assign(f"{PROJECT}-7", "alice", by="carol")
+    fake.move(f"{PROJECT}-7", "Done", by="alice")
+    got = {e["type"]: e["data"] for e in poll_once(fake, tmp_path) if e.get("subject") == f"{PROJECT}-7"}
+    for t in ("jira.issue.created", "jira.issue.assigned", "jira.issue.transitioned"):
+        assert {k: got[t][k] for k in NOW} == {"status": "Done", "category": "done", "issuetype": "Bug",
+                                                "labels": ["prr"]}, t
+    assert got["jira.issue.assigned"]["assignee"] == "alice"
 
 
 def test_measure_counts_by_status(fake, tmp_path, capsys):

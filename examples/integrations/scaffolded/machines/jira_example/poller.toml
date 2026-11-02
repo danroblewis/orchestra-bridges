@@ -34,19 +34,19 @@ overlap = "10m"                   # each poll re-reads this much before the last
 type = "jira.issue.created"
 subject = "the issue key (ABC-12)"
 source = "its creator: person.jira.<account>"
-data = "status"
+data = "status, category, issuetype, labels: the issue now"
 
 [[publishes]]
 type = "jira.issue.assigned"
 subject = "the issue key"
 source = "who assigned it: person.jira.<account> (bot.jira when no one)"
-data = "assignee: the account it went to (none: unassigned)"
+data = "assignee: the account it went to (none: unassigned); status, category, issuetype, labels: the issue now"
 
 [[publishes]]
 type = "jira.issue.transitioned"
 subject = "the issue key"
 source = "who moved it: person.jira.<account> (bot.jira when no one)"
-data = "from, to: the status names"
+data = "from, to: the status names; status, category, issuetype, labels: the issue now"
 
 [[publishes]]
 type = "jira.comment.added"
