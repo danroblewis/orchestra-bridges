@@ -88,8 +88,11 @@ def test_polls_relay_each_change_once(fake, tmp_path):
         ("github.pr.changes_requested", pr1, "person.github.carol"), ("github.pr.commented", pr1, "person.github.bob")])
     assert next(e for e in events if e["type"] == "github.pr.review_requested")["data"]["reviewer"] == "carol"
     fake.merge(2, by="carol")
+    fake.close(1, by="bob")                                            # closed unmerged
     events = poll_once(fake, tmp_path)
-    assert changes(events)[len(first) + len(second):] == [("github.pr.merged", pr2, "person.github.carol")]
+    assert sorted(changes(events)[len(first) + len(second):]) == [("github.pr.closed", pr1, "person.github.bob"),
+                                                                  ("github.pr.merged", pr2, "person.github.carol")]
+    assert next(e for e in events if e["type"] == "github.pr.closed")["data"]["merged"] is False
     outcome = {e["data"]["head_sha"][:2]: e["data"]["outcome"] for e in events if e["type"] == "github.checks.completed"}
     assert outcome == {"a1": "success", "c3": "failure", "b2": "success"}
     announced = {e["source"]: e["data"] for e in events if e["type"] == "orchestra.machine.started"}
