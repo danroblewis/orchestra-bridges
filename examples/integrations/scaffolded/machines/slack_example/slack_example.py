@@ -142,7 +142,8 @@ def make_poll(api, settings):
             name = channel_name(api, ch)
             policy = policies.get(ch) or policies.get(name)
             base = {"channel": ch, "channel_name": name}
-            for m in history(api, ch, min([seen, *map(float, threads)])):
+            # read fresh (ttl 0): a cached history would hide the newest reply and check
+            for m in history(api, ch, min([seen, *map(float, threads)]), ttl_s=0):
                 if float(m["ts"]) > seen and m["ts"] not in threads:
                     threads[m["ts"]] = started(p, m, base, policy)
                     seen = max(seen, float(m["ts"]))

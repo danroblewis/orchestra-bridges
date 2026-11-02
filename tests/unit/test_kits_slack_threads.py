@@ -113,3 +113,20 @@ def test_the_poller_relays_the_day_once_with_its_counts(program, tmp_path, monke
         for _, name, _ in CHANNELS:
             assert f'slack_threads_awaiting_reply{{channel="{name}"}} 1' in text
             assert f'slack_threads_unchecked{{channel="{name}"}} 3' in text
+
+
+def test_a_poll_reads_fresh_though_the_cache_keeps_answers(program, tmp_path, monkeypatch):
+    """poller.toml's ttl caches the channel's name; the history a poll reads is never a cached one."""
+    monkeypatch.setenv("ORCHESTRATOR_HOME", str(tmp_path / "home"))
+    events_file = tmp_path / "events.jsonl"
+    with FakeSlack() as fake:
+        args = ["--base-url", fake.url, "--state-dir", str(tmp_path / "state"), "--ttl", "600",
+                *set_args(channels=["C001"], since="now"), "--once", "--events-file", str(events_file)]
+        assert program.main(args) == 0
+        parent = fake.post("C001", "U001")
+        assert program.main(args) == 0
+        fake.post("C001", "U002", thread_ts=parent)
+        assert program.main(args) == 0
+        types = [json.loads(x)["type"] for x in events_file.read_text().splitlines()]
+        assert types.count("slack.thread.started") == 1 and types.count("slack.thread.replied") == 1
+        assert len(fake.requests_to("/api/conversations.info")) == 1
