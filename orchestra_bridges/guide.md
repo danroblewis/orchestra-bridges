@@ -63,7 +63,7 @@ owner's word.
 | Jira, Data Center or Cloud | `jira` | `jira.issue.created`, `.assigned`, `.transitioned`; `jira_issues{status, category}` |
 | A Slack channel's threads | `slack` | `slack.thread.started`, `.replied`, `.checked`, `.unchecked`, `slack.message.posted`; `slack_channel_messages_last_hour{channel}`, `slack_threads_awaiting_reply{channel}`, `slack_threads_unchecked{channel}` |
 | PagerDuty | `pagerduty` | `pagerduty.incident.triggered`, `.acknowledged`, `.resolved`; `pagerduty_incidents_open` |
-| A Prometheus API (Chronosphere, Mimir) | `promql` | a few PromQL answers as gauges; prefer Orchestra's own `[[sources]]`, which reads in place with no code |
+| A Prometheus API (Chronosphere, Mimir) | `promql` | a few PromQL answers as gauges; `schema` lists what the team's `selectors` select (names only, bounded; never every name in the store); prefer Orchestra's own `[[sources]]`, which reads in place with no code |
 | Any other JSON API | `http` | a guess at an API no kit knows, for a coding tool to adapt |
 
 - **GitHub's names are one vocabulary**: the Workflows plugin's examples wait on exactly these
@@ -74,6 +74,12 @@ owner's word.
   Enterprise is `base_url = "https://<host>/api/v3"`. Cost: a page of each list a poll, about two
   requests per pull request updated and one or two per open one awaiting its checks; the 5,000 an
   hour is per token, shared with the owner's own `gh`.
+  **A team rather than a repository**: `authors` (their logins) and `org` follow their pull
+  requests across the organisation's repositories by the search API, one search a poll per author
+  (GitHub allows 30 searches a minute per token); issues are not relayed then. Every `github.pr.*`
+  carries `tickets`, the keys (`ABC-123`) in the branch name and title (never the title), narrowed
+  by `projects`: a linker machine relates the pull request to its ticket from them
+  (`item.related {kind: parent}`, the Workflows guide's "whose subject an event is").
 - **Jira's flavour** (`[settings] flavour`): `cloud` speaks REST API v3 (`/rest/api/3/search/jql`,
   paged by `nextPageToken`; Cloud removed `/search`), names people by account id and logs in with
   the account's email and an API token (HTTP Basic: `user_file` or `user_env` names the email);
@@ -81,7 +87,11 @@ owner's word.
   personal access token as Bearer. `auto` (the template's) is `cloud` on `*.atlassian.net` and
   `datacenter` anywhere else; a Cloud site on its own domain needs `cloud` said. The owner's work
   Jira is Data Center. `jql` is the scope, without `ORDER BY` (the script adds its own); infer the
-  project keys from branch names and commit messages (`ABC-123`), and confirm them.
+  project keys from branch names and commit messages (`ABC-123`), and confirm them. `users` (a
+  team's user names, from their sprint board) narrows the scope to `assignee in (...) OR reporter
+  in (...)`; a separate collector per query (the company's Epics, `issuetype = Epic AND updated >=
+  -7d`) keeps each scope's cost visible. `sprint_field` (Data Center: the `customfield_<n>` named
+  "Sprint" in `/rest/api/2/field`) puts the issue's sprint's name on each event.
 - **Slack**: the template reads with a bot token (`xoxb-`, the bot added to each channel). One
   scope table, the same as Orchestra's INTEGRATING:
 
@@ -100,7 +110,10 @@ owner's word.
   times the first reply from the thread's start; the poller adds no deadline. A user token
   (`xoxp-`) reads the same; the owner's own pings (mentions of them, their DMs, their groups) need
   a user token (`search:read`), since a bot cannot search. An app-configuration token (`xoxe.`)
-  reads nothing. `channels` are ids (`C0123`), not names.
+  reads nothing. `channels` are ids (`C0123`), not names. Slack's history is costly to read
+  (`conversations.history` is Tier 3, and far less for an app not in its Marketplace): read each
+  channel every 10 minutes or slower (`every`, or a channel's own `cadence`); a channel answered
+  429 backs off, doubling to `max_backoff`, while the others go on.
 - **Values marked `# guess`** in `poller.toml` (the site, the repository, the scope) are the
   template's placeholders: each is the owner's to give, and `integrations` counts what is left.
 

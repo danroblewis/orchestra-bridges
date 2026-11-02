@@ -27,6 +27,12 @@ every = "5m"
 per_minute = 20                   # conversations.history is Tier 3 (50 a minute); stay under it
 ttl = "4m"
 channels = ["C001"]               # guess: ask the owner (channel ids, not names)
+# A channel read less often than every poll: its own interval (channel id = duration); the others
+# are read each poll. A channel Slack answers 429 (rate limited, after the client's own retries) is
+# left for the poll's interval, doubling at each 429 up to max_backoff, and read again once it is
+# due; the other channels go on.
+cadence = {}                      # e.g. { C001 = "30m" }
+max_backoff = "1h"
 since = "now"                     # where the first run starts: "now", a duration back ("1d"), or an ISO time
 follow = "2d"                     # how long a thread is followed for replies and its check
 check_emoji = "white_check_mark"  # the reaction that marks a thread done

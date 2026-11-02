@@ -20,7 +20,7 @@ TOKEN = fake_token(HERE)        # the placeholder the runner sends a fake on thi
 REAL = "real-token-never-sent-to-a-fake"   # in the environment, yet never read for a fake
 TOKEN_ENV = token_env(HERE, "SLACK_TOKEN")           # poller.toml's, so the owner's variable works too
 CHANNEL = (settings(HERE).get("channels") or ["C001"])[0]   # the fake holds poller.toml's first channel
-SCOPE = set_args(channels=[CHANNEL], since="1d")
+SCOPE = set_args(channels=[CHANNEL], since="1d", cadence={}, max_backoff="1h")
 
 
 def program():
@@ -52,12 +52,12 @@ def fake(tmp_path, monkeypatch):
         yield f
 
 
-def args(fake, tmp, *extra):
-    return [*extra, "--base-url", fake.url, "--state-dir", str(tmp / "state"), "--ttl", "0", *SCOPE]
+def args(fake, tmp, *extra, scope=SCOPE):
+    return [*extra, "--base-url", fake.url, "--state-dir", str(tmp / "state"), "--ttl", "0", *scope]
 
 
-def poll_once(fake, tmp):
-    assert program().main(args(fake, tmp, "--once", "--events-file", str(tmp / "events.jsonl"))) == 0
+def poll_once(fake, tmp, scope=SCOPE):
+    assert program().main(args(fake, tmp, "--once", "--events-file", str(tmp / "events.jsonl"), scope=scope)) == 0
     return [json.loads(x) for x in (tmp / "events.jsonl").read_text().splitlines()]
 
 
@@ -98,6 +98,32 @@ def test_two_polls_relay_each_thread_and_message_once(fake, tmp_path):
     assert events[-1]["data"]["by"] == "unknown"
     assert not any(e["source"] == "bot.slack" for e in events)               # never a source of its own
     assert all(r.authorized for r in fake.requests)
+
+
+def read_of(fake, channel):
+    return [r for r in fake.requests if r.path == "/api/conversations.history" and r.query.get("channel") == [channel]]
+
+
+def test_a_channel_on_its_own_cadence_is_read_only_when_due(fake, tmp_path):
+    fake.data["channels"]["C0QUIET"], fake.data["names"]["C0QUIET"] = [], "quiet"
+    scope = set_args(channels=[CHANNEL, "C0QUIET"], since="1d", cadence={"C0QUIET": "1h"}, max_backoff="1h")
+    poll_once(fake, tmp_path, scope)
+    poll_once(fake, tmp_path, scope)                       # a restart, at once: the quiet one is not due
+    assert len(read_of(fake, CHANNEL)) == 2 and len(read_of(fake, "C0QUIET")) == 1
+
+
+def test_a_rate_limited_channel_backs_off_and_the_others_go_on(fake, tmp_path, capsys):
+    fake.data["channels"]["C0BUSY"], fake.data["names"]["C0BUSY"] = [], "busy"
+    scope = set_args(channels=["C0BUSY", CHANNEL], since="1d", cadence={}, max_backoff="1h")
+    fake.fail_next(429, {"Retry-After": "3600"})           # longer than the client waits: the read fails
+    events = poll_once(fake, tmp_path, scope)               # the poll itself succeeds
+    assert ("started", "person.slack.u001") in threads(events)            # the other channel was read
+    assert "C0BUSY rate limited (429)" in capsys.readouterr().err
+    cursor = json.loads(next((tmp_path / "state").rglob("cursor.json")).read_text())
+    assert cursor["cursor"]["C0BUSY"]["backoff"] >= 1 and cursor["cursor"]["C0BUSY"]["due"] > time.time()
+    before = len(fake.requests)
+    poll_once(fake, tmp_path, scope)                        # backing off: the busy channel is not read
+    assert not [r for r in fake.requests[before:] if r.query.get("channel") == ["C0BUSY"]]
 
 
 def test_measure_counts_the_channel(fake, tmp_path, capsys):

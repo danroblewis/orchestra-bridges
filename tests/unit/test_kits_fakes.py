@@ -9,7 +9,15 @@ import urllib.request
 
 import pytest
 
-from orchestra_bridges.kits.fakes import CANARY, FakeGitHub, FakeJira, FakePagerDuty, FakePrometheus, FakeSlack
+from orchestra_bridges.kits.fakes import (
+    CANARY,
+    FakeGitHub,
+    FakeGitHubOrg,
+    FakeJira,
+    FakePagerDuty,
+    FakePrometheus,
+    FakeSlack,
+)
 
 
 def call(fake, path, params=None, *, method="GET", body=None, auth=None, form=None):
@@ -202,3 +210,52 @@ def test_github_fixture_times_are_recent():
     with FakeGitHub() as g:
         created = call(g, "/repos/acme/service/issues/3")[1]["created_at"]
         assert created.startswith("20") and created.endswith("Z") and not created.startswith("-")
+
+
+def test_jira_jql_for_a_team_its_types_and_its_sprint():
+    """OR (AND binding tighter), assignee and reporter in a list, issue types, open sprints; the
+    sprint field in Data Center's legacy string and Cloud's object."""
+    with FakeJira(token="pat") as j:
+        sprint = {"id": 4, "name": "Sprint 4", "state": "ACTIVE"}
+        j.create("ABC-30", by="dana", assignee="zed", issuetype="Epic", sprint=sprint)
+        j.create("ABC-31", by="zed", assignee="erin", issuetype="UFF")
+        j.create("ABC-32", by="zed", assignee="zed", issuetype="Task")
+
+        def keys(jql):
+            st, body = call(j, "/rest/api/2/search", {"jql": jql, "fields": "status,customfield_10101"}, auth="Bearer pat")
+            assert st == 200, body
+            return [i["key"] for i in body["issues"]]
+
+        assert keys('(project = ABC) AND (assignee in ("dana", "erin") OR reporter in ("dana", "erin")) '
+                    "ORDER BY key ASC") == ["ABC-30", "ABC-31"]
+        assert keys("type = Epic") == ["ABC-30"] and keys("issuetype in (Epic, UFF) ORDER BY key ASC") == ["ABC-30", "ABC-31"]
+        assert keys("sprint in openSprints()") == ["ABC-30"]
+        assert keys("assignee = zed OR reporter = dana ORDER BY key ASC") == ["ABC-30", "ABC-32"]
+        _, body = call(j, "/rest/api/2/search", {"jql": "type = Epic", "fields": "customfield_10101"}, auth="Bearer pat")
+        (raw,) = body["issues"][0]["fields"]["customfield_10101"]
+        assert raw.startswith("com.atlassian.greenhopper.service.sprint.Sprint@") and "name=Sprint 4" in raw
+    with FakeJira(flavour="cloud") as j:
+        j.create("ABC-40", sprint={"id": 5, "name": "Sprint 5", "state": "ACTIVE"})
+        _, body = call(j, "/rest/api/3/search/jql", {"jql": "project = ABC", "fields": "customfield_10101"})
+        got = next(i["fields"]["customfield_10101"] for i in body["issues"] if i["key"] == "ABC-40")
+        assert got[0]["name"] == "Sprint 5" and got[0]["state"] == "active"
+
+
+def test_github_org_search_across_repositories():
+    with FakeGitHubOrg(["acme/api", "acme/web", "other/lib"], token="t") as org:
+        auth = "Bearer t"
+        a = org.repo("acme/api").open_pr("ABC-1-x", by="dana", title="ABC-1: x")
+        org.repo("acme/web").open_pr("y", by="erin")
+        org.repo("other/lib").open_pr("z", by="dana")
+        st, body = call(org, "/search/issues", {"q": "is:pr author:dana org:acme"}, auth=auth)
+        assert st == 200 and body["total_count"] == 1
+        (item,) = body["items"]
+        assert item["repository_url"].endswith("/repos/acme/api") and item["number"] == a and "pull_request" in item
+        assert item["title"].startswith("ABC-1: x") and CANARY in item["title"]
+        st, body = call(org, "/search/issues", {"q": "is:pr author:dana author:erin"}, auth=auth)
+        assert body["total_count"] == 3
+        st, body = call(org, "/search/issues", {"q": "is:pr updated:>=2999-01-01T00:00:00Z"}, auth=auth)
+        assert body["total_count"] == 0
+        assert call(org, f"/repos/acme/api/pulls/{a}", auth=auth)[1]["head"]["ref"] == "ABC-1-x"
+        assert call(org, "/repos/nobody/none/pulls", auth=auth)[0] == 404
+        assert call(org, "/search/issues", {"q": ""}, auth=auth)[0] == 422

@@ -28,6 +28,13 @@ the subject, and always as who acted (never as a source of its own):
 Facts only: a response policy (how soon a thread is to be answered) is the workflow's setting,
 which computes its own deadline from the thread's start; the poller adds none.
 
+**Cadence and backoff** (per channel). Each poll reads every channel that is due: each poll by
+default, or on its own interval (``[settings] cadence``, ``{ C0123 = "30m" }``). A channel Slack
+answers 429 (rate limited) after the client's own retries and its ``Retry-After`` is left, and the
+poll goes on with the others: it is due again after the poll's interval, doubling with each 429 in
+a row up to ``max_backoff`` (1 hour), and back to its cadence after a good read. What it published
+before the 429 is not published again (each event once).
+
 **The cursor** (per channel): the newest top-level message seen and the threads followed (their
 author, the newest reply seen, whether checked), for ``follow`` (2 days) after they started. The
 first run starts at ``[settings] since`` (``now`` by default), never at the beginning of the
@@ -52,6 +59,7 @@ from pathlib import Path
 from orchestra.config import parse_duration
 
 from orchestra_bridges.kits import runner
+from orchestra_bridges.kits.client import HTTPFailure
 from orchestra_bridges.kits.poller import actor_source, start_of
 
 HERE = Path(__file__).resolve().parent
@@ -153,6 +161,8 @@ def make_poll(api, settings):
     channels = settings.extra.get("channels", [])
     emoji = check_emoji(settings)
     follow = parse_duration(settings.extra.get("follow"), 2 * DAY)
+    cadence = {str(ch): parse_duration(v, 0.0) for ch, v in (settings.extra.get("cadence") or {}).items()}
+    max_backoff = parse_duration(settings.extra.get("max_backoff"), 3600.0)
 
     def poll(p):
         now = time.time()
@@ -160,23 +170,42 @@ def make_poll(api, settings):
         out = {}
         for ch in channels:
             st = dict(cursor.get(ch) or {})
-            # No cursor yet: from [settings] since (now by default), never the channel's history.
-            seen = float(st.get("seen") or math.floor(start_of(settings.extra.get("since"), now)))
-            threads = {ts: dict(t) for ts, t in (st.get("threads") or {}).items() if float(ts) > now - follow}
-            base = {"channel": ch, "channel_name": channel_name(api, ch)}
-            url = workspace(api)
-            # read fresh (ttl 0): a cached history would hide the newest reply and check
-            for m in history(api, ch, min([seen, *map(float, threads)]), ttl_s=0):
-                here = {**base, "permalink": permalink(url, ch, m["ts"])}
-                if float(m["ts"]) > seen and m["ts"] not in threads:
-                    threads[m["ts"]] = started(p, m, here)
-                    seen = max(seen, float(m["ts"]))
-                if m["ts"] in threads:
-                    follow_thread(p, api, m, threads[m["ts"]], here, emoji)
-            out[ch] = {"seen": seen, "threads": threads}
+            if now < float(st.get("due") or 0):
+                out[ch] = st                    # not due yet: its cadence, or a backoff after a 429
+                continue
+            try:
+                out[ch] = read_channel(p, api, ch, st, now, settings, emoji, follow)
+            except HTTPFailure as e:
+                if e.status != 429:
+                    raise
+                back = min(max_backoff, max(p.every_s, 2 * float(st.get("backoff") or 0)))
+                print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {p.name}: {ch} rate limited (429): next read in "
+                      f"{back:g}s", file=sys.stderr, flush=True)
+                out[ch] = {**st, "backoff": back, "due": now + back}
+                continue
+            if cadence.get(ch):
+                out[ch]["due"] = now + cadence[ch]
         p.cursor = out
 
     return poll
+
+
+def read_channel(p, api, ch: str, st: dict, now: float, settings, emoji: str, follow: float) -> dict:
+    """One channel's read: its new threads, replies and checks; its cursor (no backoff: a good read)."""
+    # No cursor yet: from [settings] since (now by default), never the channel's history.
+    seen = float(st.get("seen") or math.floor(start_of(settings.extra.get("since"), now)))
+    threads = {ts: dict(t) for ts, t in (st.get("threads") or {}).items() if float(ts) > now - follow}
+    base = {"channel": ch, "channel_name": channel_name(api, ch)}
+    url = workspace(api)
+    # read fresh (ttl 0): a cached history would hide the newest reply and check
+    for m in history(api, ch, min([seen, *map(float, threads)]), ttl_s=0):
+        here = {**base, "permalink": permalink(url, ch, m["ts"])}
+        if float(m["ts"]) > seen and m["ts"] not in threads:
+            threads[m["ts"]] = started(p, m, here)
+            seen = max(seen, float(m["ts"]))
+        if m["ts"] in threads:
+            follow_thread(p, api, m, threads[m["ts"]], here, emoji)
+    return {"seen": seen, "threads": threads}
 
 
 def started(p, m: dict, base: dict) -> dict:
