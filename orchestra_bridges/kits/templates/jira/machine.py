@@ -22,7 +22,10 @@ with the issue key as the subject and who acted as the source (``person.jira.<ac
 - each ``jira.issue.*`` also carries the issue as it is **now**, when the poll read it: ``status``
   (its name), ``category`` (its status category's key: ``new``, ``indeterminate``, ``done``),
   ``issuetype`` (its name) and ``labels`` (their names), so a workflow's start can refuse an issue
-  already done (``"category": {"not": ["done"]}``) or keep one type (a bug, a PRR ticket);
+  already done (``"category": {"not": ["done"]}``) or keep one type (a bug, an Epic, a PRR
+  ticket); with ``[settings] sprint_field``, also ``sprint``: the name of its open sprint, else its
+  latest (Data Center's legacy ``Sprint@…[…,name=…]`` string or Cloud's object; the sprint's goal
+  is never kept);
 - ``jira.comment.added`` for each comment (as its author; data: the issue and the author's account:
   never its text).
 
@@ -31,6 +34,9 @@ or a time: ``start_of``), never at the beginning of the project's history: no ch
 is relayed, and of a catch-up window it relays only the issues not yet done (status category
 ``done``), so a finished ticket is never relayed as assigned. Later polls relay every change, a
 move to Done included.
+
+**The scope** is ``[settings] jql``, narrowed to a team when ``[settings] users`` names them:
+``(jql) AND (assignee in (...) OR reporter in (...))`` (``scope_of``), for the poll and ``measure``.
 
 The JQL's time is relative (``updated >= "-15m"``), so Jira's time zone for the token's user does not
 matter. ``python {{name}}.py measure`` (for a ``[[collect]]`` entry) prints ``jira_issues{status,
@@ -42,6 +48,7 @@ Never a summary, description, comment or a person's display name or email."""
 from __future__ import annotations
 
 import math
+import re
 import sys
 import time
 import urllib.parse
@@ -86,6 +93,53 @@ def rfc3339(t: str) -> str:
 def _id(u) -> str | None:
     """A person's account: Cloud's account id, or Data Center's user name. Never a display name."""
     return (u.get("accountId") or u.get("name")) if isinstance(u, dict) else None
+
+
+SPRINT = re.compile(r"\[(.*)\]\s*$", re.DOTALL)
+
+
+def _sprints(value) -> list[dict]:
+    """The sprints of an issue's Agile sprint field: id, name, state (never the goal), from Data
+    Center's legacy strings (``…Sprint@1f[id=12,state=ACTIVE,name=Sprint 42,…]``) or Cloud's objects."""
+    out = []
+    for v in value if isinstance(value, list) else []:
+        if isinstance(v, dict):
+            out.append({"id": v.get("id"), "name": v.get("name"), "state": str(v.get("state") or "").lower()})
+        elif isinstance(v, str) and (m := SPRINT.search(v)):
+            parts = dict(kv.split("=", 1) for kv in re.split(r",(?=\w+=)", m.group(1)) if "=" in kv)
+            out.append({"id": parts.get("id"), "name": parts.get("name"), "state": (parts.get("state") or "").lower()})
+    return [s for s in out if s.get("name")]
+
+
+def sprint_of(value) -> str | None:
+    """The issue's open sprint's name, else its latest's."""
+    sprints = _sprints(value)
+    active = [s for s in sprints if s["state"] == "active"]
+    return (active or sprints or [{}])[-1].get("name")
+
+
+def scope_of(settings) -> str:
+    """The issues in scope: ``[settings] jql``, and with ``users`` only those assigned to or
+    reported by one of them."""
+    jql = str(settings.extra.get("jql", "project = ABC") or "").strip()
+    users = [str(u) for u in settings.extra.get("users") or [] if str(u).strip()]
+    if not users:
+        return jql
+    names = ", ".join('"' + u.replace('"', "") + '"' for u in users)
+    team = f"assignee in ({names}) OR reporter in ({names})"
+    return f"({jql}) AND ({team})" if jql else team
+
+
+def keep_changes_of(sprint_field: str | None):
+    """``keep_changes``, with the issue's sprint's name from ``sprint_field``."""
+    def keep(body: dict) -> dict:
+        page = keep_changes(body)
+        if sprint_field:
+            by_key = {i["key"]: (i.get("fields") or {}).get(sprint_field) for i in body.get("issues") or []}
+            for i in page["issues"]:
+                i["sprint"] = sprint_of(by_key.get(i["key"]))
+        return page
+    return keep
 
 
 def keep_changes(body: dict) -> dict:
@@ -151,8 +205,11 @@ def search(api, settings, jql: str, keep, ttl_s: float | None = None, **params) 
 def now_of(issue: dict) -> dict:
     """The issue as the poll read it (not as it was at the change): its status, status category,
     type and labels, carried on every ``jira.issue.*`` event."""
-    return {"status": issue["status"], "category": issue.get("category"), "issuetype": issue.get("issuetype"),
-            "labels": list(issue.get("labels") or [])}
+    now = {"status": issue["status"], "category": issue.get("category"), "issuetype": issue.get("issuetype"),
+           "labels": list(issue.get("labels") or [])}
+    if "sprint" in issue:
+        now["sprint"] = issue["sprint"]
+    return now
 
 
 def relay(p, issue: dict, began: float) -> None:
@@ -181,7 +238,9 @@ def relay(p, issue: dict, began: float) -> None:
 
 
 def make_poll(api, settings):
-    scope = settings.extra.get("jql", "project = ABC")
+    scope = scope_of(settings)
+    sprint_field = str(settings.extra.get("sprint_field") or "")
+    fields = "status,assignee,creator,created,comment,issuetype,labels" + (f",{sprint_field}" if sprint_field else "")
     overlap = parse_duration(settings.extra.get("overlap"), 600.0)
 
     def poll(p):
@@ -197,8 +256,8 @@ def make_poll(api, settings):
         minutes = math.ceil((started - since + overlap) / 60)
         jql = f'({scope}) AND updated >= "-{minutes}m" ORDER BY updated ASC'
         # changes are read fresh (ttl 0): a cached answer would hide the newest
-        for issue in search(api, settings, jql, keep_changes, fields="status,assignee,creator,created,comment,issuetype,labels",
-                            expand="changelog", ttl_s=0):
+        for issue in search(api, settings, jql, keep_changes_of(sprint_field), fields=fields, expand="changelog",
+                            ttl_s=0):
             if first and issue["category"] == "done":
                 continue                                # a catch-up relays the work not yet done
             relay(p, issue, began)
@@ -209,7 +268,7 @@ def make_poll(api, settings):
 
 def measure(api, settings, series) -> None:
     counts: dict[tuple, int] = {}
-    for i in search(api, settings, settings.extra.get("jql", "project = ABC"), keep_statuses, fields="status"):
+    for i in search(api, settings, scope_of(settings), keep_statuses, fields="status"):
         counts[(i["status"], i["category"])] = counts.get((i["status"], i["category"]), 0) + 1
     for (status, category), n in sorted(counts.items()):
         series.gauge("jira_issues", n, {"status": status, "category": category}, help="Jira issues in scope by status.")

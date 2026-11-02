@@ -28,8 +28,8 @@ TOKEN_ENV = token_env(HERE, "JIRA_API_TOKEN")        # poller.toml's, so the own
 # run is given `project = <it>` (the rest of the owner's JQL is theirs; the fake knows only projects).
 _named = re.search(r'(?i)\bproject\s*(?:=|in\s*\()\s*"?([A-Z][A-Z0-9_]*)', settings(HERE).get("jql", ""))
 PROJECT = _named.group(1) if _named and _named.group(1) != "OPS" else "ABC"   # OPS: the fixture's out-of-scope one
-SCOPE = set_args(jql=f"project = {PROJECT}", since="now")
-CATCH_UP = set_args(jql=f"project = {PROJECT}", since="1d")     # the first run reads the last day
+SCOPE = set_args(jql=f"project = {PROJECT}", since="now", users=[], sprint_field="")
+CATCH_UP = set_args(jql=f"project = {PROJECT}", since="1d", users=[], sprint_field="")     # the first run reads the last day
 
 
 def program(here=HERE):
@@ -141,6 +141,23 @@ def test_each_issue_event_carries_the_issue_now_so_a_start_can_refuse_one_alread
         assert {k: got[t][k] for k in NOW} == {"status": "Done", "category": "done", "issuetype": "Bug",
                                                 "labels": ["prr"]}, t
     assert got["jira.issue.assigned"]["assignee"] == "alice"
+
+
+def test_a_team_scope_and_the_sprint(fake, tmp_path):
+    """``users`` keeps the team's issues (assigned to or reported by one of them); ``sprint_field``
+    puts the issue's open sprint's name on each event, in this flavour's shape."""
+    team = set_args(jql=f"project = {PROJECT}", since="now", users=["dana", "erin"], sprint_field="customfield_10101")
+    poll_once(fake, tmp_path, team)
+    sprint = {"id": 7, "name": "Team Sprint 7", "state": "ACTIVE"}
+    fake.create(f"{PROJECT}-20", by="dana", assignee="zed", issuetype="Epic", sprint=sprint)   # reported by the team
+    fake.create(f"{PROJECT}-21", by="zed", assignee="erin", issuetype="UFF")                 # assigned to the team
+    fake.create(f"{PROJECT}-22", by="zed", assignee="zed", sprint=sprint)                    # not the team's
+    made = {e["subject"]: e["data"] for e in poll_once(fake, tmp_path, team) if e["type"] == "jira.issue.created"}
+    assert set(made) == {f"{PROJECT}-20", f"{PROJECT}-21"}
+    assert made[f"{PROJECT}-20"]["issuetype"] == "Epic" and made[f"{PROJECT}-20"]["sprint"] == "Team Sprint 7"
+    assert made[f"{PROJECT}-21"]["issuetype"] == "UFF" and made[f"{PROJECT}-21"]["sprint"] is None
+    searched = [r for r in fake.requests if r.path.endswith("/search") or r.path.endswith("/search/jql")]
+    assert all("assignee in" in (r.query.get("jql") or [""])[0] for r in searched)
 
 
 def test_measure_counts_by_status(fake, tmp_path, capsys):

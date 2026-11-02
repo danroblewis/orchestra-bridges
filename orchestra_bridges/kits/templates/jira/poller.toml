@@ -27,6 +27,14 @@ every = "5m"
 per_minute = 20
 ttl = "4m"
 jql = "project = ABC"             # guess: ask the owner (the issues in scope; no ORDER BY, the poller adds its own)
+# users: a team, by their Jira user names (Data Center) or account ids (Cloud): the scope becomes
+# (jql) AND (assignee in (...) OR reporter in (...)); empty: the jql alone. A sprint board's
+# members are a good start (the board's filter names them, or its issues' assignees).
+users = []
+# sprint_field: the Agile sprint field's id on this Jira (Data Center: customfield_<n>, the one whose
+# name is "Sprint" in /rest/api/2/field); set, each event carries the issue's sprint's name (the
+# open one, else the latest). Empty: no sprint.
+sprint_field = ""
 since = "now"                     # where the first run starts: "now", a duration back ("1d"; issues not yet done only), or an ISO time
 overlap = "10m"                   # each poll re-reads this much before the last one
 
@@ -34,7 +42,7 @@ overlap = "10m"                   # each poll re-reads this much before the last
 type = "jira.issue.created"
 subject = "the issue key (ABC-12)"
 source = "its creator: person.jira.<account>"
-data = "status, category, issuetype, labels: the issue now"
+data = "status, category, issuetype, labels (and sprint, with sprint_field): the issue now"
 
 [[publishes]]
 type = "jira.issue.assigned"

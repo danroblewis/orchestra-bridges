@@ -12,10 +12,16 @@ Both serve ``/myself`` (the token's account: ``me``), ``/issue/<key>`` and
 ``/issue/<key>/transitions`` (GET lists them; POST ``{"transition": {"id"}}`` moves the issue,
 which a read-only machine never does, but a test may, to change the world).
 
-It understands a small JQL: clauses joined by ``AND``, each ``project = X``, ``project in (X, Y)``,
-``status = "S"``, ``status in (...)``, ``statusCategory = Done`` / ``!= Done``, ``assignee = x`` /
-``is EMPTY``, ``updated >= "2026-10-31 08:00"`` (or ``-15m``, against now), and ``ORDER BY updated
-ASC|DESC`` (or ``key``). ``expand=changelog`` adds each issue's changes (status changes, and the
+It understands a small JQL: clauses joined by ``AND`` and ``OR`` (``AND`` binding tighter, and
+parentheses), each ``project = X``, ``project in (X, Y)``, ``status = "S"``, ``status in (...)``,
+``statusCategory = Done`` / ``!= Done``, ``assignee = x`` / ``in (x, y)`` / ``is EMPTY``,
+``reporter = x`` / ``in (x, y)`` (the creator), ``issuetype = Epic`` / ``type in (Epic, UFF)``,
+``sprint in openSprints()``, ``updated >= "2026-10-31 08:00"`` (or ``-15m``, ``-7d``, against now),
+and ``ORDER BY updated ASC|DESC`` (or ``key``). An issue's ``sprint`` (``{"id", "name", "state"}``)
+is served in the fixture's ``sprint_field`` (``customfield_10101`` by default) as each flavour
+serves the Agile sprint field: Data Center's legacy string
+(``com.atlassian.greenhopper.service.sprint.Sprint@…[id=…,state=ACTIVE,name=…,goal=…]``), Cloud's
+objects. ``expand=changelog`` adds each issue's changes (status changes, and the
 edits ``edit`` makes) with their authors; anything else is a 400, as Jira answers a query it cannot
 parse. Each issue has its ``creator`` (and ``reporter``) when the fixture names one. Every summary,
 display name, edited value and comment's body carries the canary. Each issue's ``comment`` field
@@ -74,8 +80,9 @@ def _balanced(s: str) -> bool:
     return depth == 0
 
 
-def _split_and(body: str) -> list[str]:
-    """``body`` split on its top-level ``AND``s (not those inside parentheses or quotes)."""
+def _split(body: str, word: str) -> list[str]:
+    """``body`` split on its top-level ``word``s (``AND``, ``OR``; not inside parentheses or quotes)."""
+    sep = f" {word} "
     parts, depth, quote, cur, i = [], 0, False, "", 0
     while i < len(body):
         ch = body[i]
@@ -83,20 +90,30 @@ def _split_and(body: str) -> list[str]:
             quote = not quote
         elif not quote:
             depth += {"(": 1, ")": -1}.get(ch, 0)
-        if not quote and depth == 0 and body[i:i + 5].upper() == " AND ":
+        if not quote and depth == 0 and body[i:i + len(sep)].upper() == sep:
             parts.append(cur)
-            cur, i = "", i + 5
+            cur, i = "", i + len(sep)
             continue
         cur += ch
         i += 1
     return [*parts, cur]
 
 
+def _split_and(body: str) -> list[str]:
+    return _split(body, "AND")
+
+
+def _expr(body: str, categories: dict[str, str], now: datetime):
+    """The predicate of ``a AND b OR c AND d`` (``AND`` binding tighter)."""
+    ors = [[_clause(c.strip(), categories, now) for c in _split_and(o) if c.strip()] for o in _split(body, "OR")]
+    ors = [a for a in ors if a]
+    return lambda i: not ors or any(all(p(i) for p in a) for a in ors)
+
+
 def _clause(c: str, categories: dict[str, str], now: datetime):
     """The predicate of one JQL clause (a parenthesised conjunction too); raises BadJQL."""
     if c.startswith("(") and c.endswith(")") and _balanced(c[1:-1]):
-        preds = [_clause(x.strip(), categories, now) for x in _split_and(c[1:-1]) if x.strip()]
-        return lambda i: all(p(i) for p in preds)
+        return _expr(c[1:-1], categories, now)
     if m := re.fullmatch(r"(?i)project\s*=\s*\"?([A-Z][A-Z0-9_]*)\"?", c):
         project = m.group(1)
         return lambda i: i["project"] == project
@@ -115,9 +132,20 @@ def _clause(c: str, categories: dict[str, str], now: datetime):
         return lambda i: (categories.get(i["status"]) == want) == eq
     if re.fullmatch(r"(?i)assignee\s+is\s+empty", c):
         return lambda i: not i.get("assignee")
-    if m := re.fullmatch(r"(?i)assignee\s*=\s*\"?([\w.@-]+)\"?", c):
-        who = m.group(1)
-        return lambda i: i.get("assignee") == who
+    if m := re.fullmatch(r"(?i)(assignee|reporter)\s*=\s*\"?([\w.@-]+)\"?", c):
+        field, who = ("creator" if m.group(1).lower() == "reporter" else "assignee"), m.group(2)
+        return lambda i: i.get(field) == who
+    if m := re.fullmatch(r"(?i)(assignee|reporter)\s+in\s*(\(.*\))", c):
+        field, people = ("creator" if m.group(1).lower() == "reporter" else "assignee"), _values(m.group(2))
+        return lambda i: i.get(field) in people
+    if m := re.fullmatch(r"(?i)(?:issuetype|type)\s*=\s*(\"[^\"]+\"|[\w-]+)", c):
+        kind = m.group(1).strip('"').lower()
+        return lambda i: i["issuetype"].lower() == kind
+    if m := re.fullmatch(r"(?i)(?:issuetype|type)\s+in\s*(\(.*\))", c):
+        kinds = [x.lower() for x in _values(m.group(1))]
+        return lambda i: i["issuetype"].lower() in kinds
+    if re.fullmatch(r"(?i)sprint\s+in\s+openSprints\(\)", c):
+        return lambda i: (i.get("sprint") or {}).get("state", "").upper() == "ACTIVE"
     if m := re.fullmatch(r"(?i)updated\s*(>=|>|<=|<)\s*(.+)", c):
         t = _when(m.group(2), now)
         cmp = {">=": lambda a, b: a >= b, ">": lambda a, b: a > b, "<=": lambda a, b: a <= b, "<": lambda a, b: a < b}[m.group(1)]
@@ -132,7 +160,7 @@ def compile_jql(jql: str, categories: dict[str, str], now: datetime):
     body, order = parts[0], parts[1] if len(parts) > 1 else ""
     if re.match(r"(?i)order\s+by\s+", body):
         body, order = "", re.sub(r"(?i)^order\s+by\s+", "", body)
-    preds = [_clause(c.strip(), categories, now) for c in _split_and(body) if c.strip()]
+    pred = _expr(body, categories, now)
     field, reverse = "key", False
     if order.strip():
         m = re.fullmatch(r"(?i)\s*(updated|created|key)\s*(asc|desc)?\s*", order)
@@ -146,7 +174,7 @@ def compile_jql(jql: str, categories: dict[str, str], now: datetime):
             return (p, int(n))
         return jira_time(i[field])
 
-    return (lambda i: all(p(i) for p in preds)), order_key, reverse
+    return pred, order_key, reverse
 
 
 class FakeJira(FakeServer):
@@ -169,6 +197,22 @@ class FakeJira(FakeServer):
             return {"accountId": login, "displayName": f"{CANARY} {login}", "emailAddress": CANARY}
         return {"name": login, "key": login, "displayName": f"{CANARY} {login}"}
 
+    @property
+    def sprint_field(self) -> str:
+        return self.data.get("sprint_field") or "customfield_10101"
+
+    def _sprint(self, sp: dict | None) -> list | None:
+        """The Agile sprint field as each flavour serves it: Data Center's legacy string, Cloud's object."""
+        if not sp:
+            return None
+        if self.flavour == "cloud":
+            return [{"id": sp["id"], "name": sp["name"], "state": sp.get("state", "active").lower(), "boardId": 1,
+                     "goal": CANARY}]
+        legacy = (f"com.atlassian.greenhopper.service.sprint.Sprint@1f2e3d[id={sp['id']},rapidViewId=1,"
+                  f"state={sp.get('state', 'ACTIVE').upper()},name={sp['name']},startDate=2026-10-26T09:00:00.000Z,"
+                  f"endDate=2026-11-09T09:00:00.000Z,completeDate=<null>,sequence={sp['id']},goal={CANARY}]")
+        return [legacy]
+
     def _issue(self, i: dict, fields: list[str] | None = None, changelog: bool = False) -> dict:
         cat = self.data["statuses"].get(i["status"], "new")
         cname, cid = CATEGORY[cat]
@@ -180,6 +224,7 @@ class FakeJira(FakeServer):
             "assignee": self._user(i.get("assignee")),
             "created": i["created"], "updated": i["updated"],
             "creator": self._user(i.get("creator")), "reporter": self._user(i.get("creator")),
+            self.sprint_field: self._sprint(i.get("sprint")),
             "comment": {"startAt": 0, "maxResults": len(i.get("comments") or []), "total": len(i.get("comments") or []),
                         "comments": [{"id": c["id"], "author": self._user(c["by"]), "body": f"{CANARY} comment",
                                       "created": c["at"], "updated": c["at"]} for c in i.get("comments") or []]},
@@ -205,16 +250,17 @@ class FakeJira(FakeServer):
 
     # the test's controls
     def create(self, key: str, status: str = "Open", by: str | None = "alice", at: datetime | None = None,
-               assignee: str | None = None, issuetype: str = "Task", labels: list[str] | None = None) -> None:
+               assignee: str | None = None, issuetype: str = "Task", labels: list[str] | None = None,
+               sprint: dict | None = None) -> None:
         """A new issue ``key`` (its project is the key's prefix) in ``status``, created by ``by``
-        (assigned to ``assignee`` from the start: Jira writes no changelog for that), of
-        ``issuetype``, with ``labels``."""
+        (its reporter too; assigned to ``assignee`` from the start: Jira writes no changelog for
+        that), of ``issuetype``, with ``labels``, in ``sprint`` (``{"id", "name", "state"}``)."""
         with self._lock:
             t = stamp(at or datetime.now(UTC))
             n = 10000 + len(self.data["issues"]) + 1
             self.data["issues"].append({"id": str(n), "key": key, "project": key.split("-")[0],
                                         "summary": f"{CANARY}: {key}", "status": status, "issuetype": issuetype,
-                                        "labels": list(labels or []),
+                                        "labels": list(labels or []), "sprint": sprint,
                                         "priority": "Medium", "assignee": assignee, "creator": by,
                                         "created": t, "updated": t})
 
