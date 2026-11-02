@@ -82,18 +82,25 @@ owner's word.
   `datacenter` anywhere else; a Cloud site on its own domain needs `cloud` said. The owner's work
   Jira is Data Center. `jql` is the scope, without `ORDER BY` (the script adds its own); infer the
   project keys from branch names and commit messages (`ABC-123`), and confirm them.
-- **Slack**: the template reads with a bot token (`xoxb-`, the bot added to each channel) with
-  exactly `channels:history` (the history and the threads, reactions included) and `channels:read`
-  (the channel's name), and for a private channel `groups:history` and `groups:read`; no
-  `users:read` (a bot's message says it is one), no `reactions:read` (the parent's reactions come
-  with the history), no `chat:write`. Keep it in `~/.config/orchestra-bridges/slack-token`
-  (`chmod 600`, `token_file`). It relays each thread's start, its replies (`first`: the first by a
-  person other than the author), the check emoji added (`checked`, as who added it) and removed
-  (`unchecked`, as `bot.slack`: Slack does not say who); `policies` (per channel, `"2h"`) adds the
-  first-reply deadline. A user token (`xoxp-`) reads the same; the owner's own pings (mentions of them,
-  their DMs, their groups) need a user token (`search:read`), since a bot cannot search; posting is
-  a bot token's (`chat:write`) and an Outbox draft, never the kit. An app-configuration token
-  (`xoxe.`) reads nothing. `channels` are ids (`C0123`), not names.
+- **Slack**: the template reads with a bot token (`xoxb-`, the bot added to each channel). One
+  scope table, the same as Orchestra's INTEGRATING:
+
+  | To | Scopes |
+  |---|---|
+  | read (the kit: history, threads, reactions, the channel's name) | `channels:history`, `channels:read`; for a private channel also `groups:history`, `groups:read` |
+  | post (an Outbox draft, never the kit) | adds `chat:write` |
+
+  No `users:read` (a bot's message says it is one), no `reactions:read` (the parent's reactions
+  come with the history). Keep it in `~/.config/orchestra-bridges/slack-token` (`chmod 600`,
+  `token_file`). It relays facts, each as who acted: each thread's start, its replies (`first`: the
+  first by a person other than the author), the check emoji added (`checked`, as who added it) and
+  removed (`unchecked`, as who had checked it, since only they can remove it; when several had,
+  as the thread's author with `by: "unknown"`), each with the thread's `permalink`. A channel's
+  response policy is the workflow's setting (`orchestra-workflows/examples/slack_queues`), which
+  times the first reply from the thread's start; the poller adds no deadline. A user token
+  (`xoxp-`) reads the same; the owner's own pings (mentions of them, their DMs, their groups) need
+  a user token (`search:read`), since a bot cannot search. An app-configuration token (`xoxe.`)
+  reads nothing. `channels` are ids (`C0123`), not names.
 - **Values marked `# guess`** in `poller.toml` (the site, the repository, the scope) are the
   template's placeholders: each is the owner's to give, and `integrations` counts what is left.
 

@@ -84,7 +84,19 @@ def test_two_polls_relay_each_thread_and_message_once(fake, tmp_path):
     assert threads(events)[3:] == [("checked", "person.slack.u002"), ("started", "person.slack.u002")]
     fake.unreact(CHANNEL, parent, "U002")
     events = poll_once(fake, tmp_path)
-    assert threads(events)[5:] == [("unchecked", "bot.slack")]
+    assert threads(events)[5:] == [("unchecked", "person.slack.u002")]      # only who checked it can remove it
+    unchecked = next(e for e in events if e["type"] == "slack.thread.unchecked")
+    assert unchecked["data"]["by"] == "U002"
+    assert unchecked["data"]["permalink"].endswith(f"/archives/{CHANNEL}/p{parent.replace('.', '')}")
+    fake.react(CHANNEL, parent, "U001")
+    fake.react(CHANNEL, parent, "U002")
+    poll_once(fake, tmp_path)
+    fake.unreact(CHANNEL, parent, "U001")
+    fake.unreact(CHANNEL, parent, "U002")
+    events = poll_once(fake, tmp_path)                                         # both removed: whose was last?
+    assert threads(events)[-1] == ("unchecked", "person.slack.u001")         # the thread's author
+    assert events[-1]["data"]["by"] == "unknown"
+    assert not any(e["source"] == "bot.slack" for e in events)               # never a source of its own
     assert all(r.authorized for r in fake.requests)
 
 
