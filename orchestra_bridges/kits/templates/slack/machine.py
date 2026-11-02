@@ -1,89 +1,217 @@
-"""{{name}}: a poller that relays the messages posted in a few Slack channels (scaffolded from the
-orchestra-bridges kit ``slack``; edit freely, AGENTS.md says what it may do). A bot or user token
-with ``channels:history`` and ``users:read`` (``Bearer``).
+"""{{name}}: a poller that relays the threads of a few Slack channels, as who acted (scaffolded from
+the orchestra-bridges kit ``slack``; edit freely, AGENTS.md says what it may do). A bot token
+(``xoxb-``, the bot added to each channel) with ``channels:history`` and ``channels:read``, and for
+a private channel ``groups:history`` and ``groups:read``; nothing else (``Bearer``). It never posts.
 
-``python {{name}}.py`` (the poller): each poll reads each channel's history since its last message
-seen (``conversations.history``, ``oldest``), and publishes ``slack.message.posted`` once per
-message, as whoever posted it (``person.slack.<member id>``, ``bot.slack.<id>`` for a bot), with
-``<channel>/<thread ts>`` as the subject (a reply's thread, or the message's own ts). Whether a
-member is a bot is read once (``users.info``, cached a day).
+``python {{name}}.py`` (the poller): each poll reads, per channel, its history over the threads it
+follows (``conversations.history``: the top-level messages, each parent with its replies' summary
+and its reactions) and, for a thread with a reply it has not seen, the thread
+(``conversations.replies``). The channel's name is read once a day (``conversations.info``). It
+publishes, each once, with ``<channel>/<thread ts>`` as the subject:
 
-``python {{name}}.py measure`` (for a ``[[collect]]`` entry): prints
-``slack_channel_messages_last_hour{channel}``.
+- ``slack.thread.started``, a new top-level message, as its author (``person.slack.<member id>``,
+  ``bot.slack.<id>`` for a bot's); data: ``channel``, ``channel_name``, ``user``, ``bot``, and with
+  a policy for the channel (``[settings] policies``) ``policy_s`` and ``first_reply_deadline``;
+- ``slack.thread.replied``, each reply, as who replied; data: ``channel``, ``channel_name``,
+  ``user``, ``author`` (the thread's), ``by_author``, ``bot``, ``first`` (the first reply by a
+  person other than the author: neither the author's bump nor a bot's) and, with a policy,
+  ``in_time``;
+- ``slack.thread.checked``, the check emoji (``[settings] check_emoji``) added on the parent, as
+  the first who added it; data: ``channel``, ``channel_name``, ``by``, ``emoji``;
+- ``slack.thread.unchecked``, the last check removed, as ``bot.slack`` (Slack does not say who);
+- ``slack.message.posted``, each message, as before (data: channel, reply or not, bot or not).
 
-It keeps metadata only: channel and member ids, timestamps, whether a message is a reply or a
-bot's. Never a message's text or a person's name."""
+**The cursor** (per channel): the newest top-level message seen and the threads followed (their
+author, the newest reply seen, whether checked), for ``follow`` (2 days) after they started. The
+first run starts at ``[settings] since`` (``now`` by default), never at the beginning of the
+channel's history, and a restart never relays a thing twice (the ids are kept too).
+
+``python {{name}}.py measure`` (for a ``[[collect]]`` entry): prints, per channel's name,
+``slack_channel_messages_last_hour{channel}``, ``slack_threads_awaiting_reply{channel}`` (the
+threads of the last ``window`` with no reply by anyone but their author) and
+``slack_threads_unchecked{channel}`` (without the check emoji).
+
+It keeps metadata only: channel and member ids, the channel's name, timestamps, reaction names.
+Never a message's text or a person's name."""
 
 from __future__ import annotations
 
+import math
 import sys
 import time
 from datetime import UTC, datetime
 from pathlib import Path
 
+from orchestra.config import parse_duration
+
 from orchestra_bridges.kits import runner
-from orchestra_bridges.kits.poller import actor_source
+from orchestra_bridges.kits.poller import actor_source, start_of
 
 HERE = Path(__file__).resolve().parent
 PAGE = 200
 DAY = 86400.0
+CHECK = "white_check_mark"
 
 
 class SlackError(Exception):
     pass
 
 
-def keep_history(body: dict) -> dict:
-    """What is kept of a channel's history: never a message's text."""
+def _ok(body: dict) -> dict:
     if not body.get("ok"):
         raise SlackError(str(body.get("error")))
-    return {"messages": [{"ts": m["ts"], "user": m.get("user") or m.get("bot_id"), "thread": m.get("thread_ts"),
-                          "bot": bool(m.get("bot_id"))} for m in body.get("messages") or []],
+    return body
+
+
+def _message(m: dict) -> dict:
+    return {"ts": m["ts"], "user": m.get("user") or m.get("bot_id"), "thread": m.get("thread_ts"),
+            "bot": bool(m.get("bot_id")), "subtype": m.get("subtype"),
+            "latest_reply": m.get("latest_reply"), "reply_users": list(m.get("reply_users") or []),
+            "reactions": {r["name"]: list(r.get("users") or []) for r in m.get("reactions") or [] if r.get("name")}}
+
+
+def keep_messages(body: dict) -> dict:
+    """What is kept of a history or a thread: never a message's text."""
+    _ok(body)
+    return {"messages": [_message(m) for m in body.get("messages") or []],
             "next": (body.get("response_metadata") or {}).get("next_cursor") or ""}
 
 
-def keep_user(body: dict) -> dict:
-    if not body.get("ok"):
-        return {"bot": False}
-    return {"bot": bool(body["user"].get("is_bot"))}
+def keep_channel(body: dict) -> dict:
+    c = _ok(body)["channel"]
+    return {"name": c.get("name") or c["id"]}
 
 
-def history(api, channel: str, oldest: float, ttl_s: float | None = None) -> list[dict]:
+def pages(api, path: str, params: dict, ttl_s: float | None = None) -> list[dict]:
     out, cursor = [], ""
     while True:
-        page = api.get("/api/conversations.history", {"channel": channel, "oldest": f"{oldest:.6f}", "limit": PAGE,
-                                                      "cursor": cursor or None}, keep=keep_history, ttl_s=ttl_s)
+        page = api.get(path, {**params, "limit": PAGE, "cursor": cursor or None}, keep=keep_messages, ttl_s=ttl_s)
         out += page["messages"]
         if not (cursor := page["next"]):
             return out
 
 
+def history(api, channel: str, oldest: float, ttl_s: float | None = None) -> list[dict]:
+    """The channel's top-level messages from ``oldest`` (inclusive), oldest first."""
+    got = pages(api, "/api/conversations.history",
+                {"channel": channel, "oldest": f"{oldest:.6f}", "inclusive": "true"}, ttl_s)
+    return sorted((m for m in got if top_level(m)), key=lambda m: float(m["ts"]))
+
+
+def replies(api, channel: str, ts: str, after: str) -> list[dict]:
+    """The thread's replies after ``after``, oldest first (read fresh)."""
+    got = pages(api, "/api/conversations.replies", {"channel": channel, "ts": ts, "oldest": after}, ttl_s=0)
+    return sorted((m for m in got if m["ts"] != ts and float(m["ts"]) > float(after)), key=lambda m: float(m["ts"]))
+
+
+THREADS = (None, "bot_message", "me_message", "file_share")   # a person's or a bot's message; no join, topic, pin
+
+
+def top_level(m: dict) -> bool:
+    """A thread's parent: neither a reply (a broadcast reply is one too) nor a channel notice."""
+    return m["thread"] in (None, m["ts"]) and m["subtype"] in THREADS
+
+
+def channel_name(api, channel: str) -> str:
+    return api.get("/api/conversations.info", {"channel": channel}, keep=keep_channel, ttl_s=DAY)["name"]
+
+
+def iso(ts: float | str) -> str:
+    return datetime.fromtimestamp(float(ts), UTC).isoformat()
+
+
+def who(m: dict) -> str:
+    return actor_source("slack", m["user"], bot=m["bot"])
+
+
 def make_poll(api, settings):
     channels = settings.extra.get("channels", [])
-    lookback = float(settings.extra.get("lookback_s", DAY))
+    emoji = settings.extra.get("check_emoji", CHECK)
+    follow = parse_duration(settings.extra.get("follow"), 2 * DAY)
+    policies = {str(k): parse_duration(v, 0.0) for k, v in (settings.extra.get("policies") or {}).items()}
 
     def poll(p):
-        seen = dict(p.cursor or {})
+        now = time.time()
+        cursor = p.cursor if isinstance(p.cursor, dict) else {}
+        out = {}
         for ch in channels:
-            oldest = float(seen.get(ch) or time.time() - lookback)
-            for m in sorted(history(api, ch, oldest, ttl_s=0), key=lambda m: float(m["ts"])):
-                bot = m["bot"] or (m["user"] and api.get("/api/users.info", {"user": m["user"]}, keep=keep_user,
-                                                          ttl_s=DAY)["bot"])
-                p.emit("slack.message.posted", f"{ch}/{m['thread'] or m['ts']}",
-                       {"channel": ch, "reply": bool(m["thread"] and m["thread"] != m["ts"]), "bot": bool(bot)},
-                       source=actor_source("slack", m["user"], bot=bool(bot)), key=f"{ch}/{m['ts']}", stamp="posted",
-                       time=datetime.fromtimestamp(float(m["ts"]), UTC).isoformat())
-                seen[ch] = max(float(seen.get(ch) or 0), float(m["ts"]))
-        p.cursor = seen
+            st = dict(cursor.get(ch) or {})
+            # No cursor yet: from [settings] since (now by default), never the channel's history.
+            seen = float(st.get("seen") or math.floor(start_of(settings.extra.get("since"), now)))
+            threads = {ts: dict(t) for ts, t in (st.get("threads") or {}).items() if float(ts) > now - follow}
+            name = channel_name(api, ch)
+            policy = policies.get(ch) or policies.get(name)
+            base = {"channel": ch, "channel_name": name}
+            # read fresh (ttl 0): a cached history would hide the newest reply and check
+            for m in history(api, ch, min([seen, *map(float, threads)]), ttl_s=0):
+                if float(m["ts"]) > seen and m["ts"] not in threads:
+                    threads[m["ts"]] = started(p, m, base, policy)
+                    seen = max(seen, float(m["ts"]))
+                if m["ts"] in threads:
+                    follow_thread(p, api, m, threads[m["ts"]], base, policy, emoji)
+            out[ch] = {"seen": seen, "threads": threads}
+        p.cursor = out
 
     return poll
 
 
+def started(p, m: dict, base: dict, policy: float | None) -> dict:
+    subject = f"{base['channel']}/{m['ts']}"
+    data = {**base, "user": m["user"], "bot": m["bot"]}
+    if policy:
+        data |= {"policy_s": policy, "first_reply_deadline": iso(float(m["ts"]) + policy)}
+    p.emit("slack.thread.started", subject, data, source=who(m), stamp="started", time=iso(m["ts"]))
+    p.emit("slack.message.posted", subject, {"channel": base["channel"], "reply": False, "bot": m["bot"]},
+           source=who(m), key=f"{base['channel']}/{m['ts']}", stamp="posted", time=iso(m["ts"]))
+    return {"author": m["user"], "last": m["ts"], "answered": False, "checked": False, "turns": 0}
+
+
+def follow_thread(p, api, m: dict, t: dict, base: dict, policy: float | None, emoji: str) -> None:
+    """A followed thread's new replies (read only when its latest reply is new) and its check."""
+    subject = f"{base['channel']}/{m['ts']}"
+    if m["latest_reply"] and float(m["latest_reply"]) > float(t["last"]):
+        for r in replies(api, base["channel"], m["ts"], t["last"]):
+            by_author = r["user"] == t["author"]
+            first = not by_author and not r["bot"] and not t["answered"]   # a bot's reply answers nobody
+            data = {**base, "user": r["user"], "author": t["author"], "by_author": by_author, "bot": r["bot"],
+                    "first": first}
+            if policy:
+                data["in_time"] = float(r["ts"]) - float(m["ts"]) <= policy
+            p.emit("slack.thread.replied", subject, data, source=who(r), key=f"{subject}/{r['ts']}", stamp="replied",
+                   time=iso(r["ts"]))
+            p.emit("slack.message.posted", subject, {"channel": base["channel"], "reply": True, "bot": r["bot"]},
+                   source=who(r), key=f"{base['channel']}/{r['ts']}", stamp="posted", time=iso(r["ts"]))
+            t["answered"] = t["answered"] or first
+            t["last"] = r["ts"]
+    by = m["reactions"].get(emoji) or []
+    if bool(by) != t["checked"]:
+        t["turns"] += 1                   # the stamp: a check, removed, added again is three events
+        t["checked"] = bool(by)
+        if by:
+            p.emit("slack.thread.checked", subject, {**base, "by": by[0], "emoji": emoji},
+                   source=actor_source("slack", by[0]), stamp=f"checked:{t['turns']}")
+        else:
+            p.emit("slack.thread.unchecked", subject, {**base, "emoji": emoji}, source=actor_source("slack"),
+                   stamp=f"unchecked:{t['turns']}")
+
+
 def measure(api, settings, series) -> None:
+    emoji = settings.extra.get("check_emoji", CHECK)
+    window = parse_duration(settings.extra.get("window"), DAY)
+    now = time.time()
     for ch in settings.extra.get("channels", []):
-        n = len(history(api, ch, time.time() - 3600))
-        series.gauge("slack_channel_messages_last_hour", n, {"channel": ch},
-                     help="Messages posted in the channel in the last hour.")
+        name = channel_name(api, ch)
+        msgs = history(api, ch, now - window)
+        recent = sum(1 for m in msgs if float(m["ts"]) >= now - 3600)
+        waiting = sum(1 for m in msgs if not set(m["reply_users"]) - {m["user"]})
+        unchecked = sum(1 for m in msgs if not m["reactions"].get(emoji))
+        labels = {"channel": name}
+        series.gauge("slack_channel_messages_last_hour", recent, labels,
+                     help="Top-level messages posted in the channel in the last hour.")
+        series.gauge("slack_threads_awaiting_reply", waiting, labels,
+                     help="Threads started in the window with no reply by anyone but their author.")
+        series.gauge("slack_threads_unchecked", unchecked, labels,
+                     help="Threads started in the window without the check emoji on them.")
 
 
 def main(argv: list[str] | None = None) -> int:

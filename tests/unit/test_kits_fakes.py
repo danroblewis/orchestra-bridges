@@ -84,20 +84,24 @@ def test_jira_search_issue_and_transitions():
 def test_slack_history_and_users():
     with FakeSlack(token="xoxb") as s:
         auth = "Bearer xoxb"
-        _, body = call(s, "/api/conversations.history", {"channel": "C001", "limit": 2}, auth=auth)
-        assert body["ok"] and [m["ts"] for m in body["messages"]] == ["1793000120.000300", "1793000060.000200"]
-        assert body["has_more"] and body["response_metadata"]["next_cursor"] == "2"
-        _, body = call(s, "/api/conversations.history", {"channel": "C001", "cursor": "2"}, auth=auth)
-        assert [m["ts"] for m in body["messages"]] == ["1793000000.000100"] and not body["has_more"]
-        _, body = call(s, "/api/conversations.history", {"channel": "C001", "oldest": "1793000060.000200"}, auth=auth)
+        _, body = call(s, "/api/conversations.history", {"channel": "C001", "limit": 1}, auth=auth)
+        assert body["ok"] and [m["ts"] for m in body["messages"]] == ["1793000120.000300"]   # no reply: Slack's shape
+        assert body["has_more"] and body["response_metadata"]["next_cursor"] == "1"
+        _, body = call(s, "/api/conversations.history", {"channel": "C001", "cursor": "1"}, auth=auth)
+        [parent] = body["messages"]
+        assert parent["ts"] == "1793000000.000100" and not body["has_more"]
+        assert parent["reply_count"] == 1 and parent["reply_users"] == ["U002"] and parent["latest_reply"] == "1793000060.000200"
+        _, body = call(s, "/api/conversations.history", {"channel": "C001", "oldest": "1793000000.000100"}, auth=auth)
         assert len(body["messages"]) == 1                                   # oldest is exclusive
         assert call(s, "/api/conversations.history", {"channel": "C404"}, auth=auth)[1]["error"] == "channel_not_found"
         _, body = call(s, "/api/users.info", form={"user": "B001"}, method="POST", auth=auth)
         assert body["ok"] and body["user"]["is_bot"] is True
         assert call(s, "/api/users.info", {"user": "U999"}, auth=auth)[1] == {"ok": False, "error": "user_not_found"}
         s.post("C001", "U001")
-        assert len(call(s, "/api/conversations.history", {"channel": "C001"}, auth=auth)[1]["messages"]) == 4
+        assert len(call(s, "/api/conversations.history", {"channel": "C001"}, auth=auth)[1]["messages"]) == 3
         assert CANARY in json.dumps(call(s, "/api/conversations.history", {"channel": "C001"}, auth=auth)[1])
+    with FakeSlack(replies_in_history=True) as s:                         # the older fake's shape
+        assert len(call(s, "/api/conversations.history", {"channel": "C001"})[1]["messages"]) == 3
 
 
 def test_prometheus_endpoints():
