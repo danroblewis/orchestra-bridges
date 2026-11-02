@@ -61,7 +61,7 @@ owner's word.
 |---|---|---|
 | GitHub issues and pull requests | `github` | `github.pr.opened`, `.synchronize`, `.labeled`, `.unlabeled`, `.review_requested`, `.approved`, `.changes_requested`, `.commented`, `.merged` (`.closed`, `.reopened`), `github.checks.completed`, `github.issue.opened`, `.labeled`, `.closed`, `.reopened`; `github_issues_open`, `github_prs_open{review}` |
 | Jira, Data Center or Cloud | `jira` | `jira.issue.created`, `.assigned`, `.transitioned`; `jira_issues{status, category}` |
-| A Slack channel's history | `slack` | `slack.message.posted`; `slack_channel_messages_last_hour{channel}` |
+| A Slack channel's threads | `slack` | `slack.thread.started`, `.replied`, `.checked`, `.unchecked`, `slack.message.posted`; `slack_channel_messages_last_hour{channel}`, `slack_threads_awaiting_reply{channel}`, `slack_threads_unchecked{channel}` |
 | PagerDuty | `pagerduty` | `pagerduty.incident.triggered`, `.acknowledged`, `.resolved`; `pagerduty_incidents_open` |
 | A Prometheus API (Chronosphere, Mimir) | `promql` | a few PromQL answers as gauges; prefer Orchestra's own `[[sources]]`, which reads in place with no code |
 | Any other JSON API | `http` | a guess at an API no kit knows, for a coding tool to adapt |
@@ -82,8 +82,15 @@ owner's word.
   `datacenter` anywhere else; a Cloud site on its own domain needs `cloud` said. The owner's work
   Jira is Data Center. `jql` is the scope, without `ORDER BY` (the script adds its own); infer the
   project keys from branch names and commit messages (`ABC-123`), and confirm them.
-- **Slack**: reading a channel's history needs a token with `channels:history` (a bot added to the
-  channel, `xoxb-`, or the owner's user token, `xoxp-`); the owner's own pings (mentions of them,
+- **Slack**: the template reads with a bot token (`xoxb-`, the bot added to each channel) with
+  exactly `channels:history` (the history and the threads, reactions included) and `channels:read`
+  (the channel's name), and for a private channel `groups:history` and `groups:read`; no
+  `users:read` (a bot's message says it is one), no `reactions:read` (the parent's reactions come
+  with the history), no `chat:write`. Keep it in `~/.config/orchestra-bridges/slack-token`
+  (`chmod 600`, `token_file`). It relays each thread's start, its replies (`first`: the first by a
+  person other than the author), the check emoji added (`checked`, as who added it) and removed
+  (`unchecked`, as `bot.slack`: Slack does not say who); `policies` (per channel, `"2h"`) adds the
+  first-reply deadline. A user token (`xoxp-`) reads the same; the owner's own pings (mentions of them,
   their DMs, their groups) need a user token (`search:read`), since a bot cannot search; posting is
   a bot token's (`chat:write`) and an Outbox draft, never the kit. An app-configuration token
   (`xoxe.`) reads nothing. `channels` are ids (`C0123`), not names.

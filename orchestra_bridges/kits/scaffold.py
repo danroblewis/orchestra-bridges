@@ -71,9 +71,12 @@ KINDS = {
                  "data: the status, the assignee's account, from and to; a comment's issue and author, never its text)",
                  "`jira_issues{status, category}` (the issues in scope by status)"),
     "slack": Kind("Slack", "SLACK_TOKEN", "FakeSlack",
-                  "`slack.message.posted` (subject: `<channel>/<thread ts>`; source: `person.slack.<member id>` or "
-                  "`bot.slack.<id>`; data: channel, reply or not, bot or not)",
-                  "`slack_channel_messages_last_hour{channel}`"),
+                  "`slack.thread.started`, `.replied` (data `first`: the first reply by a person other than the "
+                  "author), `.checked`, `.unchecked` (the check emoji on the parent) and `slack.message.posted` "
+                  "(subject: `<channel>/<thread ts>`; source: `person.slack.<member id>` or `bot.slack.<id>`, "
+                  "`bot.slack` for a check removed; data: channel, its name, author, never text)",
+                  "`slack_channel_messages_last_hour{channel}`, `slack_threads_awaiting_reply{channel}`, "
+                  "`slack_threads_unchecked{channel}` (by the channel's name)"),
     "http": Kind("a JSON API no kit knows", "API_TOKEN", "FakeAPI (a FakeServer written in the test)",
                  "`<system>.<thing>.<state>` once per item change (subject: the item's id; source: "
                  "`person.<system>.<account>`, or `bot.<system>` when no one; settings name the fields)",

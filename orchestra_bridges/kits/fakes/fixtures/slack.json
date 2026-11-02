@@ -4,6 +4,7 @@
     {"id": "U002", "name": "bob", "real_name": "CANARY-TEXT-NEVER-LEAVES Bob", "is_bot": false, "tz": "Europe/London"},
     {"id": "B001", "name": "deploybot", "real_name": "CANARY-TEXT-NEVER-LEAVES Deploy", "is_bot": true, "tz": "UTC"}
   ],
+  "names": {"C001": "general"},
   "channels": {
     "C001": [
       {"ts": "1793000000.000100", "user": "U001", "text": "CANARY-TEXT-NEVER-LEAVES hello"},

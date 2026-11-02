@@ -30,5 +30,7 @@ from .jira import FakeJira
 from .pagerduty import FakePagerDuty
 from .prometheus import FakePrometheus
 from .slack import FakeSlack
+from .slack_day import Day
+from .slack_day import day as slack_day
 
-__all__ = ["CANARY", "FakeGitHub", "FakeJira", "FakePagerDuty", "FakePrometheus", "FakeServer", "FakeSlack", "Request"]
+__all__ = ["CANARY", "Day", "FakeGitHub", "FakeJira", "FakePagerDuty", "FakePrometheus", "FakeServer", "FakeSlack", "Request", "slack_day"]

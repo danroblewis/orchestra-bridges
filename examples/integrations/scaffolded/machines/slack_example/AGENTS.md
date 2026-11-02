@@ -8,9 +8,9 @@ You are a coding tool working on this directory. Read this first; it is the whol
 
 - **the poller** (`python slack_example.py`): every few minutes (`poller.toml`, `[settings] every`; 5
   minutes by default) it reads what changed in Slack and relays it as events on the project's
-  Orchestra bus: `slack.message.posted` (subject: `<channel>/<thread ts>`; source: `person.slack.<member id>` or `bot.slack.<id>`; data: channel, reply or not, bot or not);
+  Orchestra bus: `slack.thread.started`, `.replied` (data `first`: the first reply by a person other than the author), `.checked`, `.unchecked` (the check emoji on the parent) and `slack.message.posted` (subject: `<channel>/<thread ts>`; source: `person.slack.<member id>` or `bot.slack.<id>`, `bot.slack` for a check removed; data: channel, its name, author, never text);
 - **the measurement** (`python slack_example.py measure`): one read, printed as Prometheus text, which a
-  `[[collect]]` entry runs and stores: `slack_channel_messages_last_hour{channel}`.
+  `[[collect]]` entry runs and stores: `slack_channel_messages_last_hour{channel}`, `slack_threads_awaiting_reply{channel}`, `slack_threads_unchecked{channel}` (by the channel's name).
 
 It was scaffolded by `orchestra bridges scaffold slack slack_example` from the orchestra-bridges kits
 (`orchestra_bridges.kits`: `CachedClient`, `Prometheus`, `Poller`, `runner`).

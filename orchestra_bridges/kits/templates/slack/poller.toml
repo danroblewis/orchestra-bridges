@@ -1,5 +1,7 @@
-# {{name}}: a poller scaffolded from the orchestra-bridges kit `slack`: a relay of who posted in a
-# few channels, never a machine itself (the machines are the people and bots it publishes as).
+# {{name}}: a poller scaffolded from the orchestra-bridges kit `slack`: a relay of the threads of a
+# few channels (started, replied, checked), never a machine itself (the machines are the people
+# and bots it publishes as). It only reads: a bot token with channels:history and channels:read
+# (and groups:history, groups:read for a private channel), nothing else; it never posts.
 # Read by its own program ({{name}}.py: [settings], clearance) and by the Supervisor (description,
 # engagement, [[publishes]]); never by Orchestra, which knows the actors by their events.
 # Mentions of you and whether you answered need a search with your user token (search:read): adapt this script.
@@ -7,7 +9,7 @@ name = "{{name}}"
 # kit: the template it came from, and the system's name in [bridges.kits] tokens: when token_env
 # below is not set, the token's variable is the project's tokens.<kit> (tokens = { jira = "JIRA_API_TOKEN" }).
 kit = "slack"
-description = "Polls a few Slack channels every 5 minutes and relays each message as slack.message.posted, as who posted it; measure prints the messages per channel in the last hour."
+description = "Polls a few Slack channels every 5 minutes and relays each thread started, replied to, checked and unchecked (slack.thread.*) and each message (slack.message.posted), as who acted; measure prints per channel the messages in the last hour and the threads awaiting a reply or unchecked."
 engagement = "scheduled"
 created_by = "orchestra bridges scaffold"
 # The compliance check: until the owner approves reading Slack (then "approved", with the data
@@ -18,12 +20,32 @@ data_class = "unknown"
 [settings]
 base_url = "https://slack.com"
 token_env = "SLACK_TOKEN"         # the NAME of the variable holding the token; never the token
-# token_file = "~/.config/orchestra-bridges/{{kind}}-token"   # instead: a chmod 600 file outside any repository
+# token_file = "~/.config/orchestra-bridges/slack-token"   # instead: a chmod 600 file outside any repository
 every = "5m"
 per_minute = 20                   # conversations.history is Tier 3 (50 a minute); stay under it
 ttl = "4m"
 channels = ["C001"]               # guess: ask the owner (channel ids, not names)
-lookback_s = 86400                # how far back the first poll reads
+since = "now"                     # where the first run starts: "now", a duration back ("1d"), or an ISO time
+follow = "2d"                     # how long a thread is followed for replies and its check
+check_emoji = "white_check_mark"  # the reaction that marks a thread done
+window = "1d"                     # measure: the threads started this far back
+# policies = { C001 = "2h" }      # the first-reply policy per channel (id or name): adds the deadline
+
+[[publishes]]
+type = "slack.thread.started"
+subject = "<channel>/<thread ts>"
+
+[[publishes]]
+type = "slack.thread.replied"
+subject = "<channel>/<thread ts>"
+
+[[publishes]]
+type = "slack.thread.checked"
+subject = "<channel>/<thread ts>"
+
+[[publishes]]
+type = "slack.thread.unchecked"
+subject = "<channel>/<thread ts>"
 
 [[publishes]]
 type = "slack.message.posted"

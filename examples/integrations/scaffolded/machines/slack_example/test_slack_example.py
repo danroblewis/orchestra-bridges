@@ -1,5 +1,6 @@
-"""slack_example against the kit's Slack fake: two polls (a restart between them) relay each message
-once, as who posted it; ``measure`` prints the messages per channel; no text or token leaves.
+"""slack_example against the kit's Slack fake: two polls (a restart between them) relay each thread and
+message once, as who acted; a check and its removal; ``measure`` prints the channel's counts; no
+text or token leaves.
 
 Run with Orchestra's own Python (the one ``orchestra`` runs in, which has the kits): ``python -m pytest .orchestra/machines/slack_example/test_slack_example.py``."""
 
@@ -19,7 +20,7 @@ TOKEN = fake_token(HERE)        # the placeholder the runner sends a fake on thi
 REAL = "real-token-never-sent-to-a-fake"   # in the environment, yet never read for a fake
 TOKEN_ENV = token_env(HERE, "SLACK_TOKEN")           # poller.toml's, so the owner's variable works too
 CHANNEL = (settings(HERE).get("channels") or ["C001"])[0]   # the fake holds poller.toml's first channel
-SCOPE = set_args(channels=[CHANNEL])
+SCOPE = set_args(channels=[CHANNEL], since="1d")
 
 
 def program():
@@ -34,6 +35,7 @@ def recent_world() -> dict:
     world, now = load_fixture(None, "slack.json"), time.time()
     msgs = world["channels"].pop("C001")
     world["channels"][CHANNEL] = msgs
+    world["names"] = {CHANNEL: "general"}
     stamps = {m["ts"]: f"{now - 600 + 60 * n:.6f}" for n, m in enumerate(msgs)}
     for m in msgs:
         m["ts"] = stamps[m["ts"]]
@@ -63,18 +65,35 @@ def posted(events):
     return [(e["source"], e["data"]["reply"]) for e in events if e["type"] == "slack.message.posted"]
 
 
-def test_two_polls_relay_each_message_once(fake, tmp_path):
-    assert posted(poll_once(fake, tmp_path)) == [("person.slack.u001", False), ("person.slack.u002", True),
-                                                 ("bot.slack.b001", False)]
+def threads(events):
+    return [(e["type"].rsplit(".", 1)[1], e["source"]) for e in events if e["type"].startswith("slack.thread.")]
+
+
+def test_two_polls_relay_each_thread_and_message_once(fake, tmp_path):
+    events = poll_once(fake, tmp_path)
+    assert posted(events) == [("person.slack.u001", False), ("person.slack.u002", True), ("bot.slack.b001", False)]
+    assert threads(events) == [("started", "person.slack.u001"), ("replied", "person.slack.u002"),
+                               ("started", "bot.slack.b001")]
+    replied = next(e for e in events if e["type"] == "slack.thread.replied")
+    assert replied["data"]["first"] and not replied["data"]["by_author"] and replied["data"]["channel_name"] == "general"
+    parent = replied["subject"].split("/")[1]
     fake.post(CHANNEL, "U002")
+    fake.react(CHANNEL, parent, "U002")
     events = poll_once(fake, tmp_path)
     assert posted(events)[3:] == [("person.slack.u002", False)]
+    assert threads(events)[3:] == [("checked", "person.slack.u002"), ("started", "person.slack.u002")]
+    fake.unreact(CHANNEL, parent, "U002")
+    events = poll_once(fake, tmp_path)
+    assert threads(events)[5:] == [("unchecked", "bot.slack")]
     assert all(r.authorized for r in fake.requests)
 
 
-def test_measure_counts_the_last_hour(fake, tmp_path, capsys):
+def test_measure_counts_the_channel(fake, tmp_path, capsys):
     assert program().main(args(fake, tmp_path, "measure")) == 0
-    assert f'slack_channel_messages_last_hour{{channel="{CHANNEL}"}} 3' in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert 'slack_channel_messages_last_hour{channel="general"} 2' in out
+    assert 'slack_threads_awaiting_reply{channel="general"} 1' in out     # the bot's, unanswered
+    assert 'slack_threads_unchecked{channel="general"} 2' in out
 
 
 def test_no_text_or_token_leaves(fake, tmp_path, capsys):
