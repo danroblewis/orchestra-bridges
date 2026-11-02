@@ -257,7 +257,7 @@ def test_the_jira_kits_own_test_passes_for_cloud_too(tmp_path):
     r = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", str(d / "test_jira_cloud.py")],
                        capture_output=True, text=True, timeout=300, cwd=tmp_path, env=checkout_env(), check=False)
     assert r.returncode == 0, r.stdout[-3000:] + r.stderr[-2000:]
-    assert "6 passed" in r.stdout
+    assert "7 passed" in r.stdout
 
 
 def test_guessed_values_are_marked():

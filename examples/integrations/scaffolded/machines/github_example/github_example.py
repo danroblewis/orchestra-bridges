@@ -17,7 +17,7 @@ subject (``<owner>/<name>#<number>``) and who acted as the source (``person.gith
 | ``github.pr.review_requested`` | a review asked of someone (``reviewer``) | who asked | the event's id |
 | ``github.pr.approved``, ``.changes_requested``, ``.commented`` | a review submitted, by its verdict | the reviewer | the review's id |
 | ``github.checks.completed`` | every check run on the head completed (``outcome`` success unless one failed); with none, a final commit status (``via: status``) | the app, or who set the status | the head |
-| ``github.pr.merged``, ``.closed``, ``.reopened`` | merged; closed unmerged; reopened | who did it | the event's id |
+| ``github.pr.merged``, ``.closed``, ``.reopened`` | merged; closed unmerged (data ``merged: false``); reopened | who did it | the event's id |
 | ``github.issue.opened`` | an issue opened since the poller began (``[settings] issues``) | the author | ``opened`` |
 | ``github.issue.labeled``, ``.unlabeled``, ``.closed``, ``.reopened`` | as for a pull request | who did it | the event's id |
 
@@ -161,7 +161,8 @@ def relay_events(p, api, repo: str, n: int, kind: str, began: str, merged: bool 
         if e["event"] == "closed" and merged:
             continue                    # a merge closes too: github.pr.merged says it
         data = ({**base, "label": e["label"]} if e["event"] in ("labeled", "unlabeled") else
-                {**base, "reviewer": e["reviewer"]} if e["event"] == "review_requested" else base)
+                {**base, "reviewer": e["reviewer"]} if e["event"] == "review_requested" else
+                {**base, "merged": False} if e["event"] == "closed" and kind == "pr" else base)
         p.emit(f"github.{kind}.{e['event']}", f"{repo}#{n}", data, source=actor(e["actor"]), stamp=str(e["id"]),
                time=e["at"])
 

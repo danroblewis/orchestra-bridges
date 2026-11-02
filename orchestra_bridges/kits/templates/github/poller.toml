@@ -87,4 +87,4 @@ data = "repository, number, head_sha, outcome (success or failure), via (check_r
 type = "github.pr.merged"
 subject = "the pull request"
 source = "who merged it (github.pr.closed: who closed it unmerged)"
-data = "repository, number"
+data = "repository, number (github.pr.closed: merged, false)"

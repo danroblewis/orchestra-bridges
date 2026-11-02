@@ -19,6 +19,10 @@ with the issue key as the subject and who acted as the source (``person.jira.<ac
   changelog for that);
 - ``jira.issue.assigned`` for each change of assignee (data: the account it went to);
 - ``jira.issue.transitioned`` for each status change (data: from, to);
+- each ``jira.issue.*`` also carries the issue as it is **now**, when the poll read it: ``status``
+  (its name), ``category`` (its status category's key: ``new``, ``indeterminate``, ``done``),
+  ``issuetype`` (its name) and ``labels`` (their names), so a workflow's start can refuse an issue
+  already done (``"category": {"not": ["done"]}``) or keep one type (a bug, a PRR ticket);
 - ``jira.comment.added`` for each comment (as its author; data: the issue and the author's account:
   never its text).
 
@@ -105,7 +109,9 @@ def keep_changes(body: dict) -> dict:
         status = f.get("status") or {}
         out.append({"key": i["key"], "created": f.get("created"), "creator": _id(f.get("creator")),
                     "assignee": _id(f.get("assignee")), "status": status.get("name"),
-                    "category": (status.get("statusCategory") or {}).get("key"), "changes": hs,
+                    "category": (status.get("statusCategory") or {}).get("key"),
+                    "issuetype": (f.get("issuetype") or {}).get("name"),
+                    "labels": [x for x in f.get("labels") or [] if isinstance(x, str)], "changes": hs,
                     "comments": comments})
     return page_of(body, out)
 
@@ -142,24 +148,31 @@ def search(api, settings, jql: str, keep, ttl_s: float | None = None, **params) 
                 return out
 
 
+def now_of(issue: dict) -> dict:
+    """The issue as the poll read it (not as it was at the change): its status, status category,
+    type and labels, carried on every ``jira.issue.*`` event."""
+    return {"status": issue["status"], "category": issue.get("category"), "issuetype": issue.get("issuetype"),
+            "labels": list(issue.get("labels") or [])}
+
+
 def relay(p, issue: dict, began: float) -> None:
-    key = issue["key"]
+    key, now = issue["key"], now_of(issue)
     changes = sorted((c for c in issue["changes"] if parse_time(c["at"]).timestamp() >= began),   # none from before
                      key=lambda c: (parse_time(c["at"]), int(c["id"]) if c["id"].isdigit() else 0))
     creator = actor_source("jira", issue["creator"])
     if issue["created"] and parse_time(issue["created"]).timestamp() >= began:
         at = rfc3339(issue["created"])
-        p.emit("jira.issue.created", key, {"status": issue["status"]}, source=creator, stamp="created", time=at)
+        p.emit("jira.issue.created", key, now, source=creator, stamp="created", time=at)
         if issue["assignee"] and not any(c["assignee_changed"] for c in changes):
-            p.emit("jira.issue.assigned", key, {"assignee": issue["assignee"]}, source=creator, stamp="created",
+            p.emit("jira.issue.assigned", key, {"assignee": issue["assignee"], **now}, source=creator, stamp="created",
                    time=at)
     for c in changes:
         who, at = actor_source("jira", c["by"]), rfc3339(c["at"])
         if c["assignee_changed"]:
-            p.emit("jira.issue.assigned", key, {"assignee": c["assigned"]}, source=who, stamp=f"{c['id']}:assignee",
+            p.emit("jira.issue.assigned", key, {"assignee": c["assigned"], **now}, source=who, stamp=f"{c['id']}:assignee",
                    time=at)
         if c["to"] is not None:
-            p.emit("jira.issue.transitioned", key, {"from": c["from"], "to": c["to"]}, source=who, stamp=c["id"],
+            p.emit("jira.issue.transitioned", key, {"from": c["from"], "to": c["to"], **now}, source=who, stamp=c["id"],
                    time=at)
     for c in issue.get("comments") or []:
         if parse_time(c["at"]).timestamp() >= began:
@@ -184,7 +197,7 @@ def make_poll(api, settings):
         minutes = math.ceil((started - since + overlap) / 60)
         jql = f'({scope}) AND updated >= "-{minutes}m" ORDER BY updated ASC'
         # changes are read fresh (ttl 0): a cached answer would hide the newest
-        for issue in search(api, settings, jql, keep_changes, fields="status,assignee,creator,created,comment",
+        for issue in search(api, settings, jql, keep_changes, fields="status,assignee,creator,created,comment,issuetype,labels",
                             expand="changelog", ttl_s=0):
             if first and issue["category"] == "done":
                 continue                                # a catch-up relays the work not yet done
