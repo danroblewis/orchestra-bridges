@@ -15,7 +15,7 @@ which a read-only machine never does, but a test may, to change the world).
 It understands a small JQL: clauses joined by ``AND`` and ``OR`` (``AND`` binding tighter, and
 parentheses), each ``project = X``, ``project in (X, Y)``, ``status = "S"``, ``status in (...)``,
 ``statusCategory = Done`` / ``!= Done``, ``assignee = x`` / ``in (x, y)`` / ``is EMPTY``,
-``reporter = x`` / ``in (x, y)`` (the creator), ``issuetype = Epic`` / ``type in (Epic, UFF)``,
+``reporter = x`` / ``in (x, y)`` (the creator), ``issuetype = Epic`` / ``!=`` / ``type in (Epic, UFF)`` / ``not in``,
 ``sprint in openSprints()``, ``updated >= "2026-10-31 08:00"`` (or ``-15m``, ``-7d``, against now),
 and ``ORDER BY updated ASC|DESC`` (or ``key``). An issue's ``sprint`` (``{"id", "name", "state"}``)
 is served in the fixture's ``sprint_field`` (``customfield_10101`` by default) as each flavour
@@ -138,12 +138,12 @@ def _clause(c: str, categories: dict[str, str], now: datetime):
     if m := re.fullmatch(r"(?i)(assignee|reporter)\s+in\s*(\(.*\))", c):
         field, people = ("creator" if m.group(1).lower() == "reporter" else "assignee"), _values(m.group(2))
         return lambda i: i.get(field) in people
-    if m := re.fullmatch(r"(?i)(?:issuetype|type)\s*=\s*(\"[^\"]+\"|[\w-]+)", c):
-        kind = m.group(1).strip('"').lower()
-        return lambda i: i["issuetype"].lower() == kind
-    if m := re.fullmatch(r"(?i)(?:issuetype|type)\s+in\s*(\(.*\))", c):
-        kinds = [x.lower() for x in _values(m.group(1))]
-        return lambda i: i["issuetype"].lower() in kinds
+    if m := re.fullmatch(r"(?i)(?:issuetype|type)\s*(=|!=)\s*(\"[^\"]+\"|[\w-]+)", c):
+        kind, eq = m.group(2).strip('"').lower(), m.group(1) == "="
+        return lambda i: (i["issuetype"].lower() == kind) == eq
+    if m := re.fullmatch(r"(?i)(?:issuetype|type)\s+(not\s+)?in\s*(\(.*\))", c):
+        kinds, inside = [x.lower() for x in _values(m.group(2))], not m.group(1)
+        return lambda i: (i["issuetype"].lower() in kinds) == inside
     if re.fullmatch(r"(?i)sprint\s+in\s+openSprints\(\)", c):
         return lambda i: (i.get("sprint") or {}).get("state", "").upper() == "ACTIVE"
     if m := re.fullmatch(r"(?i)updated\s*(>=|>|<=|<)\s*(.+)", c):

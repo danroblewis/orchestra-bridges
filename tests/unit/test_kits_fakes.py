@@ -230,6 +230,8 @@ def test_jira_jql_for_a_team_its_types_and_its_sprint():
                     "ORDER BY key ASC") == ["ABC-30", "ABC-31"]
         assert keys("type = Epic") == ["ABC-30"] and keys("issuetype in (Epic, UFF) ORDER BY key ASC") == ["ABC-30", "ABC-31"]
         assert keys("sprint in openSprints()") == ["ABC-30"]
+        assert keys("project = ABC AND issuetype not in (Epic, UFF) AND assignee = zed") == ["ABC-32"]
+        assert keys("type != Epic AND reporter = dana") == []
         assert keys("assignee = zed OR reporter = dana ORDER BY key ASC") == ["ABC-30", "ABC-32"]
         _, body = call(j, "/rest/api/2/search", {"jql": "type = Epic", "fields": "customfield_10101"}, auth="Bearer pat")
         (raw,) = body["issues"][0]["fields"]["customfield_10101"]
