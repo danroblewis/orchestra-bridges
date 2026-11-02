@@ -192,7 +192,7 @@ class CachedClient:
     def for_project(cls, project, base_url: str, system: str | None = None, token_env: str | None = None,
                     **kw) -> CachedClient:
         """A client with ``[bridges.kits]``'s cache directory, TTL and CA file unless given, the host's rate
-        (or ``per_minute``, when lower) and the system's token variable (``tokens.<system>``) unless given."""
+        (or ``per_minute``, when lower; for a fake on this machine ``per_minute`` as given) and the system's token variable (``tokens.<system>``) unless given."""
         from .settings import cache_dir, read
         s = read(project.config.raw)
         host = (urllib.parse.urlsplit(base_url).hostname or "").lower()
@@ -202,7 +202,9 @@ class CachedClient:
         if not kw.get("ca_file"):
             kw["ca_file"] = s.ca_file
         limit = s.per_minute_for(host)          # the project's limit for the host; a machine may ask for less
-        kw["per_minute"] = min(int(kw.get("per_minute") or limit), limit)
+        # a fake on this machine has no rate to keep: the caller's (the runner's FAKE_RATE) stands
+        asked = int(kw.get("per_minute") or limit)
+        kw["per_minute"] = asked if is_local(host) and kw.get("per_minute") else min(asked, limit)
         return cls(base_url, token_env=token_env or (s.token_env(system) if system else None), **kw)
 
     def __repr__(self) -> str:

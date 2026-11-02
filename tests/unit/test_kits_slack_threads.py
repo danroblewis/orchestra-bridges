@@ -130,3 +130,19 @@ def test_a_poll_reads_fresh_though_the_cache_keeps_answers(program, tmp_path, mo
         types = [json.loads(x)["type"] for x in events_file.read_text().splitlines()]
         assert types.count("slack.thread.started") == 1 and types.count("slack.thread.replied") == 1
         assert len(fake.requests_to("/api/conversations.info")) == 1
+
+
+def test_a_fake_on_this_machine_keeps_the_runners_rate_in_a_project(tmp_path, monkeypatch):
+    """[bridges.kits] per_minute (60 by default) caps a real host; a loopback fake keeps the rate the
+    runner asks (FAKE_RATE), so a project's poller and measurement against a fake are not slowed."""
+    from orchestra.config import load_project
+
+    from orchestra_bridges.kits.client import CachedClient
+    monkeypatch.setenv("ORCHESTRATOR_HOME", str(tmp_path / "home"))
+    (tmp_path / "orchestra.toml").write_text('[events]\nurl = "file"\n\n[metrics]\nurl = "file"\n')
+    import subprocess
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    project = load_project(tmp_path)
+    fake = CachedClient.for_project(project, "http://127.0.0.1:9", per_minute=6000, token="x")
+    real = CachedClient.for_project(project, "https://slack.com", per_minute=6000, token="x")
+    assert fake.limit.rate * 60 == pytest.approx(6000) and real.limit.rate * 60 == pytest.approx(60)
