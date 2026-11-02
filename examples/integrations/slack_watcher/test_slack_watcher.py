@@ -99,7 +99,7 @@ def change(fake):
 
 @pytest.fixture
 def fake():
-    with FakeSlack(recent_world(), replies_in_history=True) as f:                # the fake needs no token
+    with FakeSlack(recent_world()) as f:                # the fake needs no token
         yield f
 
 
@@ -149,7 +149,7 @@ def test_publish_mentions_filters_to_the_mentions_and_their_answers(fake, tmp_pa
 def test_no_text_or_token_leaves(tmp_path, capsys, monkeypatch):
     monkeypatch.setenv("SLACK_TOKEN", REAL)
     monkeypatch.setenv("ORCHESTRATOR_HOME", str(tmp_path / "home"))
-    with FakeSlack(recent_world(), token=TOKEN, replies_in_history=True) as f:
+    with FakeSlack(recent_world(), token=TOKEN) as f:
         _, log = run_two_intervals(f, tmp_path, change, SLACK_TOKEN=REAL)
         assert program().main(["measure", *common(f, tmp_path)]) == 0
         assert f.requests and all(r.authorized for r in f.requests)
