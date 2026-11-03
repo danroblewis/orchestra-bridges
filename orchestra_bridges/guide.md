@@ -275,6 +275,16 @@ which the owner's approval settings govern (the Workflows plugin's `outbox: owne
 accept `PUT`, `POST` and `DELETE` (labels, transitions, reviews, merges) only so a test can change
 the world between polls, and so the Outbox's own tests have something to write to.
 
+## Testing a read-only setup: the scripted team
+
+Where the owner's systems may only be read, a poller is tested against a test workspace that the
+scripted team fills: `python -m orchestra_bridges.team` plays a working day in a Jira test project
+(tickets `[orchestra live test] …`, labelled `orchestra-live-team`) and Discord test channels, and
+`--close` closes its tickets afterwards (it never deletes). It is test tooling, never a machine:
+never declare it, schedule it or write an entry for it; the pollers relay its acts as the accounts
+it used. Running it against a real workspace is the owner's decision (it writes there); `--dry-run`
+shows the plan. README, "The scripted team".
+
 ## What goes wrong
 
 - **`HTTP 401`** in the script's log (`<state>/logs/machines/<name>.log`): a bad or expired token,

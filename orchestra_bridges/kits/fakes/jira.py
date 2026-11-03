@@ -26,7 +26,13 @@ edits ``edit`` makes) with their authors; anything else is a 400, as Jira answer
 parse. Each issue has its ``creator`` (and ``reporter``) when the fixture names one. Every summary,
 display name, edited value and comment's body carries the canary. Each issue's ``comment`` field
 lists its comments (id, author, body, created), as Jira's search returns them. ``create``, ``move``,
-``assign``, ``edit`` and ``comment`` change the world between polls."""
+``assign``, ``edit`` and ``comment`` change the world between polls.
+
+The writes a test client makes (the scripted team, ``orchestra_bridges.team``), as the token's
+account (``me``): ``POST /issue`` (``fields``: project, issuetype, summary, labels, assignee),
+``PUT /issue/<key>/assignee`` (``accountId`` on Cloud, ``name`` on Data Center), ``POST
+/issue/<key>/comment`` and a transition's ``fields.resolution``; ``GET /user/assignable/search``
+(``project``) lists ``people`` (the fixture's, else the project's assignees and creators)."""
 
 from __future__ import annotations
 
@@ -221,6 +227,7 @@ class FakeJira(FakeServer):
             "status": {"name": i["status"], "statusCategory": {"id": cid, "key": cat, "name": cname}},
             "issuetype": {"name": i["issuetype"]}, "priority": {"name": i["priority"]},
             "labels": list(i.get("labels") or []),
+            "resolution": {"name": i["resolution"]} if i.get("resolution") else None,
             "assignee": self._user(i.get("assignee")),
             "created": i["created"], "updated": i["updated"],
             "creator": self._user(i.get("creator")), "reporter": self._user(i.get("creator")),
@@ -310,6 +317,12 @@ class FakeJira(FakeServer):
             return self._search(q)
         if m := re.fullmatch(rf"{api}/issue/([^/]+)/transitions", path):
             return self._transitions(method, m.group(1), body)
+        if path == f"{api}/issue" and method == "POST":
+            return self._create(body)
+        if path == f"{api}/user/assignable/search" and method == "GET":
+            return self._assignable(one(query, "project"))
+        if m := re.fullmatch(rf"{api}/issue/([^/]+)/(assignee|comment)", path):
+            return self._write(method, m.group(1), m.group(2), body or {})
         if m := re.fullmatch(rf"{api}/issue/([^/]+)", path):
             i = self._find(m.group(1))
             if method != "GET":
@@ -351,8 +364,65 @@ class FakeJira(FakeServer):
         t = next((t for t in avail if t["id"] == tid), None)
         if t is None:
             return 400, {"errorMessages": [f"Transition id '{tid}' is not valid for this issue."], "errors": {}}
-        self._record(i, t["to"], "api-user", datetime.now(UTC))
+        resolution = (((body or {}).get("fields") or {}).get("resolution") or {}).get("name")
+        if resolution and resolution not in self.data.get("resolutions", ["Done"]):
+            return 400, {"errorMessages": [], "errors": {"resolution": f"Resolution '{resolution}' is not valid."}}
+        self._record(i, t["to"], self.me, datetime.now(UTC))
+        if resolution:
+            i["resolution"] = resolution
         return 204, None
+
+    def _account(self, person: dict | None) -> str | None:
+        if not person:
+            return None
+        return person.get("accountId") if self.flavour == "cloud" else person.get("name")
+
+    def _create(self, body: Any) -> tuple[int, Any]:
+        f = (body or {}).get("fields") or {}
+        project, summary = (f.get("project") or {}).get("key"), f.get("summary")
+        if not project or not summary:
+            return 400, {"errorMessages": [], "errors": {"summary": "You must specify a summary of the issue."}}
+        n = 1 + max((int(i["key"].split("-")[1]) for i in self.data["issues"] if i["project"] == project), default=0)
+        key = f"{project}-{n}"
+        first = next(iter(self.data["statuses"]))
+        t = stamp(datetime.now(UTC))
+        self.data["issues"].append({"id": str(10000 + len(self.data["issues"]) + 1), "key": key, "project": project,
+                                    "summary": f"{CANARY} {summary}", "status": first,
+                                    "issuetype": (f.get("issuetype") or {}).get("name") or "Task",
+                                    "labels": list(f.get("labels") or []), "priority": "Medium",
+                                    "assignee": self._account(f.get("assignee")), "creator": self.me,
+                                    "created": t, "updated": t})
+        i = self.data["issues"][-1]
+        return 201, {"id": i["id"], "key": key, "self": f"{self.url}{self.api}/issue/{i['id']}"}
+
+    def _assignable(self, project: str | None) -> tuple[int, Any]:
+        people = self.data.get("people") or sorted({p for i in self.data["issues"] if i["project"] == project
+                                                    for p in (i.get("assignee"), i.get("creator")) if p} | {self.me})
+        out = [self._user(p) for p in people]
+        for u in out if self.flavour == "cloud" else []:
+            u["accountType"] = "atlassian"
+        return 200, out
+
+    def _write(self, method: str, key: str, what: str, body: dict) -> tuple[int, Any]:
+        i = self._find(key)
+        if i is None:
+            return 404, {"errorMessages": ["Issue Does Not Exist"], "errors": {}}
+        t = datetime.now(UTC)
+        if what == "assignee" and method == "PUT":
+            to = body.get("accountId") if self.flavour == "cloud" else body.get("name")
+            hid = str(20000 + sum(len(x.get("history") or []) for x in self.data["issues"]) + 1)
+            i.setdefault("history", []).append({"id": hid, "by": self.me, "at": stamp(t), "field": "assignee",
+                                                "from": i.get("assignee"), "to": to})
+            i["assignee"], i["updated"] = to, stamp(t)
+            return 204, None
+        if what == "comment" and method == "POST":
+            if not body.get("body"):
+                return 400, {"errorMessages": [], "errors": {"comment": "Comment body can not be empty!"}}
+            cid = str(30000 + sum(len(x.get("comments") or []) for x in self.data["issues"]) + 1)
+            i.setdefault("comments", []).append({"id": cid, "by": self.me, "at": stamp(t)})
+            i["updated"] = stamp(t)
+            return 201, {"id": cid, "created": stamp(t)}
+        return 405, None
 
 
 def _item(h: dict) -> dict:

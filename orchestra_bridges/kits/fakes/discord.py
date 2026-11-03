@@ -26,7 +26,13 @@ The world (``data``): ``guild`` (``id``, ``name``), ``users`` (``id``, ``name``,
 ``other_channels`` (a voice channel, a category: listed, never read). ``slack_day.Day.world()`` is
 one too: ``play`` plays its script (a start is a message, a reply one in the thread started from
 it, a reaction ``white_check_mark`` the ✅). ``post``, ``reply`` (in the thread), ``react``,
-``unreact`` and ``archive`` change it between polls."""
+``unreact`` and ``archive`` change it between polls.
+
+The writes a test client makes (the scripted team, ``orchestra_bridges.team``), as the token's bot
+(``me``, a user id the world's ``me`` names, else ``B900`` ``teambot``): ``POST
+/channels/{id}/messages`` (``content``, an inline reply by ``message_reference.message_id``) and
+``PUT /channels/{id}/messages/{message}/reactions/{emoji}/@me``. What was sent is in ``requests``;
+the world keeps the canary as the message's text."""
 
 from __future__ import annotations
 
@@ -73,6 +79,9 @@ class FakeDiscord(FakeServer):
         d.setdefault("threads", {})
         d.setdefault("channels", {})
         d["users"] = [{**u, "bot": bool(u.get("bot", u.get("is_bot", False)))} for u in d.get("users") or []]
+        d.setdefault("me", "B900")
+        if not any(u["id"] == d["me"] for u in d["users"]):
+            d["users"].append({"id": d["me"], "name": "teambot", "bot": True})
         given, keys = d["channels"], {}
         d["channels"] = {ch: [] for ch in given}
         for ch, msgs in given.items():
@@ -192,11 +201,11 @@ class FakeDiscord(FakeServer):
     def route(self, method: str, path: str, query: dict[str, list[str]], body: Any) -> tuple[int, Any]:
         if self._script and self._auto:
             self._advance(time.time())
-        if method != "GET":
-            return 405, {"message": "405: Method Not Allowed", "code": 0}
         if not path.startswith(API + "/"):
             return 404, {"message": "404: Not Found", "code": 0}
         parts = [urllib.parse.unquote(p) for p in path[len(API) + 1:].split("/")]
+        if method != "GET":
+            return self._write(method, parts, body or {})
         guild = self.data["guild"]["id"]
         if parts[0] == "guilds":
             if len(parts) < 3 or parts[1] != guild:
@@ -231,6 +240,27 @@ class FakeDiscord(FakeServer):
             users = sorted((u for u in (m.get("_reactions") or {}).get(emoji, []) if int_of(u) > after), key=int_of)
             return 200, [self._user(u) for u in users[:limit]]
         return 404, {"message": "404: Not Found", "code": 0}
+
+    def _write(self, method: str, parts: list[str], body: dict) -> tuple[int, Any]:
+        """A message posted, or a reaction added, as the token's bot (``me``)."""
+        me = self.data["me"]
+        if len(parts) < 3 or parts[0] != "channels" or parts[1] not in self.data["channels"]:
+            return 404, {"message": "Unknown Channel", "code": 10003}
+        cid, rest = parts[1], parts[2:]
+        if method == "POST" and rest == ["messages"]:
+            if not str(body.get("content") or "").strip():
+                return 400, {"message": "Cannot send an empty message", "code": 50006}
+            ref = (body.get("message_reference") or {}).get("message_id")
+            if ref and self._message(cid, ref) is None:
+                return 400, {"message": "Invalid Form Body", "code": 50035}
+            mid = self._post(cid, me, None, True, ref)
+            return 200, self._shown(self._message(cid, mid), cid)
+        if method == "PUT" and len(rest) == 5 and rest[0] == "messages" and rest[2] == "reactions" and rest[4] == "@me":
+            if self._message(cid, rest[1]) is None:
+                return 404, {"message": "Unknown Message", "code": 10008}
+            self._react(cid, rest[1], me, rest[3], True)
+            return 204, None
+        return 405, {"message": "405: Method Not Allowed", "code": 0}
 
     def _channel(self, ch: str) -> dict:
         return {"id": ch, "type": TEXT, "guild_id": self.data["guild"]["id"],

@@ -134,6 +134,40 @@ consumer's backlog as a stock filled by its exchange's publishes and drained by 
 orders exchange's publishes as one flow with a copy into each other backlog it fills. A consumer
 that keeps up (shipping, notifier) leaves a backlog too small to be a stock.
 
+## The scripted team: testing read-only setups
+
+Where the owner's company allows no writes to Jira or Slack, the pollers are tested against a test
+workspace that something else fills. `python -m orchestra_bridges.team` is that something: a scripted
+team's working day in a Jira test project and Discord test channels. It creates tickets (summaries
+`[orchestra live test] …`, labels `orchestra-live-test`, `orchestra-live-team`), assigns them, moves
+them through the board's statuses, comments on some, and posts status asks, questions and answers, an
+ad-hoc request and an incident alert (checked with ✅) in the channels. It is test tooling, never a
+machine: the pollers relay what it did as the Jira account and the Discord bot it used.
+
+```bash
+python -m orchestra_bridges.team --jira-url https://<site>.atlassian.net --project SCRUM \
+    --channels-from <a discord poller.toml> --dry-run      # the plan; nothing written
+python -m orchestra_bridges.team ... --once --rhythm 5m    # one round (the next of an unfinished day)
+python -m orchestra_bridges.team ... --rhythm 20m          # the rest of the day in 20 minutes
+python -m orchestra_bridges.team --jira-url ... --close    # close every ticket the ledger holds (Done)
+```
+
+| Option | |
+|---|---|
+| `--jira-url`, `--project`, `--jira-flavour` | the site (or `ORCHESTRA_TEAM_JIRA_URL`; none: no Jira acts), the test project (`SCRUM`), `auto` by host |
+| `--channel ID`, `--channels-from PATH` | the Discord test channels, or a Discord poller's `poller.toml` to take them from (read only) |
+| `--rhythm` | how long the day's eight rounds take (`8h` by default; `20m`) |
+| `--seed` | the day's draw (texts, channels, order); a resumed day keeps its own |
+| `--dry-run` | print what it would do; nothing written (it still reads the people and the channels' names) |
+| `--once` | one round, then stop; the next run plays the next |
+| `--close [--resolution Done]` | closes every ticket the ledger holds that carries the team's label; never deletes anything |
+| `--ledger PATH` | the JSON record of what each day created (keys, ids, times; never text); default `~/.local/state/orchestra-bridges/team/ledger.json` |
+
+Credentials by file only: `~/.config/orchestra-bridges/jira-cloud-email` and `jira-cloud-token`
+(`--jira-email-file`, `--jira-token-file`), `discord-token` (`--discord-token-file`), each `chmod 600`.
+Every write waits at least 2 seconds after the last. Point it only at a test project and test
+channels: everything it writes is real.
+
 ## Develop
 
 ```sh

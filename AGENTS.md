@@ -9,14 +9,17 @@ broken without updating the spec and saying so in the commit.
    no instrument and no machine (`plugin.py`: the guide and the check only). Every collector is a
    script scaffolded from a kit into the owner's repository (or the state directory, when asked),
    run by the project's own `[[machines]]` and `[[collect]]` entries. The direct readers were
-   retired on 2026-11-01; never bring one back here.
+   retired on 2026-11-01; never bring one back here. (The scripted team, rule 3's exception, is
+   test tooling run by hand, not a reader.)
 2. **Never text.** A collector publishes, caches, logs and prints metadata only: ids, logins,
    numbers, states, label names, times. Never titles, bodies, comments, messages or document
    content. Text may pass through memory, and nowhere else. Every template's test and every fake
    keeps the canary.
 3. **Read only.** The kits' client sends GET, or a form POST that asks a question, and refuses
    anything else. A write to another system is an Outbox draft, never a kit's. The fakes accept
-   writes only so a test can change their world.
+   writes only so a test can change their world. The one exception is test tooling, never a kit:
+   the scripted team (`orchestra_bridges/team/`, SPEC §7) writes to the owner's Jira test project
+   and Discord test channels only, run by hand, never by the plugin, never a machine (2026-11-03).
 4. **Credentials by reference.** A token comes from a `chmod 600` file outside any repository or
    an environment variable a setting names (`secret.read_token`, the one reader), is kept in
    memory, and is sent only to the configured host, never to a fake on this machine (the runner
