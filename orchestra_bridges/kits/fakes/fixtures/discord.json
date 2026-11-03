@@ -1,0 +1,20 @@
+{
+  "guild": {"id": "1000", "name": "fake"},
+  "users": [
+    {"id": "U001", "name": "alice", "real_name": "CANARY-TEXT-NEVER-LEAVES Alice", "bot": false},
+    {"id": "U002", "name": "bob", "real_name": "CANARY-TEXT-NEVER-LEAVES Bob", "bot": false},
+    {"id": "B001", "name": "deploybot", "real_name": "CANARY-TEXT-NEVER-LEAVES Deploy", "bot": true}
+  ],
+  "names": {"C001": "general"},
+  "channels": {
+    "C001": [
+      {"key": "hello", "at": 1793000000, "user": "U001"},
+      {"key": "hi", "at": 1793000060, "user": "U002", "thread_of": "hello"},
+      {"key": "deployed", "at": 1793000120, "user": "B001", "bot": true}
+    ]
+  },
+  "other_channels": [
+    {"id": "C900", "type": 4, "guild_id": "1000", "name": "text channels", "position": 0},
+    {"id": "C901", "type": 2, "guild_id": "1000", "name": "voice", "position": 1}
+  ]
+}

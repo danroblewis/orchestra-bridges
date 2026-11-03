@@ -1,0 +1,59 @@
+# {{name}}: a poller scaffolded from the orchestra-bridges kit `discord`: a relay of the threads of a
+# few channels (started, replied, checked), never a machine itself (the machines are the people
+# and bots it publishes as). The bot needs View Channel and Read Message History on each channel,
+# nothing else; no Message Content intent (it reads no text). Posting would add Send Messages, and
+# is an Outbox draft's, never this poller's. It relays facts only: a channel's response policy is
+# the workflow's setting, never this file's.
+# Read by its own program ({{name}}.py: [settings], clearance) and by the Supervisor (description,
+# engagement, [[publishes]]); never by Orchestra, which knows the actors by their events.
+name = "{{name}}"
+# kit: the template it came from, and the system's name in [bridges.kits] tokens: when token_env
+# below is not set, the token's variable is the project's tokens.<kit> (tokens = { discord = "DISCORD_TOKEN" }).
+kit = "discord"
+description = "Polls a few Discord channels every 5 minutes and relays each thread started, replied to, checked and unchecked (discord.thread.*) and each message (discord.message.posted), as who acted; measure prints per channel the messages in the last hour and the threads awaiting a reply or unchecked."
+engagement = "scheduled"
+created_by = "orchestra bridges scaffold"
+# The compliance check: until the owner approves reading Discord (then "approved", with the data
+# class), the program reads only a fake on this machine.
+clearance = "needs approval"
+data_class = "unknown"
+
+[settings]
+base_url = "https://discord.com"
+token_env = "DISCORD_TOKEN"       # the NAME of the variable holding the bot token; never the token
+# token_file = "~/.config/orchestra-bridges/discord-token"   # instead: a chmod 600 file outside any repository
+every = "5m"
+per_minute = 60                   # Discord allows 50 a second per bot, less per route; stay far under it
+ttl = "4m"
+guild = "1000"                    # guess: ask the owner (the server's id); `python {{name}}.py channels` lists its channels
+channels = ["C001"]               # guess: ask the owner (channel ids from `channels`, not names)
+# A channel read less often than every poll: its own interval (channel id = duration); the others
+# are read each poll. A channel Discord answers 429 (rate limited, after the client's own retries
+# and Retry-After) is left for the poll's interval, doubling at each 429 up to max_backoff, and
+# read again once it is due; the other channels go on.
+cadence = {}                      # e.g. { "1234567890" = "30m" }
+max_backoff = "1h"
+since = "now"                     # where the first run starts: "now", a duration back ("1d"), or an ISO time
+follow = "2d"                     # how long a thread is followed for replies and its check
+check_emoji = "✅"                 # the reaction that marks a thread done (a custom emoji: its name)
+window = "1d"                     # measure: the threads started this far back
+
+[[publishes]]
+type = "discord.thread.started"
+subject = "<channel>/<message id>"
+
+[[publishes]]
+type = "discord.thread.replied"
+subject = "<channel>/<message id>"
+
+[[publishes]]
+type = "discord.thread.checked"
+subject = "<channel>/<message id>"
+
+[[publishes]]
+type = "discord.thread.unchecked"
+subject = "<channel>/<message id>"
+
+[[publishes]]
+type = "discord.message.posted"
+subject = "<channel>/<message id>"

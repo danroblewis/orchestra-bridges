@@ -77,6 +77,15 @@ KINDS = {
                   "a check removed as who had checked it; data: channel, its name, the thread's link, author, never text)",
                   "`slack_channel_messages_last_hour{channel}`, `slack_threads_awaiting_reply{channel}`, "
                   "`slack_threads_unchecked{channel}` (by the channel's name)"),
+    "discord": Kind("Discord", "DISCORD_TOKEN", "FakeDiscord",
+                    "`discord.thread.started`, `.replied` (data `first`: the first reply by a person other than "
+                    "the author, in the thread started from the message or inline), `.checked`, `.unchecked` (the "
+                    "check emoji, ✅, on the parent) and `discord.message.posted` (subject: `<channel>/<message id>`; "
+                    "source: `person.discord.<user id>` or `bot.discord.<id>`, a check removed as who had checked "
+                    "it; data: channel, its name, the thread's link, author, never text): the Slack kit's facts "
+                    "in its shapes",
+                    "`discord_channel_messages_last_hour{channel}`, `discord_threads_awaiting_reply{channel}`, "
+                    "`discord_threads_unchecked{channel}` (by the channel's name)"),
     "http": Kind("a JSON API no kit knows", "API_TOKEN", "FakeAPI (a FakeServer written in the test)",
                  "`<system>.<thing>.<state>` once per item change (subject: the item's id; source: "
                  "`person.<system>.<account>`, or `bot.<system>` when no one; settings name the fields)",

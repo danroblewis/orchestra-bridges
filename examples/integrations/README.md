@@ -3,7 +3,7 @@
 **What the scaffold writes**, one per kit, is in [`scaffolded/machines/`](scaffolded/machines/):
 `orchestra bridges scaffold <kit> <kit>_example --root repo`, committed unchanged as the reference
 of what lands in an owner's repository at `.orchestra/machines/<name>/` (`github_example`,
-`jira_example` (Data Center or Cloud by `flavour`), `slack_example`, `pagerduty_example`,
+`jira_example` (Data Center or Cloud by `flavour`), `slack_example`, `discord_example`, `pagerduty_example`,
 `promql_example`, `http_example`). `tests/unit/test_scaffolded_examples.py` checks they are exactly
 what the templates write today, and their own tests run in this suite against the kits' fakes.
 

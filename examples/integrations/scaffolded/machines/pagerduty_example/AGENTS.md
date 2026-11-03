@@ -62,7 +62,7 @@ still passes once the owner's values are in), this file.
   line or a commit; never print it or ask for it in a chat. If it is missing, say which file or
   variable the owner should provide, and stop. How it is sent is `auth_format` in
   `pagerduty_example.py`'s `runner.main(...)`: `"Bearer {token}"` (the default: Jira Data Center, Slack,
-  most APIs), `"Token token={token}"` (PagerDuty), `"Basic {token}"` (Basic auth: the variable
+  most APIs), `"Token token={token}"` (PagerDuty), `"Bot {token}"` (Discord), `"Basic {token}"` (Basic auth: the variable
   holds base64 of `user:api_token`, as Jenkins wants), `"Basic {basic}"` (an account and a token
   kept apart: `user_env` or `user_file` names the account, as Jira Cloud wants), or a header of
   the API's own through `headers=` with `auth_format` for `Authorization`.

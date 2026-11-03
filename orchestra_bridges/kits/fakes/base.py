@@ -55,6 +55,10 @@ class FakeServer:
     def route(self, method: str, path: str, query: dict[str, list[str]], body: Any) -> tuple[int, Any]:
         raise NotImplementedError
 
+    def response_headers(self, method: str, path: str) -> dict[str, str]:
+        """Headers a routed answer carries (a system's rate-limit headers); none by default."""
+        return {}
+
     def expected_auth(self) -> str:
         """The ``Authorization`` a request must carry: ``auth_format`` with the token (``{basic}``:
         base64 of ``basic_user:token``, as ``CachedClient`` sends it)."""
@@ -107,12 +111,12 @@ class FakeServer:
                 elif fake.token and not authorized:
                     status, headers, out = 401, {}, {"error": "unauthorized"}
                 else:
-                    headers = {}
                     try:
                         with fake._lock:
                             status, out = fake.route(method, u.path, query, body)
+                            headers = fake.response_headers(method, u.path)
                     except Exception as e:  # noqa: BLE001 - a fake answers 500, as a server would
-                        status, out = 500, {"error": type(e).__name__}
+                        status, out, headers = 500, {"error": type(e).__name__}, {}
                 payload = b"" if out is None else json.dumps(out).encode()
                 self.send_response(status)
                 for k, v in headers.items():

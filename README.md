@@ -2,7 +2,7 @@
 
 A library for bringing an outside system into an [Orchestra](https://github.com/danroblewis/orchestra)
 project: the parts from which a Supervisor or a coding tool writes, **in the owner's repository**,
-the scripts that relay what people did in GitHub, Jira, Slack or PagerDuty as events on the
+the scripts that relay what people did in GitHub, Jira, Slack, Discord or PagerDuty as events on the
 project's bus and measure what is there for its metrics store (the owner, 2026-11-01: "a library or
 framework so that AI agents within my repo ... could write scripts in the target repo to do the
 metrics and event collection").
@@ -11,12 +11,12 @@ The plugin reads no system itself. It gives:
 
 - **the kits** (`orchestra_bridges.kits`): `CachedClient` (read-only HTTP: a disk cache of only what
   the script keeps, a per-host rate limit shared by every process, retries with `Retry-After`, the
-  token in memory, `ca_file` and `HTTPS_PROXY`/`NO_PROXY` for a corporate network), `Poller` (the
+  token in memory, Discord's `X-RateLimit-Remaining`/`-Reset-After` waited out, `ca_file` and `HTTPS_PROXY`/`NO_PROXY` for a corporate network), `Poller` (the
   interval loop, the cursor, each event published once, the relay rule), `Prometheus`, and the
   runner every scaffolded script shares;
-- **fakes** of GitHub, Jira (Data Center and Cloud), Slack, PagerDuty and a Prometheus API, in
+- **fakes** of GitHub, Jira (Data Center and Cloud), Slack, Discord, PagerDuty and a Prometheus API, in
   their real shapes, with a canary in every text; `FakeServer` for any other API;
-- **templates and a scaffold**: `orchestra bridges scaffold <github|jira|slack|pagerduty|promql|http> <name>`;
+- **templates and a scaffold**: `orchestra bridges scaffold <github|jira|slack|discord|pagerduty|promql|http> <name>`;
 - **the clearance gate**: a scaffolded script reads only a fake on this machine until the owner
   approves reading the real system;
 - **`orchestra bridges integrations`**: the scaffolded collectors, their clearance and their
@@ -84,7 +84,8 @@ a scaffold taken further.
 |---|---|---|
 | `github` | `github.pr.opened`, `.synchronize`, `.labeled`, `.unlabeled`, `.review_requested`, `.approved`, `.changes_requested`, `.commented`, `.merged`, `.closed`, `.reopened`, `github.checks.completed`, `github.issue.opened`, `.labeled`, `.unlabeled`, `.closed`, `.reopened` (the vocabulary the Workflows plugin's examples wait on) | `github_issues_open`, `github_prs_open{review}` |
 | `jira` | `jira.issue.created`, `.assigned`, `.transitioned`; `flavour` = `datacenter` (REST v2, a personal access token) or `cloud` (REST v3 `/search/jql`, the account's email and an API token), `auto` by the site's host | `jira_issues{status, category}` |
-| `slack` | `slack.message.posted` in the channels named | `slack_channel_messages_last_hour{channel}` |
+| `slack` | `slack.thread.started`, `.replied`, `.checked`, `.unchecked`, `slack.message.posted` in the channels named | `slack_channel_messages_last_hour{channel}`, `slack_threads_awaiting_reply{channel}`, `slack_threads_unchecked{channel}` |
+| `discord` | the Slack kit's facts in its shapes: `discord.thread.started`, `.replied`, `.checked` (✅), `.unchecked`, `discord.message.posted`; `channels` lists a guild's channels | `discord_channel_messages_last_hour{channel}`, `discord_threads_awaiting_reply{channel}`, `discord_threads_unchecked{channel}` |
 | `pagerduty` | `pagerduty.incident.triggered`, `.acknowledged`, `.resolved` | `pagerduty_incidents_open` |
 | `promql` | nothing (a store has no item events): prefer Orchestra's `[[sources]]` | a few PromQL answers as gauges |
 | `http` | `<system>.<thing>.<state>`, a guess at an API no kit knows | `<system>_<thing>s{state}` |

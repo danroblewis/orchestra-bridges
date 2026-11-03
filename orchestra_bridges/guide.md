@@ -16,7 +16,7 @@ no system itself, runs no process and declares no instrument or machine. It give
   memory), `Poller` (the interval loop, the cursor, each event published once, the series for a
   `[[collect]]`), `Prometheus`, and the runner every scaffolded script shares;
 - **the fakes** (`kits.fakes`: `FakeGitHub`, `FakeJira` in both flavours, `FakeSlack`,
-  `FakePagerDuty`, `FakePrometheus`, and `FakeServer` for a system no kit knows), in the systems'
+  `FakeDiscord`, `FakePagerDuty`, `FakePrometheus`, and `FakeServer` for a system no kit knows), in the systems'
   real shapes, with a canary in every text so a test shows none of it leaves;
 - **the templates and the scaffold**: `orchestra bridges scaffold <kit> <name>` writes a collector
   (`poller.toml`, `<name>.py`, `test_<name>.py`, `AGENTS.md`) that a coding tool adapts.
@@ -62,6 +62,7 @@ owner's word.
 | GitHub issues and pull requests | `github` | `github.pr.opened`, `.synchronize`, `.labeled`, `.unlabeled`, `.review_requested`, `.approved`, `.changes_requested`, `.commented`, `.merged` (`.closed`, `.reopened`), `github.checks.completed`, `github.issue.opened`, `.labeled`, `.closed`, `.reopened`; `github_issues_open`, `github_prs_open{review}` |
 | Jira, Data Center or Cloud | `jira` | `jira.issue.created`, `.assigned`, `.transitioned`; `jira_issues{status, category}` |
 | A Slack channel's threads | `slack` | `slack.thread.started`, `.replied`, `.checked`, `.unchecked`, `slack.message.posted`; `slack_channel_messages_last_hour{channel}`, `slack_threads_awaiting_reply{channel}`, `slack_threads_unchecked{channel}` |
+| A Discord channel's threads | `discord` | the Slack kit's facts in its shapes: `discord.thread.started`, `.replied`, `.checked`, `.unchecked`, `discord.message.posted`; `discord_channel_messages_last_hour{channel}`, `discord_threads_awaiting_reply{channel}`, `discord_threads_unchecked{channel}` |
 | PagerDuty | `pagerduty` | `pagerduty.incident.triggered`, `.acknowledged`, `.resolved`; `pagerduty_incidents_open` |
 | A Prometheus API (Chronosphere, Mimir) | `promql` | a few PromQL answers as gauges; `schema` lists what the team's `selectors` select (names only, bounded; never every name in the store); prefer Orchestra's own `[[sources]]`, which reads in place with no code |
 | Any other JSON API | `http` | a guess at an API no kit knows, for a coding tool to adapt |
@@ -114,6 +115,37 @@ owner's word.
   (`conversations.history` is Tier 3, and far less for an app not in its Marketplace): read each
   channel every 10 minutes or slower (`every`, or a channel's own `cadence`); a channel answered
   429 backs off, doubling to `max_backoff`, while the others go on.
+- **Discord**: the template reads with a bot token (`Authorization: Bot <token>`), the bot added to
+  the owner's server (guild). What it needs:
+
+  | To | Discord permission or intent |
+  |---|---|
+  | read (the kit: messages, threads, who reacted, a channel's name, the guild's channels) | **View Channel** and **Read Message History** on each channel (for a private one, the bot or its role added to it) |
+  | the Message Content intent | not needed: the kit reads no text (without it Discord sends empty `content`, which it never keeps) |
+  | post (an Outbox draft, never the kit) | adds **Send Messages** (and **Send Messages in Threads**) |
+
+  No Server Members intent, no Manage permission, no gateway connection: REST GET only. Keep the
+  token in `~/.config/orchestra-bridges/discord-token` (`chmod 600`, `token_file`; never print it
+  or ask for it in a chat). `guild` is the server's id; `python <name>.py channels` lists its
+  channels (id, type, `#name`: names and ids only, read-only) for the owner to pick `channels` from
+  (ids, not names: a text or announcement channel; a forum's posts are not read). It relays the
+  Slack kit's facts in its shapes, so a workflow that waits on `slack.thread.*` waits on
+  `discord.thread.*` with `who: {"outside": "discord"}`: a thread is a message that is not a
+  reply, its replies the messages in the Discord thread started from it and the inline replies to
+  it; `checked` is the ✅ (`check_emoji`) on it, published as `emoji: "white_check_mark"` (Slack's
+  name), so the workflow's `check_emoji` setting is unchanged; the subject is
+  `<channel>/<message id>` and `permalink` `https://discord.com/channels/<guild>/<channel>/<message>`.
+  Discord lists who reacted by id, not by time: when two people add the ✅ between polls, `by` is
+  one of them. Rate limits: the client waits out a bucket Discord says is empty
+  (`X-RateLimit-Remaining: 0` for `X-RateLimit-Reset-After`) and a 429's `Retry-After`; a channel
+  still answered 429 backs off, doubling to `max_backoff`, while the others go on. A poll costs per
+  channel a page of messages per 100 since the oldest thread followed (`follow`, 2 days), the
+  archived threads' page, one guild-wide active-threads read, and a read per thread with a new
+  message or a changed ✅ count. **Never**: post, react, create or archive a thread, or read a
+  message's text; the client sends GET only, and a reply by the owner is an Outbox draft.
+  **What to tell the Supervisor**: "Integrate Discord: guild <id>, these channels (from
+  `channels`), the token is in ~/.config/orchestra-bridges/discord-token; read only, never
+  post."
 - **Values marked `# guess`** in `poller.toml` (the site, the repository, the scope) are the
   template's placeholders: each is the owner's to give, and `integrations` counts what is left.
 

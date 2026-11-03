@@ -1,4 +1,4 @@
-"""Small HTTP fakes of the systems the kits read (GitHub, Jira in both flavours, Slack, PagerDuty, a
+"""Small HTTP fakes of the systems the kits read (GitHub, Jira in both flavours, Slack, Discord, PagerDuty, a
 Prometheus API), for a machine's tests: each on a random free
 loopback port, seeded from a JSON fixture (``fixtures/``, or the test's own), recording what it
 received (``requests``), checking a token when given one, and failing on request (``fail_next``).
@@ -25,6 +25,7 @@ Put the canary (``CANARY``) in every text it serves, so a test can show none of 
 ``scaffold http`` writes a machine whose test has one."""
 
 from .base import CANARY, FakeServer, Request
+from .discord import FakeDiscord
 from .github import FakeGitHub, FakeGitHubOrg
 from .jira import FakeJira
 from .pagerduty import FakePagerDuty
@@ -33,4 +34,4 @@ from .slack import FakeSlack
 from .slack_day import Day
 from .slack_day import day as slack_day
 
-__all__ = ["CANARY", "Day", "FakeGitHub", "FakeGitHubOrg", "FakeJira", "FakePagerDuty", "FakePrometheus", "FakeServer", "FakeSlack", "Request", "slack_day"]
+__all__ = ["CANARY", "Day", "FakeDiscord", "FakeGitHub", "FakeGitHubOrg", "FakeJira", "FakePagerDuty", "FakePrometheus", "FakeServer", "FakeSlack", "Request", "slack_day"]

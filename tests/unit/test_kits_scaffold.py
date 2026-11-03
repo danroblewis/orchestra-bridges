@@ -227,6 +227,7 @@ OWNERS = {     # what the owner's answers look like once filled in: another vari
     "github": [('repo = "acme/service"', 'repo = "theirs/their-service"'), ("branches = []", 'branches = ["agent/*"]')],
     "jira": [('jql = "project = ABC"', 'jql = "project = XYZ AND assignee = currentUser()"')],
     "slack": [('channels = ["C001"]', 'channels = ["C777", "C888"]')],
+    "discord": [('channels = ["C001"]', 'channels = ["777000000000000001"]'), ('guild = "1000"', 'guild = "4242"')],
     "pagerduty": [('open_statuses = ["triggered", "acknowledged"]', 'open_statuses = ["triggered"]')],
     "promql": [("query = \"queue_depth\"", "query = 'sum(rate(orders_total[5m]))'")],
     "http": [('system = "example"', 'system = "jenkins"'), ('list_path = "/api/items"', 'list_path = "/api/json"')],
@@ -262,7 +263,7 @@ def test_the_jira_kits_own_test_passes_for_cloud_too(tmp_path):
 
 def test_guessed_values_are_marked():
     """A tool reading a template knows which values to ask the owner for."""
-    for kind, keys in {"github": ["repo"], "jira": ["base_url", "jql"], "slack": ["channels"], "promql": ["base_url", "aliases"],
+    for kind, keys in {"github": ["repo"], "jira": ["base_url", "jql"], "slack": ["channels"], "discord": ["guild", "channels"], "promql": ["base_url", "aliases"],
                        "http": ["base_url", "system", "thing", "list_path"]}.items():
         lines = (TEMPLATES / kind / "poller.toml").read_text().splitlines()
         for key in keys:

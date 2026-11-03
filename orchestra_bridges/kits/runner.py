@@ -9,7 +9,10 @@ what it publishes:
   instrument: it measures and never publishes);
 - ``python <name>.py schema [...]``: for a program that gives one (the ``promql`` kit), what the
   system holds that the operator may choose from (each metric's name and its label names), printed
-  as lines: names only, never a value, a body or a text.
+  as lines: names only, never a value, a body or a text;
+- ``python <name>.py <command> [...]``: a listing of the kit's own (``commands``, the ``discord``
+  kit's ``channels``: the guild's channels by id, name and type), read and printed as ``schema``
+  is: names and ids only.
 
 Without ``--state-dir`` and ``--events-file`` it runs in the project at ORCHESTRA_REPO (the launcher
 sets it; else the working directory): events on the project's bus, the cursor under
@@ -71,11 +74,12 @@ Measure = Callable[[CachedClient, MachineFile, Registry], None]
 Schema = Callable[[CachedClient, MachineFile], list[str]]
 
 
-def parser(name: str) -> argparse.ArgumentParser:
+def parser(name: str, commands: tuple[str, ...] = ()) -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog=name)
-    ap.add_argument("what", nargs="?", choices=["poll", "measure", "schema"], default="poll",
-                    help="poll (the default: relay events on an interval), measure (print series once) "
-                         "or schema (print what may be measured: names only)")
+    ap.add_argument("what", nargs="?", choices=["poll", "measure", "schema", *commands], default="poll",
+                    help="poll (the default: relay events on an interval), measure (print series once), "
+                         "schema (print what may be measured: names only)"
+                         + "".join(f", {c}" for c in commands) + " (the kit's own listings: names and ids only)")
     ap.add_argument("--once", action="store_true", help="poll once and exit")
     ap.add_argument("--rounds", type=int, help="poll this many times and exit")
     ap.add_argument("--every", type=float, help="seconds between polls (poller.toml's every otherwise)")
@@ -158,14 +162,15 @@ def _until_stopped() -> threading.Event:
 def main(here: str | Path, make_poll: Callable[[CachedClient, MachineFile], Poll] | None = None,
          argv: list[str] | None = None, *,
          measure: Measure | None = None, schema: Schema | None = None, auth_format: str | Callable[[MachineFile], str] = "Bearer {token}",
-         headers: dict[str, str] | None = None) -> int:
+         headers: dict[str, str] | None = None, commands: dict[str, Schema] | None = None) -> int:
     here = Path(here)
     try:
         m = read(locate(here))
     except MachineFileError as e:
         print(e, file=sys.stderr)
         return 2
-    a = parser(m.name).parse_args(argv)
+    commands = dict(commands or {})
+    a = parser(m.name, tuple(commands)).parse_args(argv)
     if a.what == "poll" and make_poll is None:
         print(f"{m.name}: polls nothing (a measurement only): run it with measure", file=sys.stderr)
         return 2
@@ -200,14 +205,15 @@ def main(here: str | Path, make_poll: Callable[[CachedClient, MachineFile], Poll
     except (MachineFileError, KitError, ValueError) as e:
         print(f"{m.name}: {e}", file=sys.stderr)
         return 2
-    if a.what == "schema":
-        if schema is None:
+    if a.what == "schema" or a.what in commands:
+        listing = commands.get(a.what, schema)
+        if listing is None:
             print(f"{m.name}: has no schema to show", file=sys.stderr)
             return 2
         try:
-            lines = schema(client, m)
+            lines = listing(client, m)
         except Exception as e:  # noqa: BLE001 - say what failed; never a body or a header
-            print(f"{m.name}: schema failed: {type(e).__name__}: {e}", file=sys.stderr)
+            print(f"{m.name}: {a.what} failed: {type(e).__name__}: {e}", file=sys.stderr)
             return 1
         for line in lines:
             print(line)

@@ -16,6 +16,10 @@ standard library.
   Orchestra's ``[[sources]]``, ``~/.orchestrator/stores/<host key>/kits.rate``).
 - **Retries** on 429 and 5xx and on a dropped connection, with a doubling backoff; a
   ``Retry-After`` is honoured (and holds the host's bucket for every reader) up to ``max_wait_s``.
+  A bucket the server says is empty (``X-RateLimit-Remaining: 0`` with ``X-RateLimit-Reset-After``,
+  Discord's) holds the host's bucket until it resets, before the next request is sent. The last
+  answer's rate-limit headers (``X-RateLimit-*``, ``Retry-After``: counts and times, never a
+  secret) are in ``rate_headers``.
 - **The token stays in memory**: read once, by the bridges' one reader (``secret.read_token``),
   from the environment variable ``token_env`` or the file ``token_file`` (outside the repository,
   ``chmod 600``), sent as ``auth_format`` in ``Authorization``. ``{basic}`` in ``auth_format`` is
@@ -185,6 +189,7 @@ class CachedClient:
         self.proxies = proxies_for(self.host)
         self._opener = urllib.request.build_opener(urllib.request.ProxyHandler(self.proxies),
                                                    urllib.request.HTTPSHandler(context=tls_context(ca_file)))
+        self.rate_headers: dict[str, str] = {}   # the last answer's X-RateLimit-* and Retry-After
         self.sent = 0                       # requests that reached the network, for tests and logs
         self.hits = 0
 
@@ -277,10 +282,12 @@ class CachedClient:
                 with self._opener.open(req, timeout=self.timeout_s) as r:
                     raw = r.read()
                     log.info("%s %s -> %s", method, shown, r.status)
+                    self._rate(r.headers)
                     return r.status, _parse(raw)
             except urllib.error.HTTPError as e:
                 e.read()
                 log.info("%s %s -> %s", method, shown, e.code)
+                self._rate(e.headers)
                 if e.code not in RETRY_STATUS or attempt == self.retries:
                     raise HTTPFailure(e.code, shown) from None
                 wait = retry_after(e.headers.get("Retry-After"), self._clock())
@@ -295,6 +302,21 @@ class CachedClient:
             if wait is None:            # a Retry-After is waited out by the bucket's hold, at the next take
                 self._sleep(min(self.max_wait_s, self.backoff_s * 2 ** attempt))
         raise KitError(f"{method} {shown}: no answer")    # not reached
+
+    def _rate(self, headers) -> None:
+        """Keep the answer's rate-limit headers; an empty bucket (``X-RateLimit-Remaining: 0``) with
+        its ``X-RateLimit-Reset-After`` holds the host's bucket until then (up to ``max_wait_s``)."""
+        if headers is None:
+            return
+        self.rate_headers = {k.lower(): v for k, v in headers.items()
+                             if k.lower().startswith("x-ratelimit-") or k.lower() == "retry-after"}
+        if self.rate_headers.get("x-ratelimit-remaining") == "0":
+            try:
+                reset = float(self.rate_headers.get("x-ratelimit-reset-after", ""))
+            except ValueError:
+                return
+            if reset > 0:
+                self.limit.hold(min(reset, self.max_wait_s))
 
 
 def _parse(raw: bytes) -> Any:

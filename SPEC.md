@@ -102,13 +102,13 @@ that writes one (Orchestra's `docs/INTEGRATING.md`). One module each:
   `clearance = "approved"` (the owner's say), it reads only a fake on a loopback host.
 - `fakes/`: stdlib HTTP fakes of GitHub (pulls, issues, issue events, reviews, merge, check runs,
   commit status; labels by POST, PUT and DELETE), Jira in both flavours (Data Center's `/search`,
-  Cloud's `/search/jql`; the changelog, an issue, transitions), Slack (`conversations.history`, `users.info`), PagerDuty (incidents, an incident)
+  Cloud's `/search/jql`; the changelog, an issue, transitions), Slack (`conversations.history`, `users.info`), Discord (a channel's messages, threads, reactions, the guild's channels; its rate-limit headers), PagerDuty (incidents, an incident)
   and a Prometheus API (`query`, `query_range`, `series`), each on a random port, seeded from a JSON
   fixture, checking a token, recording requests and failing on request; a canary in every text.
   Their base, `FakeServer` (exported), is for a fake of a new system: a subclass implements
   `route(method, path, query, body)`; the `http` template's test shows one.
 - `scaffold.py`, `orchestra bridges scaffold <kind> <name> [--root repo|state|overlay]`: a collector
-  from a template (`github`, `jira`, `slack`, `pagerduty`; `http`, any JSON API no kit knows: a list endpoint, items
+  from a template (`github`, `jira`, `slack`, `discord`, `pagerduty`; `http`, any JSON API no kit knows: a list endpoint, items
   mapped to events by a key and a change stamp, one gauge; `promql`, a measurement only) as
   `<root>/machines/<name>/{poller.toml, <name>.py, test_<name>.py, AGENTS.md}`: `.orchestra/` in
   the repository by default, the state directory, or beside the private overlay. It writes no

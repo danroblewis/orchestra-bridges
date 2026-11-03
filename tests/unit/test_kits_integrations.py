@@ -38,7 +38,7 @@ def test_lists_scaffolded_machines_with_clearance_token_name_schedule_and_guesse
 
     assert bridges_main(["integrations"]) == 0
     out = capsys.readouterr().out
-    assert "kits: github, http, jira, pagerduty, promql, slack" in out and "$PD_READONLY" in out
+    assert "kits: discord, github, http, jira, pagerduty, promql, slack" in out and "$PD_READONLY" in out
     assert "a-real-looking-secret-value" not in out and "pipeline_manager" not in out
     assert bridges_main(["integrations", "--json"]) == 0
     got = json.loads(capsys.readouterr().out)
