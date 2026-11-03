@@ -18,7 +18,7 @@ data_class = "unknown"
 [settings]
 base_url = "https://api.github.com"   # GitHub Enterprise: https://<host>/api/v3
 token_env = "GITHUB_TOKEN"        # the NAME of the variable holding a token with read access; never the token
-# token_file = "~/.config/orchestra-bridges/{{kind}}-token"   # instead: `gh auth token` written there, chmod 600
+# token_file = "<path to the token file>"   # instead: `gh auth token` written to a file the owner names, chmod 600
 every = "5m"
 per_minute = 60                   # GitHub allows 5,000 an hour per token, shared with the owner's own use
 ttl = "4m"

@@ -13,7 +13,8 @@ no system itself, runs no process and declares no instrument or machine. It give
 
 - **the kits** (`orchestra_bridges.kits`): `CachedClient` (read-only HTTP with a disk cache of only
   what the script keeps, a per-host rate limit shared by every process, retries, the token in
-  memory), `Poller` (the interval loop, the cursor, each event published once, the series for a
+  memory; the owner names the file that holds a token, and you never suggest one, not even as an
+  example), `Poller` (the interval loop, the cursor, each event published once, the series for a
   `[[collect]]`), `Prometheus`, and the runner every scaffolded script shares;
 - **the fakes** (`kits.fakes`: `FakeGitHub`, `FakeJira` in both editions, `FakeSlack`,
   `FakeDiscord`, `FakePagerDuty`, `FakePrometheus`, and `FakeServer` for a system no kit knows), in the systems'
@@ -113,8 +114,8 @@ owner's word.
   | post (an Outbox draft, never the kit) | adds `chat:write` |
 
   No `users:read` (a bot's message says it is one), no `reactions:read` (the parent's reactions
-  come with the history). Keep it in `~/.config/orchestra-bridges/slack-token` (`chmod 600`,
-  `token_file`). It relays facts, each as who acted: each thread's start, its replies (`first`: the
+  come with the history). Keep it in a `chmod 600` file the owner names
+  (`token_file`). It relays facts, each as who acted: each thread's start, its replies (`first`: the
   first by a person other than the author), the check emoji added (`checked`, as who added it) and
   removed (`unchecked`, as who had checked it, since only they can remove it; when several had,
   as the thread's author with `by: "unknown"`), each with the thread's `permalink`. A channel's
@@ -136,7 +137,7 @@ owner's word.
   | post (an Outbox draft, never the kit) | adds **Send Messages** (and **Send Messages in Threads**) |
 
   No Server Members intent, no Manage permission, no gateway connection: REST GET only. Keep the
-  token in `~/.config/orchestra-bridges/discord-token` (`chmod 600`, `token_file`; never print it
+  token in a `chmod 600` file the owner names (`token_file`; never print it
   or ask for it in a chat). `guild` is the server's id; `python <name>.py channels` lists its
   channels (id, type, `#name`: names and ids only, read-only) for the owner to pick `channels` from
   (ids, not names: a text or announcement channel; a forum's posts are not read). It relays the
@@ -155,7 +156,7 @@ owner's word.
   message or a changed ✅ count. **Never**: post, react, create or archive a thread, or read a
   message's text; the client sends GET only, and a reply by the owner is an Outbox draft.
   **What to tell the Supervisor**: "Integrate Discord: guild <id>, these channels (from
-  `channels`), the token is in ~/.config/orchestra-bridges/discord-token; read only, never
+  `channels`), the token is in <path to the token file>; read only, never
   post."
 - **Values marked `# guess`** in `poller.toml` (the site, the repository, the scope) are the
   template's placeholders: each is the owner's to give, and `integrations` counts what is left.
@@ -181,7 +182,7 @@ twice and that no text or token left.
 ## Credentials: the human's to create, yours to point at
 
 - **A file first**: `token_file` (and `user_file`), a `chmod 600` file outside any repository
-  (`~/.config/orchestra-bridges/<system>-token`), read only by this script. **An environment
+  (`token_file = "<path to the token file>"`), read only by this script. **An environment
   variable second**: `token_env` names it (never holds it), and it must be in the environment
   `orchestra run` starts with; every program `orchestra run` starts inherits that environment, so a
   token there reaches them all.
@@ -237,7 +238,7 @@ ttl = "4m"                                   # how long a cached answer is serve
 per_minute = 60                              # the default request rate per host, for every collector
 hosts = { "jira.acme.com" = 20 }             # a host's own rate: what its administrators allow
 tokens = { jira = "JIRA_API_TOKEN" }         # a kit's variable NAME, when a script names none
-ca_file = "~/.config/orchestra-bridges/corporate-ca.pem"   # trusted beside the system's CAs
+ca_file = "<path to the CA bundle>"   # trusted beside the system's CAs
 ```
 
 It is checked by `config_edit` like the rest (`a token never goes in orchestra.toml`; an unknown

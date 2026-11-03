@@ -15,7 +15,7 @@ data_class = "unknown"
 [settings]
 base_url = "https://api.pagerduty.com"
 token_env = "PAGERDUTY_TOKEN"     # the NAME of the variable holding a read-only REST API key; never the key
-# token_file = "~/.config/orchestra-bridges/pagerduty-token"   # instead: a chmod 600 file outside any repository
+# token_file = "<path to the token file>"   # instead: a chmod 600 file outside any repository
 every = "5m"
 per_minute = 30                   # PagerDuty allows far more; stay polite
 ttl = "4m"                        # a cached answer is served this long (shorter than every)

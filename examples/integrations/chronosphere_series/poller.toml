@@ -15,7 +15,7 @@ data_class = "unknown"
 [settings]
 base_url = "https://acme.chronosphere.io/data/metrics"   # the API root that serves /api/v1/query
 token_env = "CHRONOSPHERE_TOKEN"  # the NAME of the variable holding the API token; never the token
-# token_file = "~/.config/orchestra-bridges/chronosphere-token"   # instead: a chmod 600 file outside any repository
+# token_file = "<path to the token file>"   # instead: a chmod 600 file outside any repository
 per_minute = 30
 ttl = "50s"                       # under the [[collect]] entry's every
 max_series = 50                   # an answer with more series fails: narrow the query
