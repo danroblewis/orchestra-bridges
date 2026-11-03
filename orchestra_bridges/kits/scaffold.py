@@ -65,7 +65,7 @@ KINDS = {
                       "`pagerduty.incident.triggered`, `.acknowledged`, `.resolved` (subject: the incident's id; "
                       "source: `person.pagerduty.<user id>`, or `bot.pagerduty` when the service changed it)",
                       "`pagerduty_incidents_open{service, urgency}` (the open incidents; a sum over its labels needs no series of its own)"),
-    "jira": Kind("Jira (Data Center or Cloud: `[settings] flavour`)", "JIRA_API_TOKEN", "FakeJira",
+    "jira": Kind("Jira (Data Center or Cloud: `[settings] edition`)", "JIRA_API_TOKEN", "FakeJira",
                  "`jira.issue.created`, `jira.issue.assigned` and `jira.issue.transitioned` once per change, and "
                  "`jira.comment.added` once per comment (subject: the issue key; source: `person.jira.<account>`; "
                  "data: the status, the assignee's account, from and to; a comment's issue and author, never its text)",

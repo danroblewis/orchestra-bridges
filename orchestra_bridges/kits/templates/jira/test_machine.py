@@ -1,4 +1,4 @@
-"""{{name}} against the kit's Jira fake, in the flavour poller.toml names (Data Center or Cloud):
+"""{{name}} against the kit's Jira fake, in the edition poller.toml names (Data Center or Cloud):
 two polls (a restart between them) relay each creation, assignment, status change and comment once, as who
 made it; the first run starts now (or at ``since``: then only the issues not yet done), never at the
 beginning of history; ``measure`` prints the issues by status; the fake gets only the runner's placeholders,
@@ -39,7 +39,7 @@ def program(here=HERE):
     return mod
 
 
-FLAVOUR = program().flavour(read(HERE / "poller.toml"))     # the owner's site decides: cloud or datacenter
+EDITION = program().edition(read(HERE / "poller.toml"))     # the owner's site decides: cloud or datacenter
 
 
 def recent_world() -> dict:
@@ -60,7 +60,7 @@ def recent_world() -> dict:
 def fake(tmp_path, monkeypatch):
     monkeypatch.setenv("ORCHESTRATOR_HOME", str(tmp_path / "home"))
     monkeypatch.setenv(TOKEN_ENV, REAL)
-    with FakeJira(recent_world(), token=TOKEN, basic_user=fake_user(HERE), flavour=FLAVOUR) as f:
+    with FakeJira(recent_world(), token=TOKEN, basic_user=fake_user(HERE), edition=EDITION) as f:
         yield f
 
 
@@ -145,7 +145,7 @@ def test_each_issue_event_carries_the_issue_now_so_a_start_can_refuse_one_alread
 
 def test_a_team_scope_and_the_sprint(fake, tmp_path):
     """``users`` keeps the team's issues (assigned to or reported by one of them); ``sprint_field``
-    puts the issue's open sprint's name on each event, in this flavour's shape."""
+    puts the issue's open sprint's name on each event, in this edition's shape."""
     team = set_args(jql=f"project = {PROJECT}", since="now", users=["dana", "erin"], sprint_field="customfield_10101")
     poll_once(fake, tmp_path, team)
     sprint = {"id": 7, "name": "Team Sprint 7", "state": "ACTIVE"}

@@ -26,7 +26,7 @@ def test_the_guide_is_in_the_package_and_names_every_kit():
     for kind in KINDS:
         assert f"| `{kind}` |" in TEXT, kind
     for word in ("approve_integration", "integrate_system", ".orchestra/machines/<name>/", "Outbox", "clearance",
-                 "token_file", "flavour", "HTTPS_PROXY", "ca_file"):
+                 "token_file", "edition", "HTTPS_PROXY", "ca_file"):
         assert word in TEXT, word
 
 

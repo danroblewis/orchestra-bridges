@@ -101,8 +101,10 @@ that writes one (Orchestra's `docs/INTEGRATING.md`). One module each:
   `per_minute`, `ttl` and the kit's own keys; never a token) and its **clearance**: until
   `clearance = "approved"` (the owner's say), it reads only a fake on a loopback host.
 - `fakes/`: stdlib HTTP fakes of GitHub (pulls, issues, issue events, reviews, merge, check runs,
-  commit status; labels by POST, PUT and DELETE), Jira in both flavours (Data Center's `/search`,
-  Cloud's `/search/jql`; the changelog, an issue, transitions), Slack (`conversations.history`, `users.info`), Discord (a channel's messages, threads, reactions, the guild's channels; its rate-limit headers), PagerDuty (incidents, an incident)
+  commit status; labels by POST, PUT and DELETE), Jira in both editions (`edition=`: Data Center's `/rest/api/2/search` paged by `startAt`, a
+  personal access token as Bearer and users by `name`; Cloud's `/rest/api/3/search/jql` paged by
+  `nextPageToken`, HTTP Basic and account ids; `serverInfo` with its `deploymentType`; the
+  changelog, an issue, transitions), Slack (`conversations.history`, `users.info`), Discord (a channel's messages, threads, reactions, the guild's channels; its rate-limit headers), PagerDuty (incidents, an incident)
   and a Prometheus API (`query`, `query_range`, `series`), each on a random port, seeded from a JSON
   fixture, checking a token, recording requests and failing on request; a canary in every text.
   Their base, `FakeServer` (exported), is for a fake of a new system: a subclass implements

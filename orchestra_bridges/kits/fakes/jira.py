@@ -1,14 +1,17 @@
-"""A fake of Jira's REST API, in its shapes, for what a poller reads, in either flavour:
+"""A fake of Jira's REST API, in its shapes, for what a poller reads, in either edition
+(``edition=``; ``flavour=`` is its older name):
 
-- **Data Center** (``flavour="datacenter"``, the default): REST API v2, ``/rest/api/2/search``
+- **Data Center** (``edition="datacenter"``, the default): REST API v2, ``/rest/api/2/search``
   (GET or POST, ``jql``, ``startAt``/``maxResults`` paging with ``total``, ``fields``), users by
   ``name`` and ``key``, a personal access token as ``Bearer``;
-- **Cloud** (``flavour="cloud"``): REST API v3, ``/rest/api/3/search/jql`` (GET or POST,
+- **Cloud** (``edition="cloud"``): REST API v3, ``/rest/api/3/search/jql`` (GET or POST,
   ``nextPageToken`` paging with ``isLast``, no ``total``; the old ``/search`` answers 410 Gone, as
   Cloud does), users by ``accountId`` only, HTTP Basic of the account's email and an API token
   (``basic_user``). An account id here is the fixture's login.
 
-Both serve ``/myself`` (the token's account: ``me``), ``/issue/<key>`` and
+Both serve ``/rest/api/2/serverInfo`` (Cloud's ``/rest/api/3/serverInfo`` too), whose
+``deploymentType`` tells them apart: ``Cloud``, or ``Server`` on a self-managed site (``deployment``
+says another: Data Center may answer ``DataCenter``). Both serve ``/myself`` (the token's account: ``me``), ``/issue/<key>`` and
 ``/issue/<key>/transitions`` (GET lists them; POST ``{"transition": {"id"}}`` moves the issue,
 which a read-only machine never does, but a test may, to change the world).
 
@@ -187,11 +190,15 @@ class FakeJira(FakeServer):
     fixture_name = "jira.json"
 
     def __init__(self, fixture=None, token: str | None = None, basic_user: str | None = None, *,
-                 flavour: str = "datacenter", me: str = "api-user"):
+                 edition: str | None = None, flavour: str | None = None, me: str = "api-user",
+                 deployment: str | None = None):
+        flavour = edition or flavour or "datacenter"
         if flavour not in FLAVOURS:
-            raise ValueError(f"flavour is one of {FLAVOURS}, not {flavour!r}")
+            raise ValueError(f"edition is one of {FLAVOURS}, not {flavour!r}")
         super().__init__(fixture, token, basic_user)
         self.flavour, self.me = flavour, me
+        self.edition = flavour
+        self.deployment = deployment or ("Cloud" if flavour == "cloud" else "Server")
         self.api = CLOUD_API if flavour == "cloud" else API
         self.auth_format = "Basic {basic}" if flavour == "cloud" else "Bearer {token}"
 
@@ -307,6 +314,8 @@ class FakeJira(FakeServer):
         q = query if method == "GET" else {**query, **_as_query(body)}
         if path == f"{api}/myself":
             return 200, self._user(self.me)
+        if path in (f"{API}/serverInfo", f"{api}/serverInfo"):
+            return 200, self._server_info()
         if self.flavour == "cloud":
             if path == f"{api}/search/jql":
                 return self._search(q, tokens=True)
@@ -331,6 +340,13 @@ class FakeJira(FakeServer):
                 return 404, {"errorMessages": ["Issue Does Not Exist"], "errors": {}}
             return 200, self._issue(i, _fields(query), "changelog" in (one(query, "expand") or ""))
         return 404, {"errorMessages": ["null for uri"], "errors": {}}
+
+    def _server_info(self) -> dict:
+        """``serverInfo`` in its shape: the deployment type, the version, and the site's title (the canary)."""
+        version = "1001.0.0-SNAPSHOT" if self.flavour == "cloud" else "9.12.15"
+        return {"baseUrl": self.url, "version": version,
+                "versionNumbers": [int(x) for x in version.split("-")[0].split(".")],
+                "deploymentType": self.deployment, "buildNumber": 100000, "serverTitle": f"{CANARY} Jira"}
 
     def _search(self, q: dict[str, list[str]], tokens: bool = False) -> tuple[int, Any]:
         """A page of the issues the JQL matches: ``startAt`` and ``total`` (Data Center), or

@@ -1,4 +1,4 @@
-# jira_example: a poller for Jira (Data Center or Cloud: `[settings] flavour`) (kit `jira`)
+# jira_example: a poller for Jira (Data Center or Cloud: `[settings] edition`) (kit `jira`)
 
 You are a coding tool working on this directory. Read this first; it is the whole contract.
 
@@ -7,7 +7,7 @@ You are a coding tool working on this directory. Read this first; it is the whol
 `jira_example.py` is a small program with two halves:
 
 - **the poller** (`python jira_example.py`): every few minutes (`poller.toml`, `[settings] every`; 5
-  minutes by default) it reads what changed in Jira (Data Center or Cloud: `[settings] flavour`) and relays it as events on the project's
+  minutes by default) it reads what changed in Jira (Data Center or Cloud: `[settings] edition`) and relays it as events on the project's
   Orchestra bus: `jira.issue.created`, `jira.issue.assigned` and `jira.issue.transitioned` once per change, and `jira.comment.added` once per comment (subject: the issue key; source: `person.jira.<account>`; data: the status, the assignee's account, from and to; a comment's issue and author, never its text);
 - **the measurement** (`python jira_example.py measure`): one read, printed as Prometheus text, which a
   `[[collect]]` entry runs and stores: `jira_issues{status, category}` (the issues in scope by status).
@@ -16,7 +16,7 @@ It was scaffolded by `orchestra bridges scaffold jira jira_example` from the orc
 (`orchestra_bridges.kits`: `CachedClient`, `Prometheus`, `Poller`, `runner`).
 
 **The poller is a relay, never a machine** (Orchestra's rule 2, decision D19: the provider is never
-the machine). Every event's `source` is who acted in Jira (Data Center or Cloud: `[settings] flavour`): `person.jira.<account>` for a
+the machine). Every event's `source` is who acted in Jira (Data Center or Cloud: `[settings] edition`): `person.jira.<account>` for a
 person, `bot.jira` for the system's own act (`actor_source`), or the person the project's
 identity map names (`[bridges] people`). The kit announces each actor once
 (`orchestra.machine.started`, kind `person` or `program`) before their first event; the poller
@@ -35,7 +35,7 @@ still passes once the owner's values are in), this file.
 
 ## What it may do
 
-- **Read** Jira (Data Center or Cloud: `[settings] flavour`) through `CachedClient` only (rate-limited per host, retried with backoff,
+- **Read** Jira (Data Center or Cloud: `[settings] edition`) through `CachedClient` only (rate-limited per host, retried with backoff,
   `Retry-After` honoured, cached on disk: only what `keep` returns). Keep `per_minute` low and
   `ttl` a little under `every`; read changes fresh (`ttl_s=0`) when a stale answer would hide one.
 - **Publish** through `Poller.emit(type, subject, data, source=actor, stamp=...)` only: types
@@ -52,7 +52,7 @@ still passes once the owner's values are in), this file.
   label names, times. Never a title, summary, description, comment, message body or a person's
   name. `keep`/`meta` in `jira_example.py` decides what is cached and returned: keep it that strict.
   The test checks the fake's canary text appears in no output and no file.
-- **Never write to Jira (Data Center or Cloud: `[settings] flavour`).** Read-only: no comments, no transitions, no acknowledgements.
+- **Never write to Jira (Data Center or Cloud: `[settings] edition`).** Read-only: no comments, no transitions, no acknowledgements.
 - **Credentials by reference only, a file first.** The first answer is a file: `[settings]
   token_file` (and `user_file` for an account), a `chmod 600` file outside any repository, which
   only this program reads. The second is an environment variable's NAME, `[settings] token_env`
@@ -74,7 +74,7 @@ still passes once the owner's values are in), this file.
   CA: `[settings] ca_file` (a PEM bundle, trusted beside the system's), or `[bridges.kits] ca_file`
   for every collector.
 - **The compliance check.** `clearance = "needs approval"` in `poller.toml` means the program
-  reads only a fake on this machine (a loopback URL); it refuses Jira (Data Center or Cloud: `[settings] flavour`) itself before any
+  reads only a fake on this machine (a loopback URL); it refuses Jira (Data Center or Cloud: `[settings] edition`) itself before any
   request. Only the owner approves reading a company system (then `clearance = "approved"` and
   `data_class`); you never change it on your own. Until then the poller that runs for good
   (no `--once`) does not exit: it logs `waiting for approval` once, reads nothing, and re-reads
@@ -124,7 +124,7 @@ timeout = "60s"
 Against a fake, each actor's announcement says so (`fake`, shown with the machine), and a
 `[notes]` table in `poller.toml` adds what else the owner should know on each card: `stand_in`
 (it acts for someone who cannot here), `disabled` (it runs and does nothing, and why). One line
-each, the program's own words, never text from Jira (Data Center or Cloud: `[settings] flavour`).
+each, the program's own words, never text from Jira (Data Center or Cloud: `[settings] edition`).
 
 Then the Instruments page lists `jira_example` (its rounds, points and last error), `orchestra events info`
 shows the events arriving on the bus, and the Machines page shows the people and bots it relays

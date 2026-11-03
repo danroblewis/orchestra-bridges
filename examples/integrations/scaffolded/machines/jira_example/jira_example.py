@@ -1,12 +1,17 @@
 """jira_example: a poller that relays what people did to the Jira issues in scope (scaffolded from the
-orchestra-bridges kit ``jira``; edit freely, AGENTS.md says what it may do), for either flavour of
-Jira (``[settings] flavour``):
+orchestra-bridges kit ``jira``; edit freely, AGENTS.md says what it may do), for either edition of
+Jira (``[settings] edition``; the events are the same for both):
 
 - **Data Center**: REST API v2, ``/rest/api/2/search`` (``startAt`` paging), people by user name,
   a personal access token as ``Bearer``;
 - **Cloud**: REST API v3, ``/rest/api/3/search/jql`` (``nextPageToken`` paging; Cloud removed
   ``/search``), people by account id, an API token with the account's email as HTTP Basic
   (``user_env`` or ``user_file`` names the email; the token file holds the token as issued).
+
+``edition`` is ``cloud`` (when not set), ``datacenter``, or ``auto``: ``cloud`` on ``*.atlassian.net``,
+``datacenter`` anywhere else. ``python jira_example.py edition`` (once cleared) reads the site's
+``/rest/api/2/serverInfo`` and prints the edition its ``deploymentType`` says (``Cloud``: cloud;
+``Server`` or ``DataCenter``: datacenter) and the version: nothing else. Either way it only reads.
 
 ``python jira_example.py`` (the poller): each poll searches the issues in scope (``[settings] jql``)
 updated since the last poll (less ``overlap``), with their changelog, fresh, and publishes each change
@@ -64,22 +69,43 @@ HERE = Path(__file__).resolve().parent
 PAGE = 100
 
 
-def flavour(settings) -> str:
-    """``cloud`` or ``datacenter``: ``[settings] flavour``, or for ``auto`` the configured site's host
-    (poller.toml's ``base_url``, never a test's fake)."""
-    f = str(settings.extra.get("flavour") or "auto")
-    if f in ("cloud", "datacenter"):
-        return f
+EDITIONS = ("cloud", "datacenter", "auto")
+
+
+def edition(settings) -> str:
+    """``cloud`` or ``datacenter``: ``[settings] edition`` (``flavour``, its older name), ``cloud``
+    when neither is set, or for ``auto`` the configured site's host (poller.toml's ``base_url``,
+    never a test's fake)."""
+    e = str(settings.extra.get("edition") or settings.extra.get("flavour") or "cloud").lower()
+    if e not in EDITIONS:
+        raise ValueError(f"[settings] edition is one of {', '.join(EDITIONS)}, not {e!r}")
+    if e != "auto":
+        return e
     host = (urllib.parse.urlsplit(settings.base_url).hostname or "").lower()
     return "cloud" if host.endswith(".atlassian.net") else "datacenter"
 
 
 def api_of(settings) -> str:
-    return "/rest/api/3" if flavour(settings) == "cloud" else "/rest/api/2"
+    return "/rest/api/3" if edition(settings) == "cloud" else "/rest/api/2"
 
 
 def auth_format(settings) -> str:
-    return "Basic {basic}" if flavour(settings) == "cloud" else "Bearer {token}"
+    """Cloud: HTTP Basic of the account's email and an API token; Data Center: a personal access
+    token as ``Bearer``. Either is read from its file or variable by the runner, never from here."""
+    return "Basic {basic}" if edition(settings) == "cloud" else "Bearer {token}"
+
+
+def keep_server(body: dict) -> dict:
+    """What is kept of ``serverInfo``: the deployment type and the version. Never the title or URL."""
+    return {"deploymentType": body.get("deploymentType"), "version": body.get("version")}
+
+
+def show_edition(api, settings) -> list[str]:
+    """The site's edition by its ``serverInfo`` (on both editions at ``/rest/api/2/serverInfo``)."""
+    info = api.get("/rest/api/2/serverInfo", {}, keep=keep_server, ttl_s=0)
+    kind = str(info.get("deploymentType") or "")
+    said = "cloud" if kind.lower() == "cloud" else "datacenter" if kind else "unknown"
+    return [f'edition = "{said}"\t# deploymentType {kind or "none"}, version {info.get("version") or "unknown"}']
 
 
 def parse_time(t: str) -> datetime:
@@ -184,7 +210,7 @@ def page_of(body: dict, issues: list) -> dict:
 
 def search(api, settings, jql: str, keep, ttl_s: float | None = None, **params) -> list[dict]:
     out, start, token = [], 0, None
-    cloud = flavour(settings) == "cloud"
+    cloud = edition(settings) == "cloud"
     while True:
         paging = {"nextPageToken": token} if cloud else {"startAt": start}
         page = api.get(f"{api_of(settings)}/search/jql" if cloud else f"{api_of(settings)}/search",
@@ -275,7 +301,8 @@ def measure(api, settings, series) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    return runner.main(HERE, make_poll, argv, measure=measure, auth_format=auth_format)
+    return runner.main(HERE, make_poll, argv, measure=measure, auth_format=auth_format,
+                       commands={"edition": show_edition})
 
 
 if __name__ == "__main__":
