@@ -145,7 +145,34 @@ integrations` are the plugin's commands (`__main__.py`).
   against their fakes; the Machines page shows their actors, never the pollers.
 - `tests/contract/test_rabbitmq_live.py` (opt in): the preset against the rig's real store.
 
-## 7. Not built yet
+## 7. The scripted team (test tooling)
+
+The owner, 2026-11-03: "When I start using this at work, we won't be doing any write-access to Jira
+or Slack, so to test it you will need to create and modify Jira tickets and send Discord messages to
+test that the read-only features are working." `python -m orchestra_bridges.team`
+(`orchestra_bridges/team/`) plays a team's working day against a Jira test project and Discord test
+channels, so the read-only pollers relay something real. It is the package's one writer, and it is
+test tooling: run by hand, never by the plugin; **never a machine** (nothing declares it, it
+announces and publishes nothing; the pollers relay its acts as the accounts it used).
+
+- **The day** (`day.py`): eight rounds, drawn from `--seed`: five tickets created (summaries
+  `[orchestra live test] …`, labels `orchestra-live-test` and `orchestra-live-team`), assigned to the
+  project's assignable people, moved by stage (start, review, done) through the transitions they
+  have, some commented on; in the channels a status ask at each end of the day, questions answered
+  inline, an ad-hoc request that becomes a ticket, an incident alert answered and checked (✅).
+  `--rhythm` is how long the day takes; `--once` plays one round (the next of an unfinished day).
+- **The ledger** (`--ledger`, JSON): per day the tickets' keys and ids, the messages' channels and
+  ids, and what was done when; never text. Written after every write.
+- **The close** (`--close`): every ticket the ledger holds and nothing closed, walked to a done
+  status with `--resolution` when the screen takes one; only a ticket with the team's label and
+  prefix. Nothing is ever deleted, edited away or unsent.
+- **Limits**: a write at most every 2 seconds across both systems (`wire.py`), a 429 waited out;
+  credentials by file reference only (`secret.read_token`), none to a fake on this machine;
+  `--dry-run` writes nothing (it reads the people, the channels' names and the tickets' status).
+- **Tests**: `tests/unit/test_team.py`, against `FakeJira` (Cloud) and `FakeDiscord`, which accept
+  the team's writes (an issue, an assignee, a comment, a resolution; a message, a reaction).
+
+## 8. Not built yet
 
 Webhooks; Confluence and Drive kits; the Pub/Sub preset; a Slack kit for the owner's pings
 (search with a user token: what the retired Slack reader did) and a posting fake.
