@@ -16,12 +16,14 @@ data_class = "unknown"
 
 [settings]
 base_url = "https://jira.example.com"   # guess: ask the owner (a Data Center host, or https://<site>.atlassian.net)
-# flavour: "datacenter" (REST API v2, /search, a personal access token as Bearer) or "cloud" (REST
-# API v3, /search/jql, an API token with the account's email as HTTP Basic); "auto": cloud on
-# *.atlassian.net, else datacenter (a Cloud site on its own domain needs "cloud")
-flavour = "auto"
+# edition: "datacenter" (REST API v2, /search with startAt, a personal access token as Bearer, people
+# by user name) or "cloud" (REST API v3, /search/jql with nextPageToken, an API token with the
+# account's email as HTTP Basic, people by account id); "auto": cloud on *.atlassian.net, else
+# datacenter (a Cloud site on its own domain needs "cloud"). Not set: cloud. Once cleared,
+# `python {{name}}.py edition` prints what the site's serverInfo says. The events are the same.
+edition = "auto"                  # guess: ask the owner (or the serverInfo's deploymentType)
 token_env = "JIRA_API_TOKEN"      # the NAME of the variable holding the token; never the token
-# token_file = "~/.config/orchestra-bridges/{{kind}}-token"   # instead: a chmod 600 file outside any repository
+# token_file = "~/.config/orchestra-bridges/{{kind}}-token"   # instead (Data Center: the PAT): a chmod 600 file outside any repository
 # user_file = "~/.config/orchestra-bridges/{{kind}}-email"    # Cloud: the account the token belongs to (or user_env)
 every = "5m"
 per_minute = 20

@@ -33,7 +33,7 @@ def test_lists_scaffolded_machines_with_clearance_token_name_schedule_and_guesse
         "pagerduty", "state", "approved", "$PD_READONLY", "[[machines]]", True, 0)
     assert (j.root, j.clearance, j.token, j.schedule, j.collect_entry) == (
         "repo", "needs approval", "$JIRA_API_TOKEN", "no", False)
-    assert j.guesses == 2                                                # the site and the JQL
+    assert j.guesses == 3                                                # the site, the edition and the JQL
     assert c.schedule is None and c.guesses >= 2                  # a measurement only: no [[machines]] wanted
 
     assert bridges_main(["integrations"]) == 0

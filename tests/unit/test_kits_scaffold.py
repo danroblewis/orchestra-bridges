@@ -263,7 +263,7 @@ def test_the_jira_kits_own_test_passes_for_cloud_too(tmp_path):
 
 def test_guessed_values_are_marked():
     """A tool reading a template knows which values to ask the owner for."""
-    for kind, keys in {"github": ["repo"], "jira": ["base_url", "jql"], "slack": ["channels"], "discord": ["guild", "channels"], "promql": ["base_url", "aliases"],
+    for kind, keys in {"github": ["repo"], "jira": ["base_url", "edition", "jql"], "slack": ["channels"], "discord": ["guild", "channels"], "promql": ["base_url", "aliases"],
                        "http": ["base_url", "system", "thing", "list_path"]}.items():
         lines = (TEMPLATES / kind / "poller.toml").read_text().splitlines()
         for key in keys:

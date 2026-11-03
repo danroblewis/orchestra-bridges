@@ -15,7 +15,7 @@ no system itself, runs no process and declares no instrument or machine. It give
   what the script keeps, a per-host rate limit shared by every process, retries, the token in
   memory), `Poller` (the interval loop, the cursor, each event published once, the series for a
   `[[collect]]`), `Prometheus`, and the runner every scaffolded script shares;
-- **the fakes** (`kits.fakes`: `FakeGitHub`, `FakeJira` in both flavours, `FakeSlack`,
+- **the fakes** (`kits.fakes`: `FakeGitHub`, `FakeJira` in both editions, `FakeSlack`,
   `FakeDiscord`, `FakePagerDuty`, `FakePrometheus`, and `FakeServer` for a system no kit knows), in the systems'
   real shapes, with a canary in every text so a test shows none of it leaves;
 - **the templates and the scaffold**: `orchestra bridges scaffold <kit> <name>` writes a collector
@@ -81,12 +81,23 @@ owner's word.
   carries `tickets`, the keys (`ABC-123`) in the branch name and title (never the title), narrowed
   by `projects`: a linker machine relates the pull request to its ticket from them
   (`item.related {kind: parent}`, the Workflows guide's "whose subject an event is").
-- **Jira's flavour** (`[settings] flavour`): `cloud` speaks REST API v3 (`/rest/api/3/search/jql`,
-  paged by `nextPageToken`; Cloud removed `/search`), names people by account id and logs in with
-  the account's email and an API token (HTTP Basic: `user_file` or `user_env` names the email);
-  `datacenter` speaks REST API v2 (`/rest/api/2/search`), names people by user name and sends a
-  personal access token as Bearer. `auto` (the template's) is `cloud` on `*.atlassian.net` and
-  `datacenter` anywhere else; a Cloud site on its own domain needs `cloud` said. The owner's work
+- **Jira's edition** (`[settings] edition`; `flavour` is its older name): `cloud` (when not set)
+  speaks REST API v3 (`/rest/api/3/search/jql`, paged by `nextPageToken`; Cloud removed `/search`),
+  names people by account id and logs in with the account's email and an API token (HTTP Basic:
+  `user_file` or `user_env` names the email); `datacenter` speaks REST API v2 (`/rest/api/2/search`,
+  paged by `startAt` and `total`), names people by user name (`assignee.name`; there are no account
+  ids) and sends a personal access token as `Authorization: Bearer`. `auto` (the template's) is
+  `cloud` on `*.atlassian.net` and `datacenter` anywhere else; a Cloud site on its own domain needs
+  `cloud` said. The events on the bus are the same for both, so the model never knows which.
+  **Telling them apart**: a site on `*.atlassian.net` is Cloud; any other host is almost always Data
+  Center (or Server). Once the owner has approved reading it, `python <name>.py edition` reads the
+  site's `/rest/api/2/serverInfo` (on both editions) and prints the edition its `deploymentType`
+  says (`Cloud`; `Server` or `DataCenter`) and the version; write that into `edition`. **On Data
+  Center, ask the owner for** the base URL (`https://jira.<company>`, no `/rest/...`), a personal
+  access token (Profile → Personal Access Tokens; Jira 8.14 or later) saved by them in a `chmod 600`
+  file outside any repository, named by `token_file` (never the token in `orchestra.toml` or
+  `poller.toml`; never ask them to paste it to you), and the board id (the `rapidView=<id>` in the
+  board's URL), whose filter and members give `jql` and `users`. The poller only reads (GET). The owner's work
   Jira is Data Center. `jql` is the scope, without `ORDER BY` (the script adds its own); infer the
   project keys from branch names and commit messages (`ABC-123`), and confirm them. `users` (a
   team's user names, from their sprint board) narrows the scope to `assignee in (...) OR reporter
@@ -280,7 +291,8 @@ the world between polls, and so the Outbox's own tests have something to write t
 - **`HTTP 401`** in the script's log (`<state>/logs/machines/<name>.log`): a bad or expired token,
   or for Jira Cloud a token without its account's email. **`403`**: a missing scope, or a rate
   limit. **`404`**: a wrong repository, project or site, or one the token cannot see. **`410`**
-  from Jira: a Data Center script against Cloud (`flavour`).
+  from Jira: a Data Center script against Cloud (`edition`); a `404` on `/rest/api/3/…`: a Cloud
+  script against Data Center.
 - **`waiting for approval`** forever: the clearance was never written; ask the owner.
 - **`reading … is not cleared`** and exit 2: `--once` or `measure` against the real host before the
   approval (the `[[collect]]` written too early).
