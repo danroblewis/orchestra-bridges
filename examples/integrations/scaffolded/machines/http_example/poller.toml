@@ -17,7 +17,7 @@ data_class = "unknown"
 [settings]
 base_url = "https://ci.example.com"      # guess: ask the owner (the API's root)
 token_env = "API_TOKEN"              # the NAME of the variable holding the token; never the token
-# token_file = "~/.config/orchestra-bridges/http_example-token"   # instead: a chmod 600 file outside any repository
+# token_file = "<path to the token file>"   # instead: a chmod 600 file outside any repository
 every = "5m"
 per_minute = 20
 ttl = "4m"

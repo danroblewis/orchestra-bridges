@@ -9,7 +9,7 @@ through the project's merged configuration, never by opening the file (Orchestra
     per_minute = 60                     # the default request rate per host, for every kit client
     hosts = { "api.pagerduty.com" = 30, "jira.acme.com" = 20 }   # per host, over the default
     tokens = { pagerduty = "PAGERDUTY_TOKEN", jira = "JIRA_API_TOKEN" }   # environment NAMES only
-    ca_file = "~/.config/orchestra-bridges/corporate-ca.pem"   # a CA bundle trusted beside the system's
+    ca_file = "<path to the CA bundle>"   # a CA bundle trusted beside the system's
 
 A token is never here: ``tokens`` maps a system to the name of the environment variable that holds
 it, and ``check`` refuses a value that is not such a name, and any key named ``token``."""

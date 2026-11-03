@@ -23,8 +23,8 @@ base_url = "https://jira.example.com"   # guess: ask the owner (a Data Center ho
 # `python jira_example.py edition` prints what the site's serverInfo says. The events are the same.
 edition = "auto"                  # guess: ask the owner (or the serverInfo's deploymentType)
 token_env = "JIRA_API_TOKEN"      # the NAME of the variable holding the token; never the token
-# token_file = "~/.config/orchestra-bridges/jira-token"   # instead (Data Center: the PAT): a chmod 600 file outside any repository
-# user_file = "~/.config/orchestra-bridges/jira-email"    # Cloud: the account the token belongs to (or user_env)
+# token_file = "<path to the token file>"   # instead (Data Center: the PAT): a chmod 600 file outside any repository
+# user_file = "<path to the account file>"    # Cloud: the account the token belongs to (or user_env)
 every = "5m"
 per_minute = 20
 ttl = "4m"

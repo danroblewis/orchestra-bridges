@@ -96,7 +96,7 @@ per_minute = 60                    # requests a minute per host
 hosts = { "jira.acme.com" = 20 }
 tokens = { jira = "JIRA_API_TOKEN" }   # environment variable NAMES, never a token
 ttl = "4m"
-ca_file = "~/.config/orchestra-bridges/corporate-ca.pem"
+ca_file = "<path to the CA bundle>"
 ```
 
 The direct readers this package once ran (`[bridges.github]`, `[bridges.github_prs]`,
@@ -163,8 +163,8 @@ python -m orchestra_bridges.team --jira-url ... --close    # close every ticket 
 | `--close [--resolution Done]` | closes every ticket the ledger holds that carries the team's label; never deletes anything |
 | `--ledger PATH` | the JSON record of what each day created (keys, ids, times; never text); default `~/.local/state/orchestra-bridges/team/ledger.json` |
 
-Credentials by file only: `~/.config/orchestra-bridges/jira-cloud-email` and `jira-cloud-token`
-(`--jira-email-file`, `--jira-token-file`), `discord-token` (`--discord-token-file`), each `chmod 600`.
+Credentials by file only, each `chmod 600`: `--jira-email-file`, `--jira-token-file` and
+`--discord-token-file` (their defaults are in `--help`).
 Every write waits at least 2 seconds after the last. Point it only at a test project and test
 channels: everything it writes is real.
 

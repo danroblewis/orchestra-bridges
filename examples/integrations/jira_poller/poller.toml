@@ -15,7 +15,7 @@ data_class = "unknown"
 [settings]
 base_url = "https://jira.example.com"   # your Data Center site
 token_env = "JIRA_API_TOKEN"      # the NAME of the variable holding a personal access token; never the token
-# token_file = "~/.config/orchestra-bridges/jira-dc-token"   # instead: a chmod 600 file outside any repository
+# token_file = "<path to the token file>"   # instead: a chmod 600 file outside any repository
 every = "5m"
 per_minute = 20
 ttl = "4m"
