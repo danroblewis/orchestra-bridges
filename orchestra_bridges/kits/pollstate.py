@@ -1,7 +1,8 @@
 """What a poller keeps between runs, in its own directory under the state directory:
 
-- ``cursor.json``: the cursor (whatever the poll function sets: a time, an offset, a page token)
-  and the counters' totals, written whole after each good poll;
+- ``cursor.json``: the cursor (whatever the poll function sets: a time, an offset, a page token),
+  the counters' totals and ``polled`` (when the last good poll began: what the poller had read up
+  to, the mark a resumed run's replays are judged by), written whole after each good poll;
 - ``emitted.log``: one event id a line, appended as each event is published, so an event published
   just before a crash is still known after it. It is compacted to the last ``keep`` ids at start.
 
@@ -24,6 +25,7 @@ class PollState:
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.cursor: Any = None
         self.counters: dict = {}
+        self.polled: float | None = None            # when the last good poll began (None: never)
         self.emitted: dict[str, None] = {}          # insertion-ordered set
         self._load()
 
@@ -39,6 +41,9 @@ class PollState:
         try:
             d = json.loads(self.cursor_file.read_text(encoding="utf-8"))
             self.cursor, self.counters = d.get("cursor"), d.get("counters") or {}
+            polled = d.get("polled")
+            # a state saved before ``polled`` was kept: the file's time, when that last good poll ended
+            self.polled = float(polled) if isinstance(polled, int | float) else self.cursor_file.stat().st_mtime
         except (OSError, ValueError, AttributeError):
             pass
         try:
@@ -64,7 +69,7 @@ class PollState:
 
     def save(self) -> None:
         tmp = self.cursor_file.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"cursor": self.cursor, "counters": self.counters}), encoding="utf-8")
+        tmp.write_text(json.dumps({"cursor": self.cursor, "counters": self.counters, "polled": self.polled}), encoding="utf-8")
         os.replace(tmp, self.cursor_file)
 
 

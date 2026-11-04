@@ -36,14 +36,18 @@ the people and bots there did as events on the project's bus.
 - **Idempotent emission**: the id is ``<name>:<type>:<key>@<stamp>``, the key being the item's id
   in the other system (the subject, by default) and the stamp its change (an updated time, a
   version; by default a hash of the data). An id already emitted is skipped, across restarts too.
-- **A replay is marked**: an event whose ``time`` (when it happened in the other system) is
-  older than this run's start by more than the interval was done while the poller was not running
-  (a catch-up window, a pause between a stop and a resume: the cursor is where the last good poll
-  left it, so a resumed run relays what happened in the pause, once). Its ``data`` carries
-  ``replayed: true``, so a workflow's start can refuse it (``"replayed": {"not": [true]}``): a
-  ticket assigned while the poller was stopped is reported, never acted on as if it happened now.
-  The mark is not part of the event's id: an event relayed live and again after a restart is
-  still emitted once.
+- **A replay is marked, by what the poller had already read, never by when it started**: an event
+  whose id was emitted before is skipped (above); one not emitted whose ``time`` (when it happened
+  in the other system) is before the mark is a replay, its ``data`` carrying ``replayed: true`` so a
+  workflow's start can refuse it (``"replayed": {"not": [true]}``). The mark is what the poller had
+  passed: on a resume, when its last good poll before the stop began (``polled``, saved with the
+  cursor), so an event done while the poller was down, seen first on the poll after the restart,
+  is new and published as new (a pull request opened between the last poll and the restart is
+  counted as opened; the mark is taken in whole seconds, as the other system's times may have no
+  fraction, so a change in the second the poll began is new); on the first run (no poll saved yet), its start less the interval, so a
+  catch-up window's history (``since = "1d"``) is relayed marked. The mark stays the same for the
+  whole run and is not part of the event's id: an event relayed live and again after a restart is
+  still emitted once. No time: never a replay.
 - **Counters**: ``counter`` adds to a count kept with the cursor (``cursor.json``) after each
   good poll; the scaffold's ``measure`` (the ``[[collect]]`` entry runs the program with
   ``measure``) prints them beside what it reads itself. The instrument stores them, never the
@@ -53,6 +57,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 import signal
 import sys
@@ -150,7 +155,10 @@ class Poller:
         self._log = log or (lambda msg: print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {name}: {msg}",
                                               file=sys.stderr, flush=True))
         self.polls = self.failures = 0
-        self.began = time.time()                 # this run's start (a resume's): older events are replayed
+        self.began = time.time()                 # this run's start (a resume's)
+        # what the poller had passed (module docstring): the last good poll before this run, or, the
+        # first run, its start less the interval; an event from before it, not emitted, is a replay
+        self.passed = self.state.polled if self.state.polled is not None else self.began - self.every_s
         self.published: list[dict] = []          # this poll's events (announcements included)
 
     def _load_project(self):
@@ -238,8 +246,10 @@ class Poller:
         return self._publish(eid, type, data, source, **ext)
 
     def replayed(self, at: str | None) -> bool:
-        """Whether an event that happened ``at`` (an ISO time; UTC unless it names its zone) is a
-        replay: older than this run's start by more than the interval. No time: never."""
+        """Whether an event that happened ``at`` (an ISO time; UTC unless it names its zone), not
+        emitted before, is a replay: from before what the poller had passed (``passed``: the last
+        good poll before this run; the first run, its start less the interval). Never because it
+        happened while the poller was down. No time: never."""
         if not at:
             return False
         try:
@@ -248,7 +258,7 @@ class Poller:
             return False
         if t.tzinfo is None:
             t = t.replace(tzinfo=UTC)
-        return t.timestamp() < self.began - self.every_s
+        return t.timestamp() < math.floor(self.passed)   # whole seconds: the other system's may have no fraction
 
     def counter(self, name: str, by: float = 1.0, labels: dict[str, str] | None = None, help: str | None = None) -> None:
         self.series.counter(name, by, labels, help)
@@ -257,6 +267,7 @@ class Poller:
         """One poll: True when it succeeded (its cursor and counters saved)."""
         self.published = []
         before_cursor, before_counters = self.state.cursor, self.series.counters_state()
+        at = time.time()
         try:
             poll(self)
         except Exception as e:  # noqa: BLE001 - one bad poll never ends the poller
@@ -268,6 +279,7 @@ class Poller:
             return False
         self.polls += 1
         self.state.counters = self.series.counters_state()
+        self.state.polled = at                   # read back by the next run: what it had passed
         self.state.save()
         self._log(f"poll {self.polls}: {len(self.published)} events")
         return True

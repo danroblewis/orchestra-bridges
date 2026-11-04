@@ -96,29 +96,83 @@ def test_idempotent_across_a_restart_and_cursor_persisted(tmp_path):
     assert json.loads((tmp_path / "state" / "cursor.json").read_text())["cursor"] == 3
 
 
-def test_an_event_from_before_the_run_by_more_than_the_interval_is_marked_replayed(tmp_path):
-    """A stop, changes in the other system, a resume: the resumed run relays the pause's changes
-    once, each marked ``replayed`` (its time is before this run by more than the interval); a
-    change seen live is not, and a restart never relays one twice because of the mark."""
+def _iso(dt):
+    return dt.isoformat().replace("+00:00", "Z")
+
+
+def _poller(tmp_path, every_s=60):
+    return Poller("demo_poller", every_s=every_s, state_dir=tmp_path / "state", events=Events(tmp_path / "ev.jsonl"),
+                  log=lambda m: None)
+
+
+def _down_since(tmp_path, seconds):
+    """As if the last good poll before the stop began ``seconds`` ago (the poller then down since)."""
+    f = tmp_path / "state" / "cursor.json"
+    d = json.loads(f.read_text())
+    f.write_text(json.dumps({**d, "polled": d["polled"] - seconds}))
+
+
+def _emit(when, key="A-2", type="demo.item.opened"):
+    def poll(p):
+        p.emit(type, key, {"status": "opened"}, source="person.demo.ann", stamp="1", time=when)
+    return poll
+
+
+def test_an_event_done_while_the_poller_was_down_is_new_after_the_restart(tmp_path):
+    """T2l's #59: the last poll, a change in the other system, a stop, a restart well over an
+    interval later. The change is seen first on the poll after the restart: published once, as new
+    (never a replay for having happened before this run began)."""
     from datetime import UTC, datetime, timedelta
-    iso = lambda dt: dt.isoformat().replace("+00:00", "Z")
-    live = iso(datetime.now(UTC))
-    def poll_live(p):
+    _poller(tmp_path).run(lambda p: None, once=True)
+    assert json.loads((tmp_path / "state" / "cursor.json").read_text())["polled"] <= time.time()
+    _down_since(tmp_path, 2 * 3600)                        # the last poll two hours ago
+    while_down = _iso(datetime.now(UTC) - timedelta(hours=1))
+    _poller(tmp_path).run(_emit(while_down), once=True)
+    _poller(tmp_path).run(_emit(while_down), once=True)    # and once only, across another restart
+    got = [e["data"] for e in read(tmp_path) if e["type"] == "demo.item.opened"]
+    assert got == [{"status": "opened"}]
+
+
+def test_an_event_published_before_a_restart_is_a_replay_after_it(tmp_path):
+    """Published before the stop: after the restart it is known by its id (skipped, never again);
+    with its id forgotten (the emitted log lost or compacted past it) it is known by the mark the
+    last good poll left, and relayed again marked ``replayed``."""
+    from datetime import UTC, datetime
+    live = _iso(datetime.now(UTC))
+    _poller(tmp_path).run(_emit(live), once=True)
+    _poller(tmp_path).run(_emit(live), once=True)                      # by its id: skipped
+    assert [e["data"] for e in read(tmp_path) if e["type"] == "demo.item.opened"] == [{"status": "opened"}]
+    (tmp_path / "state" / "emitted.log").unlink()                      # the ids forgotten
+    time.sleep(1.1)                                                    # the mark is in whole seconds
+    _poller(tmp_path).run(lambda p: None, once=True)                   # a good poll after it: the mark passes it
+    _poller(tmp_path).run(_emit(live), once=True)                      # by the mark: a replay
+    assert [e["data"] for e in read(tmp_path) if e["type"] == "demo.item.opened"] == [
+        {"status": "opened"}, {"status": "opened", "replayed": True}]
+
+
+def test_the_first_runs_catch_up_is_marked_and_a_live_event_is_not(tmp_path):
+    """No poll saved yet: the mark is the run's start less the interval, so a catch-up window's
+    history (an hour ago) is relayed marked and an event seen live is not; no time, never marked."""
+    from datetime import UTC, datetime, timedelta
+    hour_ago, live = _iso(datetime.now(UTC) - timedelta(hours=1)), _iso(datetime.now(UTC))
+    def poll(p):
+        p.emit("demo.item.closed", "A-2", {"status": "closed"}, source="person.demo.ann", stamp="2", time=hour_ago)
+        p.emit("demo.item.moved", "A-3", None, source="person.demo.ann", stamp="3", time=hour_ago)
         p.emit("demo.item.opened", "A-1", {"status": "opened"}, source="person.demo.ann", stamp="1", time=live)
-    Poller("demo_poller", every_s=60, state_dir=tmp_path / "state", events=Events(tmp_path / "ev.jsonl"),
-           log=lambda m: None).run(poll_live, once=True)
-    paused = iso(datetime.now(UTC) - timedelta(hours=1))   # done during the pause, an hour ago
-    def poll_resumed(p):
-        poll_live(p)                                       # seen again: once, never twice
-        p.emit("demo.item.closed", "A-2", {"status": "closed"}, source="person.demo.ann", stamp="2", time=paused)
-        p.emit("demo.item.moved", "A-3", None, source="person.demo.ann", stamp="3", time=paused)
         p.emit("demo.item.timeless", "A-4", {"x": 1}, source="person.demo.ann", stamp="4")
-    Poller("demo_poller", every_s=60, state_dir=tmp_path / "state", events=Events(tmp_path / "ev.jsonl"),
-           log=lambda m: None).run(poll_resumed, once=True)
+    _poller(tmp_path).run(poll, once=True)
     got = {e["type"]: e["data"] for e in read(tmp_path) if e["type"] != "orchestra.machine.started"}
-    assert [e["type"] for e in read(tmp_path)].count("demo.item.opened") == 1
     assert got == {"demo.item.opened": {"status": "opened"}, "demo.item.closed": {"status": "closed", "replayed": True},
                    "demo.item.moved": {"replayed": True}, "demo.item.timeless": {"x": 1}}
+
+
+def test_a_state_saved_before_the_mark_was_kept_reads_it_from_the_file_time(tmp_path):
+    import os
+    state = tmp_path / "state"
+    state.mkdir()
+    (state / "cursor.json").write_text(json.dumps({"cursor": {"since": 1}, "counters": {}}))
+    os.utime(state / "cursor.json", (1_700_000_000, 1_700_000_000))
+    assert _poller(tmp_path).passed == 1_700_000_000
 
 
 def test_event_ids_are_the_items_and_stamps(tmp_path):
