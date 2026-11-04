@@ -71,3 +71,24 @@ def uncleared(here: str | Path, into: str | Path, program: str) -> Path:
     (into / src.name).write_text(text, encoding="utf-8")
     (into / program).write_text((here / program).read_text(encoding="utf-8"), encoding="utf-8")
     return into
+
+
+def down_for(state_dir: str | Path, seconds: float, *times: str) -> None:
+    """As if the poller under ``state_dir`` had been down ``seconds`` since its last good poll: that
+    poll's ``polled`` mark and the cursor's times named ``times`` (epoch seconds, at any depth: a
+    ``since``, a channel's ``seen``) moved back by ``seconds``, so a test can do something in the
+    other system "while the poller was down", more than an interval before the restart."""
+    f = Path(state_dir) / "cursor.json"
+    d = json.loads(f.read_text(encoding="utf-8"))
+
+    def back(x: Any) -> Any:
+        if isinstance(x, dict):
+            return {k: (v - seconds if k in times and isinstance(v, int | float) else back(v)) for k, v in x.items()}
+        return x
+    f.write_text(json.dumps({**d, "cursor": back(d.get("cursor")), "polled": d["polled"] - seconds}), encoding="utf-8")
+
+
+def forget_emitted(state_dir: str | Path) -> None:
+    """As if the poller under ``state_dir`` had lost the ids it emitted (its log compacted past them):
+    what it published before is then known only by the mark its last good poll left."""
+    (Path(state_dir) / "emitted.log").unlink(missing_ok=True)

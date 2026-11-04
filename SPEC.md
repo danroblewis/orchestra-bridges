@@ -44,6 +44,19 @@ A poller keeps its cursor, the ids it emitted and its counters in
 `<state>/kits/pollers/<name>/`, and a cache of only what it kept in `<state>/kits/cache/`. Nothing
 else, and nothing in the repository.
 
+**Resume and replays.** After each good poll the poller saves its cursor and `polled` (when that
+poll began) in `cursor.json`; at start it reads both back, and the first poll after a restart reads
+on from the saved cursor, so what was done while it was down is relayed once, then. An event is a
+**replay** (`replayed: true` in its data, which a workflow's start refuses with
+`"replayed": {"not": [true]}`) only when the poller had already passed it: by its id (in
+`emitted.log`: skipped, never published twice) or by its time, before the last good poll before
+this run began (`polled`, whole seconds; the first run, with no poll saved, its start less `every`,
+so a catch-up window's history is marked). Never because it happened before the poller's (re)start:
+an event done while the poller was down, seen first on the poll after the restart, is new and
+published as new. (Until B4 the mark was the run's start less `every`: T2l's PR #59, opened at
+06:18Z between the last poll and a 06:22Z restart, was counted as a replay.) A state saved before
+`polled` was kept is read by the file's time.
+
 ## 4. Kits (`orchestra_bridges/kits/`)
 
 

@@ -13,7 +13,7 @@ import pytest
 
 from orchestra_bridges.kits.fakes import CANARY, FakeSlack
 from orchestra_bridges.kits.fakes.base import load_fixture
-from orchestra_bridges.kits.testing import fake_token, set_args, settings, token_env
+from orchestra_bridges.kits.testing import down_for, fake_token, forget_emitted, set_args, settings, token_env
 
 HERE = Path(__file__).resolve().parent
 TOKEN = fake_token(HERE)        # the placeholder the runner sends a fake on this machine
@@ -98,6 +98,34 @@ def test_two_polls_relay_each_thread_and_message_once(fake, tmp_path):
     assert events[-1]["data"]["by"] == "unknown"
     assert not any(e["source"] == "bot.slack" for e in events)               # never a source of its own
     assert all(r.authorized for r in fake.requests)
+
+
+def test_a_thread_started_while_the_poller_was_down_is_new_after_the_restart(fake, tmp_path):
+    """The last poll, a thread started, the poller down well over an interval, a restart: the first
+    poll after it reads from the saved cursor and publishes the thread once, as new."""
+    before = len(poll_once(fake, tmp_path))
+    down_for(tmp_path / "state", 2 * 3600, "seen")                      # the last poll two hours ago
+    ts = fake.post(CHANNEL, "U009", ts=f"{time.time() - 3600:.6f}")      # an hour ago, while down
+    got = [e for e in poll_once(fake, tmp_path)[before:] if e.get("subject") == f"{CHANNEL}/{ts}"]
+    assert [e["type"] for e in got] == ["slack.thread.started", "slack.message.posted"]
+    assert not any("replayed" in e["data"] for e in got)
+    assert len([e for e in poll_once(fake, tmp_path) if e.get("subject") == f"{CHANNEL}/{ts}"]) == 2   # once
+
+
+def test_a_thread_published_before_a_restart_is_a_replay_after_it(fake, tmp_path):
+    """Published before the stop: after the restart the channel's cursor has passed it (never read
+    again) and its id is known. Its id lost and the channel read again from ``since`` (dropped from
+    the list and added back): known by the mark the last good poll left, relayed marked replayed."""
+    poll_once(fake, tmp_path)                                          # the first run's catch-up
+    ts = fake.post(CHANNEL, "U009")
+    def started(events):
+        return [e["data"] for e in events if e["type"] == "slack.thread.started" and e["subject"] == f"{CHANNEL}/{ts}"]
+    assert [d.get("replayed") for d in started(poll_once(fake, tmp_path))] == [None]       # live: new
+    time.sleep(1.1)                     # the next good poll's mark, in whole seconds, after it
+    assert len(started(poll_once(fake, tmp_path))) == 1                                  # not again
+    forget_emitted(tmp_path / "state")
+    poll_once(fake, tmp_path, set_args(channels=[], since="1d", cadence={}, max_backoff="1h"))   # dropped
+    assert [d.get("replayed") for d in started(poll_once(fake, tmp_path))] == [None, True]   # added back
 
 
 def read_of(fake, channel):

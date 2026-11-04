@@ -10,13 +10,23 @@ Run with Orchestra's own Python (the one ``orchestra`` runs in, which has the ki
 
 import importlib.util
 import json
+import time
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
 from orchestra_bridges.kits.fakes import CANARY, FakeGitHub, FakeGitHubOrg
 from orchestra_bridges.kits.fakes.base import load_fixture
-from orchestra_bridges.kits.testing import fake_token, set_args, settings, token_env, uncleared
+from orchestra_bridges.kits.testing import (
+    down_for,
+    fake_token,
+    forget_emitted,
+    set_args,
+    settings,
+    token_env,
+    uncleared,
+)
 
 HERE = Path(__file__).resolve().parent
 TOKEN = fake_token(HERE)        # the placeholder the runner sends a fake on this machine
@@ -121,6 +131,34 @@ def test_a_catch_up_relays_only_the_items_still_open(fake, tmp_path):
     assert not [c for c in got if c[1] == f"{REPO}#4"]               # opened and closed before: passed over
     fake.reopen(4, by="carol")
     assert changes(poll_once(fake, tmp_path))[len(got):] == [("github.issue.reopened", f"{REPO}#4", "person.github.carol")]
+
+
+def test_a_pull_request_opened_while_the_poller_was_down_is_new_after_the_restart(fake, tmp_path):
+    """The last poll, a pull request opened, the poller down well over an interval, a restart: the
+    first poll after it reads from the saved cursor and publishes the opening once, as new (not a
+    replay: the poller had never published it)."""
+    assert changes(poll_once(fake, tmp_path, NOW)) == []
+    down_for(tmp_path / "state", 2 * 3600, "since", "live")          # the last poll two hours ago
+    n = fake.open_pr("fix/while-down", by="dana")
+    fake.data["pulls"][-1]["created"] = (datetime.now(UTC) - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    opened = [e for e in poll_once(fake, tmp_path, NOW) if e.get("subject") == f"{REPO}#{n}"]
+    assert [(e["type"], e["source"]) for e in opened] == [("github.pr.opened", "person.github.dana")]
+    assert "replayed" not in opened[0]["data"]
+    again = [e for e in poll_once(fake, tmp_path, NOW) if e.get("subject") == f"{REPO}#{n}"]
+    assert len(again) == 1                                              # once, across another restart
+
+
+def test_a_pull_request_published_before_a_restart_is_a_replay_after_it(fake, tmp_path):
+    """Published before the stop: known after the restart by its id (never again), or, its id lost,
+    by the mark the last good poll left: re-read within the overlap, it is relayed marked replayed."""
+    assert changes(poll_once(fake, tmp_path, NOW)) == []
+    n = fake.open_pr("fix/live", by="dana")
+    assert changes(poll_once(fake, tmp_path, NOW)) == [("github.pr.opened", f"{REPO}#{n}", "person.github.dana")]
+    time.sleep(1.1)                     # the next good poll's mark, in whole seconds, after it
+    assert changes(poll_once(fake, tmp_path, NOW)) == [("github.pr.opened", f"{REPO}#{n}", "person.github.dana")]
+    forget_emitted(tmp_path / "state")
+    opened = [e for e in poll_once(fake, tmp_path, NOW) if e["type"] == "github.pr.opened"]
+    assert [e["data"].get("replayed") for e in opened] == [None, True]
 
 
 def test_follows_only_the_branches_or_labels_named(fake, tmp_path):

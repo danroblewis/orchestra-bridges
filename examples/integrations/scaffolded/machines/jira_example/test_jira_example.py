@@ -9,6 +9,7 @@ Run with Orchestra's own Python (the one ``orchestra`` runs in, which has the ki
 import importlib.util
 import json
 import re
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -18,7 +19,16 @@ from orchestra_bridges.kits.fakes import CANARY, FakeJira
 from orchestra_bridges.kits.fakes.base import load_fixture
 from orchestra_bridges.kits.fakes.jira import stamp
 from orchestra_bridges.kits.machinefile import read
-from orchestra_bridges.kits.testing import fake_token, fake_user, set_args, settings, token_env, uncleared
+from orchestra_bridges.kits.testing import (
+    down_for,
+    fake_token,
+    fake_user,
+    forget_emitted,
+    set_args,
+    settings,
+    token_env,
+    uncleared,
+)
 
 HERE = Path(__file__).resolve().parent
 TOKEN = fake_token(HERE)        # the placeholder the runner sends a fake on this machine
@@ -113,6 +123,30 @@ def test_the_first_run_starts_now(fake, tmp_path):
     fake.move(f"{PROJECT}-1", "In Progress", by="alice")
     assert changes(poll_once(fake, tmp_path)) == [
         ("jira.issue.transitioned", f"{PROJECT}-1", "person.jira.alice", {"from": "Open", "to": "In Progress"})]
+
+
+def test_an_issue_created_while_the_poller_was_down_is_new_after_the_restart(fake, tmp_path):
+    """The last poll, an issue created, the poller down well over an interval, a restart: the first
+    poll after it reads from the saved cursor and publishes the creation once, as new."""
+    assert changes(poll_once(fake, tmp_path)) == []
+    down_for(tmp_path / "state", 2 * 3600, "since", "live")          # the last poll two hours ago
+    fake.create(f"{PROJECT}-8", by="carol", at=datetime.now(UTC) - timedelta(hours=1))
+    got = [c for c in changes(poll_once(fake, tmp_path)) if c[1] == f"{PROJECT}-8"]
+    assert got == [("jira.issue.created", f"{PROJECT}-8", "person.jira.carol", {})]
+    assert [c for c in changes(poll_once(fake, tmp_path)) if c[1] == f"{PROJECT}-8"] == got      # once
+
+
+def test_an_issue_published_before_a_restart_is_a_replay_after_it(fake, tmp_path):
+    """Published before the stop: known after the restart by its id (never again), or, its id lost,
+    by the mark the last good poll left: re-read within the overlap, it is relayed marked replayed."""
+    assert changes(poll_once(fake, tmp_path)) == []
+    fake.move(f"{PROJECT}-1", "In Progress", by="alice")
+    moved = ("jira.issue.transitioned", f"{PROJECT}-1", "person.jira.alice", {"from": "Open", "to": "In Progress"})
+    assert changes(poll_once(fake, tmp_path)) == [moved]
+    time.sleep(1.1)                     # the next good poll's mark, in whole seconds, after it
+    assert changes(poll_once(fake, tmp_path)) == [moved]                   # by its id: not again
+    forget_emitted(tmp_path / "state")
+    assert changes(poll_once(fake, tmp_path))[1:] == [(*moved[:3], {**moved[3], "replayed": True})]
 
 
 def test_a_catch_up_relays_only_the_issues_not_yet_done(fake, tmp_path):
