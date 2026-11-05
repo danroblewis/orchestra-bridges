@@ -31,7 +31,8 @@ person or bot who acted: `person.<system>.<account>`, `bot.<system>.<app>`, or `
 the system's own act (`kits/poller.py` refuses any other source); an account the owner's identity
 map (`[bridges] people`, `identity.py`) lists is `person.<key>` whichever system they acted in.
 Each actor is announced once, just before their first event (`orchestra.machine.started`: `kind`
-`person` or `program`, `mode` `ad hoc`, `package` `bridges`, the map's `name` and `team`), and
+`person` or `program`, `mode` `ad hoc`, `package` `bridges`, the map's `name` and `team`, or for an
+account the map does not list its account's name and the system's `display_name`, §8), and
 again when what is announced changes. The announcement also carries the poller's **notes**
 (`kits/notes.py`): `fake` (relayed from a fake on this machine, added by the runner), `stand_in`
 and `disabled` (`poller.toml`'s `[notes]`), one line each, so the actor's own card can say what
@@ -141,8 +142,8 @@ instrument and no machine**: only its guide (`guide.md`, `/api/guides`) and the 
 the kit that replaces it). A scaffolded collector runs from the project's own configuration,
 written by the Supervisor's `approve_integration` once the owner approved: a `[[machines]]` entry
 (`restart = "always"`) for its poller, which the launcher knows only as a process, and a
-`[[collect]]` entry for its measurement. `orchestra bridges scaffold` and `orchestra bridges
-integrations` are the plugin's commands (`__main__.py`).
+`[[collect]]` entry for its measurement. `orchestra bridges scaffold`, `orchestra bridges
+integrations` and `orchestra bridges people` (§8, read-only) are the plugin's commands (`__main__.py`).
 
 `orchestra_bridges/rabbitmq/preset.toml` is configuration for Orchestra's own `[[sources]]`
 (counted traffic over RabbitMQ's per-queue counts), not a collector; its test rig is
@@ -153,7 +154,8 @@ integrations` are the plugin's commands (`__main__.py`).
 - `tests/unit`: the kits (client: cache, rate, retries, the read-only rule, the token, the proxy
   and a CA file; poller: the relay rule, idempotence, notes; fakes; scaffold: every kit's own test
   passes against its fake, with the owner's values too, and Jira Cloud's; a real token never
-  reaches a fake), the plugin and its check, the guide, the identity map, the RabbitMQ preset, and
+  reaches a fake), the plugin and its check, the guide, the identity map and the table that proposes
+  joins (`test_people_table.py`), the RabbitMQ preset, and
   `test_scaffolded_examples.py` (the committed references are what the templates write).
 - `examples/integrations`: each example's and each scaffolded reference's own test, against the fakes.
 - `tests/e2e/test_integrations_run.py`: `orchestra run` keeps three pollers going as `[[machines]]`
@@ -187,7 +189,48 @@ announces and publishes nothing; the pollers relay its acts as the accounts it u
 - **Tests**: `tests/unit/test_team.py`, against `FakeJira` (Cloud) and `FakeDiscord`, which accept
   the team's writes (an issue, an assignee, a comment, a resolution; a message, a reaction).
 
-## 8. Not built yet
+## 8. Accounts and people
+
+The owner, 2026-11-04: "It looks like the machine is a reference to a real person, not just their
+user account. This would be like pulling an IAM user identity ... people use different github user
+names than their jira or slack names, so we would need a table of some sort to combine them."
+
+- **An account is not a person.** A poller publishes as the account that acted
+  (`person.<system>.<account>`) and announces it as an account: `name = "<system>.user.<account>"`
+  (`jira.user.alice`; `Poller.name_account`). Where the system's account id is opaque (Jira Cloud's
+  account id), the name is derived from the display name (lowercased, accents dropped, spaces as
+  `_`, anything but letters, digits and `. _ -` as `-`: `identity.account_name`) and the
+  announcement says so (`name_derived = "display_name"`); the source keeps the id. Two Cloud
+  accounts with one display name are two machines with one name. The display name the system shows,
+  when the kit keeps it (Jira's `[settings] display_names`, on by default), rides on the
+  announcement as `display_name`: a detail on the card, never the machine's name, never on another
+  event. A poller whose people were announced by an earlier naming (B6, B7: the display name as
+  `name`) announces each of them once more with the new fields (the Jira kit's naming pass, its
+  cursor's `named = "accounts"`).
+- **Only the identity map makes a person** (`identity.py`, §2): an account it lists is published as
+  `person.<key>` and announced with the name and team the owner confirmed, never a display name.
+  The map is two files, read together: `<state>/bridges/people.toml` (the one the Supervisor
+  writes, outside the repository, so the repository stays clean) and the owner's own file when
+  `[bridges] people` names one, merged by key, the owner's fields winning.
+- **The table that combines them** (`people_table.py`, `orchestra bridges people [--json]`): from
+  the newest announcements of relayed accounts on the bus (what the relays have seen: Jira user
+  names and display names, Slack member ids, GitHub logins, and the display names a kit
+  announces), the accounts the map does not list are paired across systems. **Exact**: the same
+  display name, ignoring case, accents and spacing (confidence 0.9). **Weak**: the same handle (a
+  user name, a login, an email's local part when one is announced; confidence 0.6), or similar names
+  (the same words in another order, 0.7; a close spelling, at most 0.6). Each candidate has a
+  stable id, its accounts, a proposed key and name, its evidence and its confidence. It proposes
+  only: nothing is written. Today only the Jira kit announces display names, so the Slack and GitHub
+  accounts pair by handle until their kits announce theirs.
+- **Writing the map is the owner's**, in both of the Supervisor's `ask` modes, exact candidates
+  included (the agents' `propose_people`: a dry listing, or `join` with the owner's quoted yes,
+  which writes those entries to `<state>/bridges/people.toml` through `identity.join`). A matching
+  display name is evidence about strings, not about people: namesakes are common among hundreds of
+  people, a Slack or GitHub name is whatever its owner typed, and a wrong join merges two people's
+  acts into one machine under a confirmed-looking name. The exact ones can be confirmed together in
+  one sentence; each weak one is named on its own.
+
+## 9. Not built yet
 
 Webhooks; Confluence and Drive kits; the Pub/Sub preset; a Slack kit for the owner's pings
 (search with a user token: what the retired Slack reader did) and a posting fake.

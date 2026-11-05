@@ -18,7 +18,7 @@ small parts a coding tool or the Supervisor builds a poller from, and a scaffold
 A poller built from a kit is a relay, never a machine (Orchestra's rule 2, D19; the bridges' SPEC §2):
 it publishes only as the people and bots who acted (``person.<system>.<account>``, ``bot.<system>``),
 announces each of them once, and never announces itself or publishes under its own name. It keeps
-its cursor, the ids it emitted and a cache of only what it kept in the state directory (SPEC §8)."""
+its cursor, the ids it emitted and a cache of only what it kept in the state directory (SPEC §3)."""
 
 from .client import CachedClient, HTTPFailure, KitError, NotCached, TokenMissing
 from .poller import Poller

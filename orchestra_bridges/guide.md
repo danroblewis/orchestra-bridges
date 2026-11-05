@@ -256,11 +256,28 @@ everything in the process (a bundle holding the public CAs too).
 people = "people.toml"   # relative to the repository root, or an absolute path
 ```
 
-One file for every collector, so one person is one machine across systems: an account it lists on
-a system is published as `person.<key>` (`bot.<key>` for a bot) and announced with its name and
-team; an account it does not list stays `person.<system>.<account>`. Infer candidates from
-`CODEOWNERS` and `git log`, but joining accounts across systems is a claim about people: confirm
-with the human before writing it, and always list the owner.
+**An account is not a person until the map joins it.** A poller relays each act as the account
+that did it, `person.<system>.<account>`, announced as an account: its name is
+`<system>.user.<account>` (`jira.user.alice`; on Jira Cloud, whose account id says nothing, the
+display name made into one, `jira.user.alice_example`, marked `name_derived`), and the name the
+system shows is only a detail on its card (`display_name`). Never present an account's display
+name as a person: two accounts with one display name may be two people, and one person has a
+different user name on each system.
+
+Only the identity map makes a person: an account it lists on a system is published as
+`person.<key>` (`bot.<key>` for a bot) and announced with the name and team the owner confirmed, so
+one person is one machine across systems. The map is two files, read together and merged by key:
+`<state>/bridges/people.toml`, which you write (outside the repository, so it stays clean), and the
+owner's own file when `[bridges] people` names one, whose fields win.
+
+**Proposing joins.** `propose_people` (or `orchestra bridges people [--json]`) lists candidates
+from what the relays announced: accounts on two systems with the same display name (exact), or the
+same handle, or similar names (weak), each with its evidence and confidence. They are proposals.
+Joining accounts is a claim about people: **always ask the owner before writing a join, exact ones
+included** (in both `ask` modes). Put the exact candidates to them together in one sentence and each
+weak one on its own; write only what they said yes to (`propose_people` with `join` and their
+quote). Infer more candidates from `CODEOWNERS` and `git log` the same way, and always list the
+owner.
 
 ```toml
 [people.alice]

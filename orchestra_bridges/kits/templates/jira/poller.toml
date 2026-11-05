@@ -42,8 +42,10 @@ since = "now"                     # where the first run starts: "now", a duratio
 # "full" (it relays the whole history of every issue updated since `since`, finished ones included,
 # each change at its own time and marked replayed: a workflow that offers work refuses a replay)
 history = "window"
-# display_names: each person's machine is shown by the name Jira shows for them (their display
-# name, kept on this machine, on their announcement only); false: by their account alone
+# display_names: the name Jira shows for each account rides on its announcement as display_name, a
+# detail on its card; the machine's name is always the account's (jira.user.<user name>; on Cloud,
+# derived from the display name and marked so). An account is not a person: only the identity map
+# ([bridges] people) joins accounts into person.<key>. false: no display name is kept
 display_names = true
 # content: what of each issue's text is relayed besides its metadata: "summary" (its title, on every
 # event), "description" (on its creation, at most 4000 characters) and "comments" (each comment's
