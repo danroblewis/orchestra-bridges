@@ -270,6 +270,21 @@ def test_people_relayed_before_names_were_kept_are_named_on_the_next_poll(fake, 
     assert not [e for e in again if e["type"] == "orchestra.machine.started"]     # once
 
 
+def test_data_centers_internal_user_key_never_names_a_person():
+    """Data Center's changelog says an assignee by internal key (``JIRAUSER10100``), not the user name
+    the events use: no person is named under the key, and the assignment is said by user name when
+    a user object on the issue gives the pair."""
+    alice = {"name": "alice", "key": "JIRAUSER10100", "displayName": "Alice A"}
+    body = {"issues": [{"key": "ABC-1", "fields": {"creator": alice, "assignee": alice, "status": {"name": "Open"}},
+                        "changelog": {"total": 1, "histories": [
+                            {"id": "1", "author": {"name": "bob", "key": "JIRAUSER10200", "displayName": "Bob B"},
+                             "created": "2026-11-01T10:00:00.000+0000",
+                             "items": [{"field": "assignee", "from": None, "to": "JIRAUSER10100", "toString": "Alice A"}]}]}}]}
+    issue = program().keep_changes(body)["issues"][0]
+    assert issue["people"] == {"alice": "Alice A", "bob": "Bob B"}
+    assert issue["changes"][0]["assigned"] == "alice"
+
+
 def test_each_person_is_announced_by_the_name_jira_shows(fake, tmp_path):
     """``display_names`` (on by default): a person's announcement carries Jira's display name, so
     their machine's card shows it rather than ``person.jira.<account>``."""
