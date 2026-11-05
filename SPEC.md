@@ -142,8 +142,8 @@ instrument and no machine**: only its guide (`guide.md`, `/api/guides`) and the 
 the kit that replaces it). A scaffolded collector runs from the project's own configuration,
 written by the Supervisor's `approve_integration` once the owner approved: a `[[machines]]` entry
 (`restart = "always"`) for its poller, which the launcher knows only as a process, and a
-`[[collect]]` entry for its measurement. `orchestra bridges scaffold` and `orchestra bridges
-integrations` are the plugin's commands (`__main__.py`).
+`[[collect]]` entry for its measurement. `orchestra bridges scaffold`, `orchestra bridges
+integrations` and `orchestra bridges people` (§8, read-only) are the plugin's commands (`__main__.py`).
 
 `orchestra_bridges/rabbitmq/preset.toml` is configuration for Orchestra's own `[[sources]]`
 (counted traffic over RabbitMQ's per-queue counts), not a collector; its test rig is
@@ -154,7 +154,8 @@ integrations` are the plugin's commands (`__main__.py`).
 - `tests/unit`: the kits (client: cache, rate, retries, the read-only rule, the token, the proxy
   and a CA file; poller: the relay rule, idempotence, notes; fakes; scaffold: every kit's own test
   passes against its fake, with the owner's values too, and Jira Cloud's; a real token never
-  reaches a fake), the plugin and its check, the guide, the identity map, the RabbitMQ preset, and
+  reaches a fake), the plugin and its check, the guide, the identity map and the table that proposes
+  joins (`test_people_table.py`), the RabbitMQ preset, and
   `test_scaffolded_examples.py` (the committed references are what the templates write).
 - `examples/integrations`: each example's and each scaffolded reference's own test, against the fakes.
 - `tests/e2e/test_integrations_run.py`: `orchestra run` keeps three pollers going as `[[machines]]`
@@ -210,7 +211,7 @@ names than their jira or slack names, so we would need a table of some sort to c
   `person.<key>` and announced with the name and team the owner confirmed, never a display name.
   The map is two files, read together: `<state>/bridges/people.toml` (the one the Supervisor
   writes, outside the repository, so the repository stays clean) and the owner's own file when
-  `[bridges] people` names one, whose entries win.
+  `[bridges] people` names one, merged by key, the owner's fields winning.
 - **The table that combines them** (`people_table.py`, `orchestra bridges people [--json]`): from
   the newest announcements of relayed accounts on the bus (what the relays have seen: Jira user
   names and display names, Slack member ids, GitHub logins, and the display names a kit
