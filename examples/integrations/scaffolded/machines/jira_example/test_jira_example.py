@@ -86,11 +86,12 @@ def poll_once(fake, tmp, scope=SCOPE):
 
 
 NOW = ("status", "category", "issuetype", "labels")      # the issue as the poll read it: on every jira.issue.*
+LINKED = ("url", "summary", "description", "text")      # the issue's link, and its text when [settings] content names it
 
 
 def changes(events):
     """What changed: each event's data without the issue's state now (``now_of``)."""
-    return [(e["type"], e["subject"], e["source"], {k: v for k, v in e["data"].items() if k not in NOW})
+    return [(e["type"], e["subject"], e["source"], {k: v for k, v in e["data"].items() if k not in NOW + LINKED})
             for e in events if e["type"] != "orchestra.machine.started"]
 
 
@@ -283,6 +284,24 @@ def test_data_centers_internal_user_key_never_names_a_person():
     issue = program().keep_changes(body)["issues"][0]
     assert issue["people"] == {"alice": "Alice A", "bob": "Bob B"}
     assert issue["changes"][0]["assigned"] == "alice"
+
+
+def test_content_relays_the_summary_description_and_comments_and_every_event_links_the_issue(fake, tmp_path):
+    """``content = ["summary", "description", "comments"]``: each event carries the issue's title and
+    link, its creation the description, each comment its text. Without ``content`` only the link."""
+    fake.create(f"{PROJECT}-8", by="carol")
+    fake.comment(f"{PROJECT}-8", by="alice")
+    rich = set_args(jql=f"project = {PROJECT}", since="1d", users=[], sprint_field="",
+                    content=["summary", "description", "comments"])
+    got = [e for e in poll_once(fake, tmp_path / "rich", rich) if e.get("subject") == f"{PROJECT}-8"]
+    made = next(e for e in got if e["type"] == "jira.issue.created")
+    said = next(e for e in got if e["type"] == "jira.comment.added")
+    assert made["data"]["url"].endswith(f"/browse/{PROJECT}-8") and made["data"].get("summary")
+    assert "description" in made["data"] or made["data"].get("summary")
+    assert said["data"].get("text")
+    plain = [e for e in poll_once(fake, tmp_path / "plain", CATCH_UP) if e.get("subject") == f"{PROJECT}-8"]
+    assert plain and all("summary" not in e["data"] and "text" not in e["data"] for e in plain)
+    assert all(e["data"]["url"].endswith(f"/browse/{PROJECT}-8") for e in plain if e["type"].startswith("jira.issue."))
 
 
 def test_each_person_is_announced_by_the_name_jira_shows(fake, tmp_path):
