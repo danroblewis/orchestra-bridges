@@ -35,10 +35,17 @@ with the issue key as the subject and who acted as the source (``person.jira.<ac
   never its text).
 
 **The first run** starts at ``[settings] since`` (``now`` by default; or a duration back, ``"1d"``,
-or a time: ``start_of``), never at the beginning of the project's history: no change made before it
-is relayed, and of a catch-up window it relays only the issues not yet done (status category
-``done``), so a finished ticket is never relayed as assigned. Later polls relay every change, a
-move to Done included.
+or a time: ``start_of``). With ``[settings] history = "window"`` (the default) no change made before
+it is relayed, and of a catch-up window it relays only the issues not yet done (status category
+``done``), so a finished ticket is never relayed as assigned. With ``history = "full"`` (the owner,
+2026-11-04: "search for tickets that were updated within the last 7 days and fill in the history
+... I want to see the finished tickets") the first run reads every issue in scope **updated** since
+``since``, finished ones included, and relays each one's whole history: its creation, every
+assignment and status change and every comment, each at the time it happened. All of it is a
+replay (``replayed: true``, the poller's mark), so a workflow that offers work refuses it at its
+start and an observing one records it. A changelog Jira cut short (its ``total`` above what the
+search returned) is read whole from the issue itself. Later polls relay every change, a move to
+Done included.
 
 **The scope** is ``[settings] jql``, narrowed to a team when ``[settings] users`` names them:
 ``(jql) AND (assignee in (...) OR reporter in (...))`` (``scope_of``), for the poll and ``measure``.
@@ -192,7 +199,8 @@ def keep_changes(body: dict) -> dict:
                     "category": (status.get("statusCategory") or {}).get("key"),
                     "issuetype": (f.get("issuetype") or {}).get("name"),
                     "labels": [x for x in f.get("labels") or [] if isinstance(x, str)], "changes": hs,
-                    "comments": comments})
+                    "comments": comments,
+                    "changes_cut": int((i.get("changelog") or {}).get("total") or 0) > len(hs)})
     return page_of(body, out)
 
 
@@ -263,11 +271,20 @@ def relay(p, issue: dict, began: float) -> None:
                    stamp=f"comment:{c['id']}", time=rfc3339(c["at"]))
 
 
+def whole_changes(api, settings, key: str, sprint_field: str) -> list[dict]:
+    """``key``'s whole changelog, read from the issue itself (a search may cut it short)."""
+    body = api.get(f"{api_of(settings)}/issue/{key}", {"expand": "changelog", "fields": "status,assignee,creator,created"},
+                   keep=lambda b: keep_changes({"issues": [b]}), ttl_s=0)
+    issues = body.get("issues") or []
+    return issues[0]["changes"] if issues else []
+
+
 def make_poll(api, settings):
     scope = scope_of(settings)
     sprint_field = str(settings.extra.get("sprint_field") or "")
     fields = "status,assignee,creator,created,comment,issuetype,labels" + (f",{sprint_field}" if sprint_field else "")
     overlap = parse_duration(settings.extra.get("overlap"), 600.0)
+    full = str(settings.extra.get("history") or "window").lower() == "full"
 
     def poll(p):
         started = time.time()
@@ -284,6 +301,11 @@ def make_poll(api, settings):
         # changes are read fresh (ttl 0): a cached answer would hide the newest
         for issue in search(api, settings, jql, keep_changes_of(sprint_field), fields=fields, expand="changelog",
                             ttl_s=0):
+            if first and full:                          # the whole history of each issue updated in the window
+                if issue.get("changes_cut"):
+                    issue["changes"] = whole_changes(api, settings, issue["key"], sprint_field)
+                relay(p, issue, 0.0)
+                continue
             if first and issue["category"] == "done":
                 continue                                # a catch-up relays the work not yet done
             relay(p, issue, began)

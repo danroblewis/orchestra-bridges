@@ -37,7 +37,11 @@ users = []
 # name is "Sprint" in /rest/api/2/field); set, each event carries the issue's sprint's name (the
 # open one, else the latest). Empty: no sprint.
 sprint_field = ""
-since = "now"                     # where the first run starts: "now", a duration back ("1d"; issues not yet done only), or an ISO time
+since = "now"                     # where the first run starts: "now", a duration back ("7d"), or an ISO time
+# history: "window" (the first run relays only what changed since `since`, of issues not yet done) or
+# "full" (it relays the whole history of every issue updated since `since`, finished ones included,
+# each change at its own time and marked replayed: a workflow that offers work refuses a replay)
+history = "window"
 overlap = "10m"                   # each poll re-reads this much before the last one
 
 [[publishes]]
