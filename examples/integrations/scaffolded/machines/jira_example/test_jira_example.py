@@ -40,6 +40,7 @@ _named = re.search(r'(?i)\bproject\s*(?:=|in\s*\()\s*"?([A-Z][A-Z0-9_]*)', setti
 PROJECT = _named.group(1) if _named and _named.group(1) != "OPS" else "ABC"   # OPS: the fixture's out-of-scope one
 SCOPE = set_args(jql=f"project = {PROJECT}", since="now", users=[], sprint_field="")
 CATCH_UP = set_args(jql=f"project = {PROJECT}", since="1d", users=[], sprint_field="")     # the first run reads the last day
+FULL = set_args(jql=f"project = {PROJECT}", since="7d", users=[], sprint_field="", history="full")   # whole histories
 
 
 def program(here=HERE):
@@ -161,6 +162,25 @@ def test_a_catch_up_relays_only_the_issues_not_yet_done(fake, tmp_path):
     fake.move(f"{PROJECT}-5", "Open", by="alice")                  # reopened after the poller began
     assert changes(poll_once(fake, tmp_path, CATCH_UP)) == [
         ("jira.issue.transitioned", f"{PROJECT}-5", "person.jira.alice", {"from": "Done", "to": "Open"})]
+
+
+def test_full_history_relays_every_issue_updated_in_the_window_finished_ones_included(fake, tmp_path):
+    """``history = "full"``, ``since = "7d"``: an issue created ten days ago and finished two days
+    ago is relayed whole (created, assigned, moved to Done), each at its own time and as a replay;
+    an issue last updated nine days ago is not; a second poll relays nothing again."""
+    now = datetime.now(UTC)
+    fake.create(f"{PROJECT}-5", by="carol", assignee="alice", at=now - timedelta(days=10))
+    fake.move(f"{PROJECT}-5", "Done", by="alice", at=now - timedelta(days=2))
+    fake.create(f"{PROJECT}-6", by="carol", at=now - timedelta(days=9))
+    got = [e for e in poll_once(fake, tmp_path, FULL) if e.get("subject") in (f"{PROJECT}-5", f"{PROJECT}-6")]
+    assert [(e["type"], e["subject"]) for e in got] == [("jira.issue.created", f"{PROJECT}-5"),
+                                                         ("jira.issue.assigned", f"{PROJECT}-5"),
+                                                         ("jira.issue.transitioned", f"{PROJECT}-5")]
+    assert all(e["data"].get("replayed") is True for e in got)
+    assert datetime.fromisoformat(got[0]["time"]) < now - timedelta(days=9)    # at the time it happened
+    assert got[2]["data"]["to"] == "Done" and got[2]["data"]["category"] == "done"
+    again = [e for e in poll_once(fake, tmp_path, FULL) if e.get("subject") == f"{PROJECT}-5"]   # the log, both polls
+    assert [e["id"] for e in again] == [e["id"] for e in got]           # nothing relayed twice
 
 
 def test_each_issue_event_carries_the_issue_now_so_a_start_can_refuse_one_already_done(fake, tmp_path):

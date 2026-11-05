@@ -99,7 +99,8 @@ owner's word.
   file outside any repository, named by `token_file` (never the token in `orchestra.toml` or
   `poller.toml`; never ask them to paste it to you), and the board id (the `rapidView=<id>` in the
   board's URL), whose filter and members give `jql` and `users`. The poller only reads (GET). The owner's work
-  Jira is Data Center. `jql` is the scope, without `ORDER BY` (the script adds its own); infer the
+  Jira is Data Center. When the owner wants tickets' history ("fill in the history", finished tickets too), set
+  `history = "full"` and `since` to the window (`"7d"`): the first run relays the whole history of each issue updated in it. `jql` is the scope, without `ORDER BY` (the script adds its own); infer the
   project keys from branch names and commit messages (`ABC-123`), and confirm them. `users` (a
   team's user names, from their sprint board) narrows the scope to `assignee in (...) OR reporter
   in (...)`; a separate collector per query (the company's Epics, `issuetype = Epic AND updated >=
@@ -310,7 +311,7 @@ shows the plan. README, "The scripted team".
 - **A token named but not set**: `approve_integration` says so; the owner sets it and restarts
   `orchestra run`, or (better) puts it in a file.
 - **No events but the series move**: nothing changed within the scope, or the scope is wrong
-  (`jql`, `channels`, `branches`); the Jira and GitHub kits' first run starts now (`since`: a duration back reads a catch-up window of the items not yet done), and the others read back only `lookback`.
+  (`jql`, `channels`, `branches`); the Jira and GitHub kits' first run starts now (`since`: a duration back reads a catch-up window of the items not yet done; the Jira kit's `history = "full"` instead relays the whole history of every issue updated within `since`, finished ones included, all as replays), and the others read back only `lookback`.
 - **Old events after a restart**: a resumed poller reads on from its cursor, so what was done
   while it was stopped is relayed once, when it starts, as new. An event the poller had already
   passed (its id emitted before, or its time before the last good poll before the restart; on the
