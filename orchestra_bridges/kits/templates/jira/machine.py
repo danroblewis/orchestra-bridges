@@ -54,7 +54,10 @@ The JQL's time is relative (``updated >= "-15m"``), so Jira's time zone for the 
 matter. ``python {{name}}.py measure`` (for a ``[[collect]]`` entry) prints ``jira_issues{status,
 category}``, the issues in scope by status.
 
-It keeps metadata only: keys, account ids or user names, status names (an administrator's), times.
+It keeps metadata only: keys, account ids or user names, status names (an administrator's), times,
+and, with ``[settings] display_names`` (on unless false), the name Jira shows for each person, which
+their machine's card is shown by (the owner, 2026-11-04: names like ``person.jira.<id>`` say nothing).
+The name stays on this machine: it rides on the person's announcement, never on another event.
 Never a summary, description, comment or a person's display name or email."""
 
 from __future__ import annotations
@@ -124,8 +127,15 @@ def rfc3339(t: str) -> str:
 
 
 def _id(u) -> str | None:
-    """A person's account: Cloud's account id, or Data Center's user name. Never a display name."""
+    """A person's account: Cloud's account id, or Data Center's user name."""
     return (u.get("accountId") or u.get("name")) if isinstance(u, dict) else None
+
+
+def _named(people: dict, u) -> None:
+    """``u``'s display name, kept by account (``[settings] display_names``): the name Jira shows for
+    them, which their machine's card is shown by."""
+    if isinstance(u, dict) and _id(u) and isinstance(u.get("displayName"), str) and u["displayName"].strip():
+        people[_id(u)] = u["displayName"].strip()
 
 
 SPRINT = re.compile(r"\[(.*)\]\s*$", re.DOTALL)
@@ -176,13 +186,17 @@ def keep_changes_of(sprint_field: str | None):
 
 
 def keep_changes(body: dict) -> dict:
-    """What is kept of a search page with changelog: keys, accounts, times, status names. Never a
-    summary, a display name or another field's value."""
+    """What is kept of a search page with changelog: keys, accounts, times, status names, and each
+    person's display name by account (``people``). Never a
+    summary or another field's value."""
     out = []
     for i in body.get("issues") or []:
         f = i.get("fields") or {}
-        hs = []
+        hs, people = [], {}
+        for u in (f.get("creator"), f.get("assignee"), f.get("reporter")):
+            _named(people, u)
         for h in (i.get("changelog") or {}).get("histories") or []:
+            _named(people, h.get("author"))
             items = h.get("items") or []
             status = next((x for x in items if x.get("field") == "status"), None)
             assignee = next((x for x in items if x.get("field") == "assignee"), None)
@@ -191,8 +205,12 @@ def keep_changes(body: dict) -> dict:
                        "to": status.get("toString") if status else None,
                        "assignee_changed": assignee is not None,
                        "assigned": assignee.get("to") if assignee else None})
+            if assignee and assignee.get("to") and isinstance(assignee.get("toString"), str) and assignee["toString"].strip():
+                people.setdefault(assignee["to"], assignee["toString"].strip())
         comments = [{"id": str(c["id"]), "by": _id(c.get("author")), "at": c["created"]}
                     for c in (f.get("comment") or {}).get("comments") or [] if c.get("created")]
+        for c in (f.get("comment") or {}).get("comments") or []:
+            _named(people, c.get("author"))
         status = f.get("status") or {}
         out.append({"key": i["key"], "created": f.get("created"), "creator": _id(f.get("creator")),
                     "assignee": _id(f.get("assignee")), "status": status.get("name"),
@@ -200,7 +218,8 @@ def keep_changes(body: dict) -> dict:
                     "issuetype": (f.get("issuetype") or {}).get("name"),
                     "labels": [x for x in f.get("labels") or [] if isinstance(x, str)], "changes": hs,
                     "comments": comments,
-                    "changes_cut": int((i.get("changelog") or {}).get("total") or 0) > len(hs)})
+                    "changes_cut": int((i.get("changelog") or {}).get("total") or 0) > len(hs),
+                    "people": people})
     return page_of(body, out)
 
 
@@ -285,6 +304,7 @@ def make_poll(api, settings):
     fields = "status,assignee,creator,created,comment,issuetype,labels" + (f",{sprint_field}" if sprint_field else "")
     overlap = parse_duration(settings.extra.get("overlap"), 600.0)
     full = str(settings.extra.get("history") or "window").lower() == "full"
+    names = settings.extra.get("display_names", True) is not False
 
     def poll(p):
         started = time.time()
@@ -301,6 +321,9 @@ def make_poll(api, settings):
         # changes are read fresh (ttl 0): a cached answer would hide the newest
         for issue in search(api, settings, jql, keep_changes_of(sprint_field), fields=fields, expand="changelog",
                             ttl_s=0):
+            if names:                                   # each person's machine shown by the name Jira shows
+                for account, shown in (issue.get("people") or {}).items():
+                    p.name_actor(actor_source("jira", account), shown)
             if first and full:                          # the whole history of each issue updated in the window
                 if issue.get("changes_cut"):
                     issue["changes"] = whole_changes(api, settings, issue["key"], sprint_field)

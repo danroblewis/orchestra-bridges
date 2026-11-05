@@ -69,7 +69,9 @@ def test_both_editions_publish_identical_events(jira_poll, tmp_path):
     assert {e["source"] for e in dc} >= {"person.jira.alice", "person.jira.bob", "person.jira.carol"}
     made = next(e for e in dc if e["type"] == "jira.issue.created")
     assert made["data"]["sprint"] == "Sprint 7" and made["data"]["category"] == "done"
-    assert CANARY not in json.dumps(dc + cloud)
+    unnamed = [{**e, "data": {k: v for k, v in (e.get("data") or {}).items() if k != "name"}}
+               if e.get("type") == "orchestra.machine.started" else e for e in dc + cloud]
+    assert CANARY not in json.dumps(unnamed)            # a display name rides on an announcement only
 
 
 def test_each_edition_is_read_in_its_own_form(jira_poll, tmp_path):

@@ -160,6 +160,7 @@ class Poller:
         # first run, its start less the interval; an event from before it, not emitted, is a replay
         self.passed = self.state.polled if self.state.polled is not None else self.began - self.every_s
         self.published: list[dict] = []          # this poll's events (announcements included)
+        self.names: dict[str, str] = {}          # source -> the name the other system shows (name_actor)
 
     def _load_project(self):
         if self._project is None:
@@ -206,6 +207,12 @@ class Poller:
         self.published.append(ev)
         return ev
 
+    def name_actor(self, source: str, name: str | None) -> None:
+        """The name the other system shows for an actor (Jira's display name), put on their
+        announcement when the identity map gives none; a new name announces them once more."""
+        if isinstance(name, str) and name.strip():
+            self.names[self.resolve(source)[0]] = name.strip()
+
     def announce(self, source: str, time: str | None = None, **about: Any) -> dict | None:
         """``orchestra.machine.started`` for an actor, once (once more after the notes change): None
         when it was announced before. ``about`` (a name, a team) and the notes go to its card unread."""
@@ -214,7 +221,11 @@ class Poller:
 
     def _announce(self, source: str, time: str | None, about: dict) -> dict | None:
         notes = note.check(self.notes)
+        if "name" not in about and source in self.names:
+            about = {**about, "name": self.names[source]}
         eid = f"{self.name}:announce:{source}" + (f"#{note.stamp(notes)}" if notes else "")
+        if source in self.names and about.get("name") == self.names[source]:
+            eid += f"#name-{note.stamp({'name': about['name']})}"     # a name learnt later announces them again
         if self.state.seen(eid):
             return None
         data = {"mode": "ad hoc", "kind": "program" if source.startswith("bot.") else "person",
