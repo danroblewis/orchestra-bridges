@@ -42,6 +42,9 @@ since = "now"                     # where the first run starts: "now", a duratio
 # "full" (it relays the whole history of every issue updated since `since`, finished ones included,
 # each change at its own time and marked replayed: a workflow that offers work refuses a replay)
 history = "window"
+# display_names: each person's machine is shown by the name Jira shows for them (their display
+# name, kept on this machine, on their announcement only); false: by their account alone
+display_names = true
 overlap = "10m"                   # each poll re-reads this much before the last one
 
 [[publishes]]

@@ -221,16 +221,47 @@ def test_measure_counts_by_status(fake, tmp_path, capsys):
     assert 'jira_issues{category="indeterminate",status="In Progress"} 1' in out
 
 
+def _no_canary(tmp_path, capsys, names_allowed: bool):
+    out = capsys.readouterr()
+    assert CANARY not in out.out + out.err and REAL not in out.out + out.err
+    for p in tmp_path.rglob("*"):
+        if not p.is_file():
+            continue
+        text = p.read_text(errors="replace")
+        assert REAL not in text, p
+        if p.name == "events.jsonl" and names_allowed:      # a display name, on a person's announcement only
+            for line in text.splitlines():
+                e = json.loads(line)
+                data = dict(e.get("data") or {})
+                if e["type"] == "orchestra.machine.started":
+                    data.pop("name", None)
+                assert CANARY not in json.dumps({**e, "data": data}), e["type"]
+        else:
+            assert CANARY not in text, p
+
+
 def test_no_text_or_token_leaves(fake, tmp_path, capsys):
     fake.comment(f"{PROJECT}-2", by="carol")                         # its body carries the canary
     assert any(e["type"] == "jira.comment.added" for e in poll_once(fake, tmp_path, CATCH_UP))
     program().main(args(fake, tmp_path, "measure"))
-    out = capsys.readouterr()
-    assert CANARY not in out.out + out.err and REAL not in out.out + out.err
-    for p in tmp_path.rglob("*"):
-        if p.is_file():
-            text = p.read_text(errors="replace")
-            assert CANARY not in text and REAL not in text, p
+    _no_canary(tmp_path, capsys, names_allowed=True)
+
+
+def test_without_display_names_no_name_leaves_either(fake, tmp_path, capsys):
+    fake.comment(f"{PROJECT}-2", by="carol")
+    quiet = set_args(jql=f"project = {PROJECT}", since="1d", users=[], sprint_field="", display_names=False)
+    events = poll_once(fake, tmp_path, quiet)
+    assert any(e["type"] == "jira.comment.added" for e in events)
+    assert not any("name" in (e.get("data") or {}) for e in events if e["type"] == "orchestra.machine.started")
+    _no_canary(tmp_path, capsys, names_allowed=False)
+
+
+def test_each_person_is_announced_by_the_name_jira_shows(fake, tmp_path):
+    """``display_names`` (on by default): a person's announcement carries Jira's display name, so
+    their machine's card shows it rather than ``person.jira.<account>``."""
+    events = poll_once(fake, tmp_path, CATCH_UP)
+    started = {e["source"]: (e.get("data") or {}).get("name") for e in events if e["type"] == "orchestra.machine.started"}
+    assert started and all(isinstance(n, str) and n.endswith(src.rsplit(".", 1)[1]) for src, n in started.items())
 
 
 def test_refuses_an_uncleared_system(tmp_path, monkeypatch):
