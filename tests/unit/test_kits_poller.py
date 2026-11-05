@@ -265,6 +265,45 @@ def test_the_identity_map_wins_for_a_kit_poller_as_for_the_jira_reader(tmp_path)
                              "name": "Alice Example", "team": "sre"}
 
 
+def test_an_unjoined_account_is_named_as_an_account_and_a_joined_one_keeps_the_maps_name(tmp_path):
+    """SPEC §8: an account the map does not list is announced as ``jira.user.<account>``, the
+    display name a detail (``display_name``); an opaque id's name is derived and marked; an account
+    the map joins is ``person.<key>`` with the map's name and team, whatever the system shows."""
+    from orchestra_bridges.identity import People
+    people = People({"alice": {"name": "Alice Example", "team": "sre", "jira": "alice.j"}})
+    p = make(tmp_path, people=people)
+
+    def poll(poller):
+        for account, shown, opaque in (("alice.j", "Alice E. (Jira)", False), ("bob", "Bob Builder", False),
+                                       ("5b10ac8d82e05b22cc7d4ef5", "Carol Ñandú", True)):
+            poller.name_account(actor_source("jira", account), shown, opaque=opaque)
+            poller.emit("jira.issue.transitioned", "ABC-1", {"to": "Done"}, source=actor_source("jira", account),
+                        stamp=account)
+    p.run(poll, once=True)
+    about = {e["source"]: e["data"] for e in read(tmp_path) if e["type"] == "orchestra.machine.started"}
+    assert about["person.alice"]["name"] == "Alice Example" and about["person.alice"]["team"] == "sre"
+    assert "display_name" not in about["person.alice"]                     # a person is the map's, not Jira's
+    assert about["person.jira.bob"]["name"] == "jira.user.bob" and about["person.jira.bob"]["display_name"] == "Bob Builder"
+    carol = about["person.jira.5b10ac8d82e05b22cc7d4ef5"]                  # the source keeps the id
+    assert carol["name"] == "jira.user.carol_nandu" and carol["name_derived"] == "display_name"
+    assert carol["display_name"] == "Carol Ñandú"
+
+
+def test_a_kit_from_before_b10_names_accounts_as_accounts_too(tmp_path):
+    """An older copy of a kit calls ``name_actor`` with the display name: the account is still named
+    as an account (an opaque-looking id from the display name), the display name a detail."""
+    p = make(tmp_path)
+
+    def poll(poller):
+        for account in ("bob", "557058:f58131cb-b67d-43c7-b30d-6b58d40bd077"):
+            poller.name_actor(actor_source("jira", account), "Bob Builder")
+            poller.emit("jira.comment.added", "ABC-1", {}, source=actor_source("jira", account), stamp=account)
+    p.run(poll, once=True)
+    named = {e["source"]: e["data"]["name"] for e in read(tmp_path) if e["type"] == "orchestra.machine.started"}
+    assert named == {"person.jira.bob": "jira.user.bob",
+                     "person.jira.557058-f58131cb-b67d-43c7-b30d-6b58d40bd077": "jira.user.bob_builder"}
+
+
 def test_a_first_run_starts_now_unless_since_says_otherwise():
     """``start_of``: a poller with no cursor starts now, a duration back, or at a time; never at the
     beginning of the other system's history (a time to come is now)."""

@@ -6,6 +6,7 @@ changes give the same events on the bus; each edition is read in its own form, b
 
 import importlib.util
 import json
+import re
 from types import SimpleNamespace
 
 import pytest
@@ -47,9 +48,18 @@ def world_changes(fake):
     fake.move("ABC-9", "Done", by="bob")
 
 
+NAMED = ("name", "name_derived")      # an account's name: Data Center's user name, Cloud's derived (SPEC §8)
+
+
 def bus(events):
-    """What the owner's model sees of each event: everything but the time it happened."""
-    return sorted(json.dumps({k: v for k, v in e.items() if k != "time"}, sort_keys=True) for e in events)
+    """What the owner's model sees of each event: everything but the time it happened, and an
+    account's name, which each edition says its own way."""
+    def same(e):
+        if e.get("type") == "orchestra.machine.started":
+            e = {**e, "data": {k: v for k, v in (e.get("data") or {}).items() if k not in NAMED},
+                 "id": re.sub(r"#name-\w+$", "", e["id"])}
+        return {k: v for k, v in e.items() if k != "time"}
+    return sorted(json.dumps(same(e), sort_keys=True) for e in events)
 
 
 def test_both_editions_publish_identical_events(jira_poll, tmp_path):
@@ -69,7 +79,12 @@ def test_both_editions_publish_identical_events(jira_poll, tmp_path):
     assert {e["source"] for e in dc} >= {"person.jira.alice", "person.jira.bob", "person.jira.carol"}
     made = next(e for e in dc if e["type"] == "jira.issue.created")
     assert made["data"]["sprint"] == "Sprint 7" and made["data"]["category"] == "done"
-    unnamed = [{**e, "data": {k: v for k, v in (e.get("data") or {}).items() if k != "name"}}
+    dc_named = {e["source"]: e["data"]["name"] for e in dc if e["type"] == "orchestra.machine.started"}
+    cloud_named = {e["source"]: e["data"] for e in cloud if e["type"] == "orchestra.machine.started"}
+    assert dc_named["person.jira.alice"] == "jira.user.alice"                       # the user name
+    assert cloud_named["person.jira.alice"]["name_derived"] == "display_name"       # the account id says nothing
+    assert cloud_named["person.jira.alice"]["name"] == "jira.user." + CANARY.lower() + "_alice"
+    unnamed = [{**e, "data": {k: v for k, v in (e.get("data") or {}).items() if k not in ("display_name", *NAMED)}}
                if e.get("type") == "orchestra.machine.started" else e for e in dc + cloud]
     assert CANARY not in json.dumps(unnamed)            # a display name rides on an announcement only
 

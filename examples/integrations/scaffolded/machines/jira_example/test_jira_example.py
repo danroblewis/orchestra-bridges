@@ -230,12 +230,13 @@ def _no_canary(tmp_path, capsys, names_allowed: bool):
             continue
         text = p.read_text(errors="replace")
         assert REAL not in text, p
-        if p.name == "events.jsonl" and names_allowed:      # a display name, on a person's announcement only
+        if p.name == "events.jsonl" and names_allowed:      # a display name, on an account's announcement only
             for line in text.splitlines():
                 e = json.loads(line)
                 data = dict(e.get("data") or {})
                 if e["type"] == "orchestra.machine.started":
-                    data.pop("name", None)
+                    data.pop("display_name", None)
+                    data.pop("name", None)                  # Cloud's: derived from the display name
                 assert CANARY not in json.dumps({**e, "data": data}), e["type"]
         else:
             assert CANARY not in text, p
@@ -253,7 +254,9 @@ def test_without_display_names_no_name_leaves_either(fake, tmp_path, capsys):
     quiet = set_args(jql=f"project = {PROJECT}", since="1d", users=[], sprint_field="", display_names=False)
     events = poll_once(fake, tmp_path, quiet)
     assert any(e["type"] == "jira.comment.added" for e in events)
-    assert not any("name" in (e.get("data") or {}) for e in events if e["type"] == "orchestra.machine.started")
+    started = [e for e in events if e["type"] == "orchestra.machine.started"]
+    assert started and not any("display_name" in e["data"] for e in started)
+    assert all(e["data"]["name"] == "jira.user." + e["source"].rsplit(".", 1)[1] for e in started)   # the account
     _no_canary(tmp_path, capsys, names_allowed=False)
 
 
@@ -265,7 +268,7 @@ def test_people_relayed_before_names_were_kept_are_named_on_the_next_poll(fake, 
     seen = {e["source"] for e in before if e["type"] == "orchestra.machine.started"}
     assert seen
     after = poll_once(fake, tmp_path, CATCH_UP)[len(before):]
-    named = {e["source"]: e["data"].get("name") for e in after if e["type"] == "orchestra.machine.started"}
+    named = {e["source"]: e["data"].get("display_name") for e in after if e["type"] == "orchestra.machine.started"}
     assert seen <= set(named) and all(named[s] for s in seen)
     again = poll_once(fake, tmp_path, CATCH_UP)[len(before) + len(after):]
     assert not [e for e in again if e["type"] == "orchestra.machine.started"]     # once
@@ -304,12 +307,42 @@ def test_content_relays_the_summary_description_and_comments_and_every_event_lin
     assert all(e["data"]["url"].endswith(f"/browse/{PROJECT}-8") for e in plain if e["type"].startswith("jira.issue."))
 
 
-def test_each_person_is_announced_by_the_name_jira_shows(fake, tmp_path):
-    """``display_names`` (on by default): a person's announcement carries Jira's display name, so
-    their machine's card shows it rather than ``person.jira.<account>``."""
+def test_an_unjoined_account_is_announced_as_an_account_with_the_display_name_a_detail(fake, tmp_path):
+    """An account is not a person (the bridges' SPEC §8): its announcement's name is
+    ``jira.user.<account>`` (Data Center: the user name; Cloud: derived from the display name, marked
+    so, the source keeping the id), and the name Jira shows is ``display_name``, never the name."""
     events = poll_once(fake, tmp_path, CATCH_UP)
-    started = {e["source"]: (e.get("data") or {}).get("name") for e in events if e["type"] == "orchestra.machine.started"}
-    assert started and all(isinstance(n, str) and n.endswith(src.rsplit(".", 1)[1]) for src, n in started.items())
+    started = {e["source"]: e["data"] for e in events if e["type"] == "orchestra.machine.started"}
+    assert started
+    for source, about in started.items():
+        account = source.rsplit(".", 1)[1]
+        assert about["display_name"].endswith(account)          # the fake shows "<text> <account>"
+        if EDITION == "cloud":
+            assert about["name"] == "jira.user." + about["display_name"].lower().replace(" ", "_")
+            assert about["name_derived"] == "display_name" and source == f"person.jira.{account}"
+        else:
+            assert about["name"] == f"jira.user.{account}" and "name_derived" not in about
+        assert about["name"] != about["display_name"]
+
+
+def test_people_announced_by_the_earlier_naming_are_announced_once_more(fake, tmp_path):
+    """A poller whose people were announced with the display name as their name (B6, B7: the cursor's
+    ``named = true``) announces each of them once with the account's name and ``display_name``, then
+    never again."""
+    first = poll_once(fake, tmp_path, CATCH_UP)
+    state = tmp_path / "state"
+    log = state / "emitted.log"                     # as B6 left it: the announcements under the display name
+    log.write_text("".join(re.sub(r"#name-\w+$", "#name-b6", x) + "\n" for x in log.read_text().splitlines()))
+    saved = json.loads((state / "cursor.json").read_text())
+    saved["cursor"]["named"] = True
+    (state / "cursor.json").write_text(json.dumps(saved))
+    again = poll_once(fake, tmp_path, CATCH_UP)[len(first):]
+    renamed = {e["source"]: e["data"] for e in again if e["type"] == "orchestra.machine.started"}
+    assert renamed and {s for s in renamed} >= {e["source"] for e in first if e["type"] == "orchestra.machine.started"}
+    assert all(a["name"].startswith("jira.user.") and a.get("display_name") for a in renamed.values())
+    assert sorted(renamed) == sorted(e["source"] for e in again if e["type"] == "orchestra.machine.started")   # once each
+    third = poll_once(fake, tmp_path, CATCH_UP)[len(first) + len(again):]
+    assert not [e for e in third if e["type"] == "orchestra.machine.started"]
 
 
 def test_refuses_an_uncleared_system(tmp_path, monkeypatch):

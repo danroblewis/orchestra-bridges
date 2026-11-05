@@ -24,6 +24,14 @@ the people and bots there did as events on the project's bus.
   ``stand_in``, ``disabled``), so the actor's own announcement says it was relayed from a fake. An
   announcement is emitted once, across restarts too; a changed note announces each actor again,
   at their next event.
+- **An account is not a person** (SPEC §8). An account the map does not list is published as the
+  account and, once the kit names it (``name_account``), announced as one: ``name`` is
+  ``<system>.user.<account>`` (``jira.user.alice``), or, where the account id is opaque (Jira
+  Cloud's), the display name made into an account name (``jira.user.alice_example``) marked
+  ``name_derived = "display_name"``, the source keeping the id; the name the system shows rides as
+  ``display_name``, a detail on the card, never the machine's name. Only the identity map makes a
+  person: ``person.<key>``, with the name and team the owner confirmed. A changed naming announces
+  the account once more.
 - **The interval loop**: ``run(poll)`` calls ``poll(poller)`` now and every ``every_s`` until
   SIGTERM or SIGINT (or ``stop()``), which ends it between polls or in the wait. A poll that raises
   is logged by its exception's type and message and tried again next interval; its cursor and
@@ -71,7 +79,7 @@ from typing import Any
 from orchestra.config import ConfigError, parse_duration
 from orchestra.events import Events
 
-from ..identity import People, people_file
+from ..identity import People, account_name, people_files
 from . import notes as note
 from .exposition import Registry
 from .pollstate import PollState
@@ -79,7 +87,7 @@ from .pollstate import PollState
 NAME = re.compile(r"^[a-z][a-z0-9_]{1,40}$")
 STARTED = "orchestra.machine.started"
 ACTORS = ("person.", "bot.")            # the only sources a poller publishes as: who acted
-__all__ = ["ACTORS", "Poller", "RelayError", "actor_source", "poll_dir", "start_of"]
+__all__ = ["ACTORS", "Poller", "RelayError", "actor_source", "opaque_id", "poll_dir", "start_of"]
 
 
 class RelayError(ValueError):
@@ -96,6 +104,15 @@ def actor_source(system: str, account: str | None = None, *, bot: bool = False) 
     if not account:
         return f"bot.{_safe(system)}"
     return f"{'bot' if bot else 'person'}.{_safe(system)}.{_safe(account)}"
+
+
+OPAQUE = re.compile(r"^(?:[0-9a-f]{24}|\d+[:-][0-9a-f-]{8,}|[0-9a-f]{8}-[0-9a-f-]{27}|\d{6,})$")
+
+
+def opaque_id(account: str) -> bool:
+    """Whether an account looks like an id that names nobody: Jira Cloud's account id (24 hex
+    digits, or ``557058:<uuid>``), a UUID, a long number (Discord's)."""
+    return bool(OPAQUE.match(str(account).lower()))
 
 
 def start_of(since: Any, now: float) -> float:
@@ -160,7 +177,7 @@ class Poller:
         # first run, its start less the interval; an event from before it, not emitted, is a replay
         self.passed = self.state.polled if self.state.polled is not None else self.began - self.every_s
         self.published: list[dict] = []          # this poll's events (announcements included)
-        self.names: dict[str, str] = {}          # source -> the name the other system shows (name_actor)
+        self.names: dict[str, dict] = {}         # source -> how the account is shown (name_account)
 
     def _load_project(self):
         if self._project is None:
@@ -169,10 +186,12 @@ class Poller:
         return self._project
 
     def _people(self) -> People:
-        """The project's identity map, when there is a project and it names one; else nobody."""
+        """The project's identity map (the state directory's and ``[bridges] people``'s), when there
+        is a project; else nobody."""
         if self._project is None:
             return People()
-        return People.load(people_file(self._project.config.raw, self._project.repo_root))
+        state = getattr(self._project, "state_dir", None)
+        return People.load(people_files(self._project.config.raw, self._project.repo_root, state))
 
     def resolve(self, source: str) -> tuple[str, dict]:
         """The source an actor is published as, and what its announcement adds: the identity map's
@@ -207,11 +226,31 @@ class Poller:
         self.published.append(ev)
         return ev
 
+    def name_account(self, source: str, display_name: str | None = None, *, opaque: bool | None = None) -> None:
+        """How an account the map does not list is shown on its announcement (SPEC §8): ``name`` is
+        ``<system>.user.<account>``; with ``opaque`` (an account id that says nothing: Jira Cloud's)
+        and a display name, ``<system>.user.<account_name(display_name)>``, marked ``name_derived``.
+        ``display_name``, the name the system shows, rides beside it as a detail. ``opaque`` None
+        guesses by the account's shape (``opaque_id``). An account the map joins is left alone: its
+        person's name is the map's. A changed naming announces the account once more."""
+        if self.resolve(source)[0] != source:
+            return
+        kind, _, rest = source.partition(".")
+        system, _, account = rest.partition(".")
+        if kind not in ("person", "bot") or not system or not account:
+            return                                   # bot.<system>: the system itself, named by the kit
+        shown = display_name.strip() if isinstance(display_name, str) and display_name.strip() else None
+        hidden = opaque_id(account) if opaque is None else opaque
+        if hidden and shown:
+            about = {"name": f"{system}.user.{account_name(shown)}", "name_derived": "display_name"}
+        else:
+            about = {"name": f"{system}.user.{account}"}
+        self.names[source] = {**about, **({"display_name": shown} if shown else {})}
+
     def name_actor(self, source: str, name: str | None) -> None:
-        """The name the other system shows for an actor (Jira's display name), put on their
-        announcement when the identity map gives none; a new name announces them once more."""
-        if isinstance(name, str) and name.strip():
-            self.names[self.resolve(source)[0]] = name.strip()
+        """A copy of a kit from before B10 (the display name as the machine's name): the account
+        named as an account, the name it gave kept as the display name (``name_account``)."""
+        self.name_account(source, name)
 
     def announce(self, source: str, time: str | None = None, **about: Any) -> dict | None:
         """``orchestra.machine.started`` for an actor, once (once more after the notes change): None
@@ -221,11 +260,10 @@ class Poller:
 
     def _announce(self, source: str, time: str | None, about: dict) -> dict | None:
         notes = note.check(self.notes)
-        if "name" not in about and source in self.names:
-            about = {**about, "name": self.names[source]}
         eid = f"{self.name}:announce:{source}" + (f"#{note.stamp(notes)}" if notes else "")
-        if source in self.names and about.get("name") == self.names[source]:
-            eid += f"#name-{note.stamp({'name': about['name']})}"     # a name learnt later announces them again
+        if "name" not in about and source in self.names:
+            about = {**self.names[source], **about}
+            eid += f"#name-{note.stamp(self.names[source])}"    # a naming learnt later announces them again
         if self.state.seen(eid):
             return None
         data = {"mode": "ad hoc", "kind": "program" if source.startswith("bot.") else "person",

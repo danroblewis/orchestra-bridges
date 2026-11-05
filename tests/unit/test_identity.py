@@ -1,3 +1,5 @@
+import pytest
+
 from orchestra_bridges.identity import People
 
 
@@ -44,3 +46,31 @@ def test_a_namespaced_system_keeps_unlisted_strangers_apart_and_the_map_joins_th
     assert nobody.actor("slack", "bot", True, namespaced=True).source == "bot.slack.bot"
     listed = People.load(f)
     assert listed.actor("github", "alex").source == listed.actor("slack", "alex", namespaced=True).source == "person.alex"
+
+
+def test_the_map_is_the_state_directorys_and_the_owners_the_owners_winning(tmp_path):
+    """SPEC §8: the Supervisor's map lives in the state directory (a clean repository); the owner's
+    ``[bridges] people`` file is read after it, so its entries win."""
+    from orchestra_bridges.identity import join, people_files, state_map
+    state, repo = tmp_path / "state", tmp_path / "repo"
+    assert join(state_map(state), [{"key": "alice", "name": "Alice Example", "accounts": {"jira": "alice", "slack": "U1"}}]) == ["alice"]
+    (repo).mkdir()
+    (repo / "people.toml").write_text('[people.alice]\nname = "Alice Q. Example"\njira = "alice"\n')
+    files = people_files({"bridges": {"people": "people.toml"}}, repo, state)
+    assert files == [state / "bridges" / "people.toml", repo / "people.toml"]
+    people = People.load(files)
+    assert people.actor("jira", "alice").name == "Alice Q. Example"            # the owner's file wins
+    assert people.actor("slack", "u1").source == "person.alice"
+    assert people_files({}, repo, state) == [state / "bridges" / "people.toml"]
+
+
+def test_join_adds_accounts_and_refuses_an_account_another_person_holds(tmp_path):
+    from orchestra_bridges.identity import IdentityError, join
+    f = tmp_path / "people.toml"
+    join(f, [{"key": "alice", "name": "Alice Example", "accounts": {"jira": "alice"}}])
+    join(f, [{"key": "alice", "accounts": {"github": "alice-gh"}}])
+    people = People.load(f)
+    assert people.actor("github", "alice-gh").source == people.actor("jira", "alice").source == "person.alice"
+    assert people.actor("github", "alice-gh").name == "Alice Example"
+    with pytest.raises(IdentityError, match="already 'alice'"):
+        join(f, [{"key": "bob", "accounts": {"jira": "alice"}}])

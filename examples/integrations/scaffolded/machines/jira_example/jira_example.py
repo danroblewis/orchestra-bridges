@@ -54,13 +54,22 @@ The JQL's time is relative (``updated >= "-15m"``), so Jira's time zone for the 
 matter. ``python jira_example.py measure`` (for a ``[[collect]]`` entry) prints ``jira_issues{status,
 category}``, the issues in scope by status.
 
+**An account is not a person** (the bridges' SPEC §8; the owner, 2026-11-04: "It looks like the
+machine is a reference to a real person, not just their user account"). Each account is announced
+as an account: ``name = "jira.user.<account>"``, the user name on Data Center; on Cloud, whose
+account id says nothing, the display name lowercased with spaces as ``_`` (``jira.user.alice_example``,
+marked ``name_derived = "display_name"``; the source keeps the id). With ``[settings] display_names``
+(on unless false) the name Jira shows rides beside it as ``display_name``, a detail on the card,
+never the machine's name, and only on the account's announcement. An account becomes a person only
+when the project's identity map joins it (``[bridges] people``, ``<state>/bridges/people.toml``):
+then it is ``person.<key>``, with the name and team the owner confirmed. A poller whose people were
+announced by the earlier naming (the display name as ``name``) announces each of them once more.
+
 It keeps metadata only: keys, account ids or user names, status names (an administrator's), times,
-and, with ``[settings] display_names`` (on unless false), the name Jira shows for each person, which
-their machine's card is shown by (the owner, 2026-11-04: names like ``person.jira.<id>`` say nothing).
-The name stays on this machine: it rides on the person's announcement, never on another event.
+and the display names above.
 With ``[settings] content`` it also relays the issue's summary, description or comments' text
 (``content_of``); every event carries the issue's link (``url``) either way.
-Never a summary, description, comment or a person's display name or email."""
+Never a person's email, and never a summary, description or comment that ``content`` does not name."""
 
 from __future__ import annotations
 
@@ -79,6 +88,7 @@ from orchestra_bridges.kits.poller import actor_source, start_of
 
 HERE = Path(__file__).resolve().parent
 PAGE = 100
+NAMING = "accounts"        # the cursor's mark of the naming pass done (B7's was true: the display name as the name)
 
 
 EDITIONS = ("cloud", "datacenter", "auto")
@@ -134,8 +144,8 @@ def _id(u) -> str | None:
 
 
 def _named(people: dict, u, keys: dict | None = None) -> None:
-    """``u``'s display name, kept by account (``[settings] display_names``): the name Jira shows for
-    them, which their machine's card is shown by. Only from a whole user object, by the account the
+    """``u``'s account, with the name Jira shows for them (None when it shows none), kept by account:
+    a detail of the account's announcement (``display_name``), never its name. Only from a whole user object, by the account the
     events use (``_id``): never from a changelog's ``to``, which on Data Center is the user's internal
     key (``JIRAUSER…`` or an opaque id), not their user name. ``keys``: Data Center's key -> user name,
     as the user objects give them, so a changelog's assignee is said by user name too."""
@@ -143,6 +153,8 @@ def _named(people: dict, u, keys: dict | None = None) -> None:
         return
     if isinstance(u.get("displayName"), str) and u["displayName"].strip():
         people[_id(u)] = u["displayName"].strip()
+    else:
+        people.setdefault(_id(u), None)
     if keys is not None and u.get("key") and u.get("name") and u["key"] != u["name"]:
         keys[u["key"]] = u["name"]
 
@@ -361,6 +373,11 @@ def make_poll(api, settings):
     overlap = parse_duration(settings.extra.get("overlap"), 600.0)
     full = str(settings.extra.get("history") or "window").lower() == "full"
     names = settings.extra.get("display_names", True) is not False
+    opaque = edition(settings) == "cloud"               # Cloud's account id names nobody: named from the display name
+
+    def name(p, account, shown):
+        """The account as an account (SPEC §8): jira.user.<account>, the display name a detail."""
+        p.name_account(actor_source("jira", account), shown if names else None, opaque=opaque)
 
     def poll(p):
         started = time.time()
@@ -370,15 +387,15 @@ def make_poll(api, settings):
         # issue the first run passed over (done) is never relayed from before. Whole seconds: the
         # other system's times may have no fraction (a change in the same second counts).
         first = not cursor.get("since")
-        if names and not cursor.get("named"):
-            # once: everyone on the issues in scope, named now (people relayed before the names were
-            # kept, or by a copy of the kit from before display_names), not only at their next act
+        naming = NAMING if names else f"{NAMING}:no display names"     # turning display names on names them all
+        if cursor.get("named") != naming:
+            # once: everyone on the issues in scope, named now as accounts (people announced by an
+            # earlier naming, the display name as their name, or none), not only at their next act
             for issue in search(api, settings, scope, keep_changes_of(sprint_field, content), fields=fields, expand="changelog"):
                 for account, shown in (issue.get("people") or {}).items():
-                    source = actor_source("jira", account)
-                    p.name_actor(source, shown)
+                    name(p, account, shown)
                     if not first:
-                        p.announce(source)
+                        p.announce(actor_source("jira", account))
         since = float(cursor.get("since") or math.floor(start_of(settings.extra.get("since"), started)))
         began = since if first else float(cursor.get("live") or cursor.get("began") or since)
         minutes = math.ceil((started - since + overlap) / 60)
@@ -387,9 +404,8 @@ def make_poll(api, settings):
         for issue in search(api, settings, jql, keep_changes_of(sprint_field, content), fields=fields, expand="changelog",
                             ttl_s=0):
             issue["url"] = browse + issue["key"]
-            if names:                                   # each person's machine shown by the name Jira shows
-                for account, shown in (issue.get("people") or {}).items():
-                    p.name_actor(actor_source("jira", account), shown)
+            for account, shown in (issue.get("people") or {}).items():
+                name(p, account, shown)                 # each account shown as an account
             if first and full:                          # the whole history of each issue updated in the window
                 if issue.get("changes_cut"):
                     issue["changes"] = whole_changes(api, settings, issue["key"], sprint_field)
@@ -398,7 +414,7 @@ def make_poll(api, settings):
             if first and issue["category"] == "done":
                 continue                                # a catch-up relays the work not yet done
             relay(p, issue, began)
-        p.cursor = {"since": started, "live": math.floor(started) if first else began, **({"named": True} if names else {})}
+        p.cursor = {"since": started, "live": math.floor(started) if first else began, "named": naming}
 
     return poll
 
