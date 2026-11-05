@@ -58,6 +58,8 @@ It keeps metadata only: keys, account ids or user names, status names (an admini
 and, with ``[settings] display_names`` (on unless false), the name Jira shows for each person, which
 their machine's card is shown by (the owner, 2026-11-04: names like ``person.jira.<id>`` say nothing).
 The name stays on this machine: it rides on the person's announcement, never on another event.
+With ``[settings] content`` it also relays the issue's summary, description or comments' text
+(``content_of``); every event carries the issue's link (``url``) either way.
 Never a summary, description, comment or a person's display name or email."""
 
 from __future__ import annotations
@@ -180,10 +182,43 @@ def scope_of(settings) -> str:
     return f"({jql}) AND ({team})" if jql else team
 
 
-def keep_changes_of(sprint_field: str | None):
-    """``keep_changes``, with the issue's sprint's name from ``sprint_field``."""
+CONTENT = ("summary", "description", "comments")
+TEXT_CHARS = 4000          # a description's or a comment's text kept, at most
+
+
+def text_of(value) -> str | None:
+    """A field's text: Data Center's string, or Cloud's document (its text nodes, joined)."""
+    if isinstance(value, str):
+        return value[:TEXT_CHARS] if value.strip() else None
+    if isinstance(value, dict):
+        parts: list[str] = []
+
+        def walk(n):
+            if isinstance(n, dict):
+                if isinstance(n.get("text"), str):
+                    parts.append(n["text"])
+                for c in n.get("content") or []:
+                    walk(c)
+                if n.get("type") in ("paragraph", "heading", "listItem"):
+                    parts.append("\n")
+        walk(value)
+        t = "".join(parts).strip()
+        return t[:TEXT_CHARS] if t else None
+    return None
+
+
+def content_of(settings) -> frozenset:
+    """``[settings] content``: what of each issue's text is relayed besides its metadata: ``summary``
+    (its title, on every event), ``description`` (on its creation) and ``comments`` (each comment's
+    text). Empty (the default): metadata only."""
+    raw = settings.extra.get("content") or []
+    return frozenset(c for c in (raw if isinstance(raw, list) else [raw]) if c in CONTENT)
+
+
+def keep_changes_of(sprint_field: str | None, content: frozenset = frozenset()):
+    """``keep_changes``, with the issue's sprint's name from ``sprint_field`` and the text ``content`` names."""
     def keep(body: dict) -> dict:
-        page = keep_changes(body)
+        page = keep_changes(body, content)
         if sprint_field:
             by_key = {i["key"]: (i.get("fields") or {}).get(sprint_field) for i in body.get("issues") or []}
             for i in page["issues"]:
@@ -192,10 +227,10 @@ def keep_changes_of(sprint_field: str | None):
     return keep
 
 
-def keep_changes(body: dict) -> dict:
+def keep_changes(body: dict, content: frozenset = frozenset()) -> dict:
     """What is kept of a search page with changelog: keys, accounts, times, status names, and each
-    person's display name by account (``people``). Never a
-    summary or another field's value."""
+    person's display name by account (``people``); of the issue's text only what ``content`` names
+    (``[settings] content``): its summary, its description, its comments' text. Never another field's value."""
     out = []
     for i in body.get("issues") or []:
         f = i.get("fields") or {}
@@ -212,7 +247,8 @@ def keep_changes(body: dict) -> dict:
                        "to": status.get("toString") if status else None,
                        "assignee_changed": assignee is not None,
                        "assigned": assignee.get("to") if assignee else None})
-        comments = [{"id": str(c["id"]), "by": _id(c.get("author")), "at": c["created"]}
+        comments = [{"id": str(c["id"]), "by": _id(c.get("author")), "at": c["created"],
+                     **({"text": text_of(c.get("body"))} if "comments" in content else {})}
                     for c in (f.get("comment") or {}).get("comments") or [] if c.get("created")]
         for c in (f.get("comment") or {}).get("comments") or []:
             _named(people, c.get("author"), keys)
@@ -227,7 +263,9 @@ def keep_changes(body: dict) -> dict:
                     "labels": [x for x in f.get("labels") or [] if isinstance(x, str)], "changes": hs,
                     "comments": comments,
                     "changes_cut": int((i.get("changelog") or {}).get("total") or 0) > len(hs),
-                    "people": people})
+                    "people": people,
+                    **({"summary": f.get("summary") if isinstance(f.get("summary"), str) else None} if "summary" in content else {}),
+                    **({"description": text_of(f.get("description"))} if "description" in content else {})})
     return page_of(body, out)
 
 
@@ -270,6 +308,10 @@ def now_of(issue: dict) -> dict:
            "labels": list(issue.get("labels") or [])}
     if "sprint" in issue:
         now["sprint"] = issue["sprint"]
+    if issue.get("url"):
+        now["url"] = issue["url"]                       # the issue in Jira: an address, no content
+    if issue.get("summary"):
+        now["summary"] = issue["summary"]               # [settings] content = ["summary", ...]
     return now
 
 
@@ -280,7 +322,8 @@ def relay(p, issue: dict, began: float) -> None:
     creator = actor_source("jira", issue["creator"])
     if issue["created"] and parse_time(issue["created"]).timestamp() >= began:
         at = rfc3339(issue["created"])
-        p.emit("jira.issue.created", key, now, source=creator, stamp="created", time=at)
+        made = {**now, **({"description": issue["description"]} if issue.get("description") else {})}
+        p.emit("jira.issue.created", key, made, source=creator, stamp="created", time=at)
         if issue["assignee"] and not any(c["assignee_changed"] for c in changes):
             p.emit("jira.issue.assigned", key, {"assignee": issue["assignee"], **now}, source=creator, stamp="created",
                    time=at)
@@ -294,7 +337,9 @@ def relay(p, issue: dict, began: float) -> None:
                    time=at)
     for c in issue.get("comments") or []:
         if parse_time(c["at"]).timestamp() >= began:
-            p.emit("jira.comment.added", key, {"issue": key, "author": c["by"]}, source=actor_source("jira", c["by"]),
+            said = {"issue": key, "author": c["by"], **({"text": c["text"]} if c.get("text") else {}),
+                    **({"url": now["url"]} if now.get("url") else {})}
+            p.emit("jira.comment.added", key, said, source=actor_source("jira", c["by"]),
                    stamp=f"comment:{c['id']}", time=rfc3339(c["at"]))
 
 
@@ -309,7 +354,10 @@ def whole_changes(api, settings, key: str, sprint_field: str) -> list[dict]:
 def make_poll(api, settings):
     scope = scope_of(settings)
     sprint_field = str(settings.extra.get("sprint_field") or "")
-    fields = "status,assignee,creator,created,comment,issuetype,labels" + (f",{sprint_field}" if sprint_field else "")
+    content = content_of(settings)
+    fields = ("status,assignee,creator,created,comment,issuetype,labels" + (f",{sprint_field}" if sprint_field else "")
+              + "".join(f",{f}" for f in ("summary", "description") if f in content))
+    browse = settings.base_url.rstrip("/") + "/browse/"
     overlap = parse_duration(settings.extra.get("overlap"), 600.0)
     full = str(settings.extra.get("history") or "window").lower() == "full"
     names = settings.extra.get("display_names", True) is not False
@@ -325,7 +373,7 @@ def make_poll(api, settings):
         if names and not cursor.get("named"):
             # once: everyone on the issues in scope, named now (people relayed before the names were
             # kept, or by a copy of the kit from before display_names), not only at their next act
-            for issue in search(api, settings, scope, keep_changes_of(sprint_field), fields=fields, expand="changelog"):
+            for issue in search(api, settings, scope, keep_changes_of(sprint_field, content), fields=fields, expand="changelog"):
                 for account, shown in (issue.get("people") or {}).items():
                     source = actor_source("jira", account)
                     p.name_actor(source, shown)
@@ -336,8 +384,9 @@ def make_poll(api, settings):
         minutes = math.ceil((started - since + overlap) / 60)
         jql = f'({scope}) AND updated >= "-{minutes}m" ORDER BY updated ASC'
         # changes are read fresh (ttl 0): a cached answer would hide the newest
-        for issue in search(api, settings, jql, keep_changes_of(sprint_field), fields=fields, expand="changelog",
+        for issue in search(api, settings, jql, keep_changes_of(sprint_field, content), fields=fields, expand="changelog",
                             ttl_s=0):
+            issue["url"] = browse + issue["key"]
             if names:                                   # each person's machine shown by the name Jira shows
                 for account, shown in (issue.get("people") or {}).items():
                     p.name_actor(actor_source("jira", account), shown)

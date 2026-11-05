@@ -45,6 +45,11 @@ history = "window"
 # display_names: each person's machine is shown by the name Jira shows for them (their display
 # name, kept on this machine, on their announcement only); false: by their account alone
 display_names = true
+# content: what of each issue's text is relayed besides its metadata: "summary" (its title, on every
+# event), "description" (on its creation, at most 4000 characters) and "comments" (each comment's
+# text, at most 4000). Empty: metadata only (keys, accounts, statuses, times). Every event carries
+# the issue's link (`url`) either way. The text stays on this machine, on the bus and in the items.
+content = []
 overlap = "10m"                   # each poll re-reads this much before the last one
 
 [[publishes]]
