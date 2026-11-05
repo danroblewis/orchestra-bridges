@@ -131,11 +131,18 @@ def _id(u) -> str | None:
     return (u.get("accountId") or u.get("name")) if isinstance(u, dict) else None
 
 
-def _named(people: dict, u) -> None:
+def _named(people: dict, u, keys: dict | None = None) -> None:
     """``u``'s display name, kept by account (``[settings] display_names``): the name Jira shows for
-    them, which their machine's card is shown by."""
-    if isinstance(u, dict) and _id(u) and isinstance(u.get("displayName"), str) and u["displayName"].strip():
+    them, which their machine's card is shown by. Only from a whole user object, by the account the
+    events use (``_id``): never from a changelog's ``to``, which on Data Center is the user's internal
+    key (``JIRAUSER…`` or an opaque id), not their user name. ``keys``: Data Center's key -> user name,
+    as the user objects give them, so a changelog's assignee is said by user name too."""
+    if not isinstance(u, dict) or not _id(u):
+        return
+    if isinstance(u.get("displayName"), str) and u["displayName"].strip():
         people[_id(u)] = u["displayName"].strip()
+    if keys is not None and u.get("key") and u.get("name") and u["key"] != u["name"]:
+        keys[u["key"]] = u["name"]
 
 
 SPRINT = re.compile(r"\[(.*)\]\s*$", re.DOTALL)
@@ -192,11 +199,11 @@ def keep_changes(body: dict) -> dict:
     out = []
     for i in body.get("issues") or []:
         f = i.get("fields") or {}
-        hs, people = [], {}
+        hs, people, keys = [], {}, {}
         for u in (f.get("creator"), f.get("assignee"), f.get("reporter")):
-            _named(people, u)
+            _named(people, u, keys)
         for h in (i.get("changelog") or {}).get("histories") or []:
-            _named(people, h.get("author"))
+            _named(people, h.get("author"), keys)
             items = h.get("items") or []
             status = next((x for x in items if x.get("field") == "status"), None)
             assignee = next((x for x in items if x.get("field") == "assignee"), None)
@@ -205,12 +212,13 @@ def keep_changes(body: dict) -> dict:
                        "to": status.get("toString") if status else None,
                        "assignee_changed": assignee is not None,
                        "assigned": assignee.get("to") if assignee else None})
-            if assignee and assignee.get("to") and isinstance(assignee.get("toString"), str) and assignee["toString"].strip():
-                people.setdefault(assignee["to"], assignee["toString"].strip())
         comments = [{"id": str(c["id"]), "by": _id(c.get("author")), "at": c["created"]}
                     for c in (f.get("comment") or {}).get("comments") or [] if c.get("created")]
         for c in (f.get("comment") or {}).get("comments") or []:
-            _named(people, c.get("author"))
+            _named(people, c.get("author"), keys)
+        for h in hs:                                    # Data Center's assignee by key: by user name, when known
+            if h["assigned"] in keys:
+                h["assigned"] = keys[h["assigned"]]
         status = f.get("status") or {}
         out.append({"key": i["key"], "created": f.get("created"), "creator": _id(f.get("creator")),
                     "assignee": _id(f.get("assignee")), "status": status.get("name"),
