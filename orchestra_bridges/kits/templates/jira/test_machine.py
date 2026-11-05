@@ -256,6 +256,20 @@ def test_without_display_names_no_name_leaves_either(fake, tmp_path, capsys):
     _no_canary(tmp_path, capsys, names_allowed=False)
 
 
+def test_people_relayed_before_names_were_kept_are_named_on_the_next_poll(fake, tmp_path):
+    """A poller that ran with ``display_names = false`` (or an older copy of the kit): turned on, its
+    next poll names everyone on the issues in scope once, though none of them acted since."""
+    off = set_args(jql=f"project = {PROJECT}", since="1d", users=[], sprint_field="", display_names=False)
+    before = poll_once(fake, tmp_path, off)
+    seen = {e["source"] for e in before if e["type"] == "orchestra.machine.started"}
+    assert seen
+    after = poll_once(fake, tmp_path, CATCH_UP)[len(before):]
+    named = {e["source"]: e["data"].get("name") for e in after if e["type"] == "orchestra.machine.started"}
+    assert seen <= set(named) and all(named[s] for s in seen)
+    again = poll_once(fake, tmp_path, CATCH_UP)[len(before) + len(after):]
+    assert not [e for e in again if e["type"] == "orchestra.machine.started"]     # once
+
+
 def test_each_person_is_announced_by_the_name_jira_shows(fake, tmp_path):
     """``display_names`` (on by default): a person's announcement carries Jira's display name, so
     their machine's card shows it rather than ``person.jira.<account>``."""

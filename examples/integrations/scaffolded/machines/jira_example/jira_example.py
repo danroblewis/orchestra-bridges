@@ -314,6 +314,15 @@ def make_poll(api, settings):
         # issue the first run passed over (done) is never relayed from before. Whole seconds: the
         # other system's times may have no fraction (a change in the same second counts).
         first = not cursor.get("since")
+        if names and not cursor.get("named"):
+            # once: everyone on the issues in scope, named now (people relayed before the names were
+            # kept, or by a copy of the kit from before display_names), not only at their next act
+            for issue in search(api, settings, scope, keep_changes_of(sprint_field), fields=fields, expand="changelog"):
+                for account, shown in (issue.get("people") or {}).items():
+                    source = actor_source("jira", account)
+                    p.name_actor(source, shown)
+                    if not first:
+                        p.announce(source)
         since = float(cursor.get("since") or math.floor(start_of(settings.extra.get("since"), started)))
         began = since if first else float(cursor.get("live") or cursor.get("began") or since)
         minutes = math.ceil((started - since + overlap) / 60)
@@ -332,7 +341,7 @@ def make_poll(api, settings):
             if first and issue["category"] == "done":
                 continue                                # a catch-up relays the work not yet done
             relay(p, issue, began)
-        p.cursor = {"since": started, "live": math.floor(started) if first else began}
+        p.cursor = {"since": started, "live": math.floor(started) if first else began, **({"named": True} if names else {})}
 
     return poll
 
